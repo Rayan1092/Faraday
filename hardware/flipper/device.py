@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import random
 import threading
 import time
 from concurrent.futures import Future
@@ -50,10 +51,19 @@ DATA_FOR_TYPE = {EventType.DOORBELL: DoorbellData, EventType.MOTION: MotionData}
 ERROR_WORDS = ("error", "failed", "fail ", "can't", "cannot", "not found", "close it")
 TX_TIMEOUT_S = 15.0
 ALARM_PULSES, PULSE_ON_S, PULSE_OFF_S = 3, 0.4, 0.25   # buzz-buzz-buzz, ~2 s
-# The firmware's notification service turns our LED off by itself (seen after
-# vibro and after a few idle minutes), so the colour is re-sent this often.
-# Each refresh pauses rx ~0.35 s; it never runs while a burst is in progress.
+# The Flipper's own charge indicator shares the LED's red and green channels
+# (green = charged, red = charging, both off = not charging). `subghz rx` pauses
+# charging (measured: 0 mA while listening, 339 mA right after), so every time
+# listening restarts after a pause the firmware can rewrite red and green about
+# a second later. Blue is never touched. It can't be turned off from the CLI, so:
+# - the colour is re-sent LED_SETTLE_S after rx restarts following a long pause
+#   (connect, outlet send, buzz), once the firmware has done its rewrite;
+# - and re-sent every led_refresh_s as a safety net (a short LED-only pause is
+#   noticed by the firmware only some of the time).
+# Each re-send pauses rx ~0.35 s; it never runs while a burst is in progress.
 DEFAULT_LED_REFRESH_S = 15.0
+DEFAULT_LED_SETTLE_S = 2.0
+LONG_PAUSE_S = 0.6
 POST_VIBRO_REFRESH_S = 1.2
 
 
@@ -63,6 +73,7 @@ class _Command:
     future: Future = field(default_factory=Future)
     check_errors: bool = True
     quiet: bool = False                       # log at debug (periodic LED refresh)
+    led_only: bool = False                    # only `led` commands: a short pause
 
 
 class Flipper:
@@ -77,6 +88,8 @@ class Flipper:
         self.led_colors: Dict[str, str] = fs["led"]
         self.gap_s: float = float(fs.get("burst_gap_s", DEFAULT_GAP_S))
         self.led_refresh_s: float = float(fs.get("led_refresh_s", DEFAULT_LED_REFRESH_S))
+        self.led_settle_s: float = float(fs.get("led_settle_s", DEFAULT_LED_SETTLE_S))
+        self._jitter = 0.0                    # added to led_refresh_s, see set_color
         self.outlets: Dict[str, Dict[str, Any]] = settings["outlets"]
         # key -> event type, from settings sensors {"doorbell": {"key": ..}, "motion": ..}
         self.sensor_keys: Dict[str, str] = {}
@@ -192,7 +205,11 @@ class Flipper:
         if old is not None:
             order.sort(key=lambda cv: cv[1] - old["rgb".index(cv[0])])  # down, same, up
         self._led_at = time.monotonic()
-        return self._enqueue([("cmd", f"led {ch} {v}", 3.0) for ch, v in order], quiet)
+        # up to 1 s of jitter, so periodic refreshes don't stay in step with the
+        # firmware's power poll and get rewritten every single time
+        self._jitter = random.random()
+        return self._enqueue([("cmd", f"led {ch} {v}", 3.0) for ch, v in order], quiet,
+                             led_only=True)
 
     def vibrate(self, pulses: int = ALARM_PULSES, on_s: float = PULSE_ON_S,
                 off_s: float = PULSE_OFF_S) -> Future:
@@ -214,8 +231,9 @@ class Flipper:
         return self._enqueue(steps)
 
     # ---- internals: queue ----------------------------------------------------
-    def _enqueue(self, steps: List[Tuple], quiet: bool = False) -> Future:
-        cmd = _Command(steps, quiet=quiet)
+    def _enqueue(self, steps: List[Tuple], quiet: bool = False,
+                 led_only: bool = False) -> Future:
+        cmd = _Command(steps, quiet=quiet, led_only=led_only)
         if not steps:                       # nothing to do: don't pause rx for it
             cmd.future.set_result((True, []))
         else:
@@ -227,7 +245,8 @@ class Flipper:
 
     def _maybe_refresh_led(self, now: float) -> None:
         due = self._refresh_due is not None and now >= self._refresh_due
-        periodic = self.led_refresh_s > 0 and now - self._led_at >= self.led_refresh_s
+        periodic = (self.led_refresh_s > 0
+                    and now - self._led_at >= self.led_refresh_s + self._jitter)
         if (due or periodic) and self._merger.pending == 0 and self._cmds.empty():
             self._refresh_due = None
             self._queue_led(quiet=True)
@@ -293,8 +312,13 @@ class Flipper:
                 self._rgb = None    # Flipper may have rebooted: resend all channels
             self._queue_led()   # re-apply LED after a reconnect
         self._was_connected = True
+        self._settle_led()      # rx just started: the firmware is about to rewrite red/green
         self.connected.set()
         return True
+
+    def _settle_led(self) -> None:
+        if self.led_settle_s > 0:
+            self._refresh_due = time.monotonic() + self.led_settle_s
 
     def _on_disconnect(self, err: Exception) -> None:
         if self.connected.is_set():
@@ -346,8 +370,11 @@ class Flipper:
                     cmd.future.set_exception(e)
             raise
         if self._start_rx():
+            paused = time.monotonic() - paused_at
             level = logging.DEBUG if all(c.quiet for c in batch) else logging.INFO
-            log.log(level, "rx resumed after %.2fs pause", time.monotonic() - paused_at)
+            log.log(level, "rx resumed after %.2fs pause", paused)
+            if paused >= LONG_PAUSE_S or not all(c.led_only for c in batch):
+                self._settle_led()      # long pause (send, buzz): charging resumed meanwhile
         else:
             log.error("rx did not restart; reconnecting")
             self.conn.close()
