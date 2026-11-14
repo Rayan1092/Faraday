@@ -44,6 +44,9 @@ class FakeDevice:
         self.vibro = False
         self.vibro_count = 0
         self.tx: List[str] = []           # file names sent, in order
+        # The real outlets toggle on every code they receive (a second outlet1_on
+        # turned the porch light OFF in Join 1), so the fake models that too.
+        self.outlet_lit: Dict[int, bool] = {1: False, 2: False, 3: False}
         self.commands: List[str] = []     # every command line received
         self.packets_sent = 0             # radio packets the Flipper actually "heard"
         self.plugged = True
@@ -134,6 +137,9 @@ class FakeDevice:
             name = parts[2].rsplit("/", 1)[-1].rsplit(".", 1)[0].lower()
             if name in self.files:
                 self.tx.append(name)
+                n = int(name[6]) if name[6:7].isdigit() else 0
+                if n in self.outlet_lit:
+                    self.outlet_lit[n] = not self.outlet_lit[n]
                 self._say(f"Listening at {parts[2]}. Frequency=315000000, Protocol=Princeton\r\n"
                           "Press CTRL+C to stop\r\n.\r\n".encode())
             else:
