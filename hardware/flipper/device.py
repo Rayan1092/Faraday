@@ -67,8 +67,10 @@ class _Command:
 
 class Flipper:
     def __init__(self, settings: Optional[Dict[str, Any]] = None,
-                 on_event: Optional[Callable[[Event], None]] = None):
+                 on_event: Optional[Callable[[Event], None]] = None,
+                 source: str = Source.FLIPPER):
         settings = settings or load_settings()
+        self.source = source                 # FakeFlipper passes Source.SIM
         fs = settings["flipper"]
         self.rx_command: str = fs["rx_command"]
         self.tx_template: str = fs["tx_command"]
@@ -395,7 +397,7 @@ class Flipper:
             log.info("%s matched by serial: key %s (button %s)", name, burst.key, burst.key[-1])
         data = DATA_FOR_TYPE[name](key=burst.key, protocol=burst.protocol, bits=burst.bits,
                                    packets=burst.packets, duration_ms=burst.duration_ms)
-        event = make_event(name, data, Source.FLIPPER)
+        event = make_event(name, data, self.source)
         if started is not None:
             event.timestamp = started.isoformat(timespec="milliseconds")
         log.info("event %s %s packets=%d duration_ms=%d", event.type, burst.key,

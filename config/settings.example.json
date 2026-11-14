@@ -1,6 +1,10 @@
 {
   "_readme": "Copy to config/settings.json (gitignored) and edit there. Keys named 'mac' / 'windows' are picked by OS: sys.platform 'darwin' -> mac, 'win32' -> windows.",
 
+  "integration": {
+    "fake_flipper": false
+  },
+
   "flipper": {
     "serial_port": {
       "windows": "COM5",
