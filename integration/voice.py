@@ -55,7 +55,9 @@ class Voice:
             self.out("  [stt] no words recognized" + ("" if self.stt.available
                                                       else " (no STT on this OS: use t <text>)"))
             return
-        self.out(f'  [stt] heard: "{text}"')
+        # Never print the raw text: it can hold the passphrase, which only the
+        # pipeline redacts. The redacted line shows up as the speech_heard EVENT.
+        self.out(f"  [stt] heard {len(text.split())} word(s)")
         self.submit(make_event(EventType.SPEECH_HEARD,
                                SpeechHeardData(text=text, audio_path=relative(wav),
                                                duration_s=round(seconds, 2)),

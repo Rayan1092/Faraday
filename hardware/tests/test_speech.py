@@ -225,6 +225,20 @@ class PushToTalk(Base):
         self.assertEqual((ev.type, ev.source, ev.data["text"]), ("speech_heard", "speech", "Package for Sam."))
         self.assertAlmostEqual(ev.data["duration_s"], 1.5, places=1)
 
+    def test_transcript_is_never_printed(self):
+        srv = FakeArgmax("silver otter lantern")      # the example passphrase
+        printed, got = [], []
+        rec = Recorder(MicGate(), audio_dir=self.dir / "out",
+                       stream_factory=lambda **kw: FakeStream(self.wav, **kw))
+        voice = Voice(rec, SpeechToText(srv.url), got.append, out=printed.append)
+        try:
+            voice.start()
+            voice.stop().join(10)
+        finally:
+            srv.close()
+        self.assertEqual(len(got), 1)                  # still handed to the pipeline
+        self.assertFalse(any("otter" in line for line in printed), printed)
+
     def test_cannot_start_while_faraday_talks(self):
         gate = MicGate()
         gate.mute()

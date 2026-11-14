@@ -64,6 +64,10 @@ def build_app(args: argparse.Namespace, settings) -> App:
         from integration.voice import Voice
         app.voice = Voice(Recorder.from_settings(settings, gate),
                           SpeechToText.from_settings(settings), app.submit)
+        if app.board is not None:
+            # Dell's dashboard (PR #10) shows a Talk button when this is set;
+            # each press toggles recording. Harmless on an older dashboard.
+            app.board.talk_hook = app.voice.toggle
     return app
 
 
