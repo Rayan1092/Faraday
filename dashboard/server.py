@@ -73,6 +73,8 @@ class Dashboard:
         self.netcheck = NetCheck()
         self.photos = PhotoWatcher(MEDIA_DIR / "photos", REPO_ROOT)
         self.sensor_keys = {"doorbell": "0x00DEC608", "motion": "0x00C5AFAE"}
+        # integration/ can set this to start/stop push-to-talk recording from the page.
+        self.talk_hook: Optional[Any] = None
         self.httpd = ThreadingHTTPServer((host, port), _make_handler(self))
         self.httpd.daemon_threads = True
         self._thread: Optional[threading.Thread] = None
@@ -110,8 +112,17 @@ class Dashboard:
     def state(self) -> Dict[str, Any]:
         p = self.pipeline
         rules = p.rules.all() if getattr(p, "rules", None) is not None else []
-        return build_state(p.log.recent(500), p.modes.mode, p.modes.alert, rules, self.led,
-                           network=self.netcheck.status(), newest_photo=self.photos.newest())
+        state = build_state(p.log.recent(500), p.modes.mode, p.modes.alert, rules, self.led,
+                            network=self.netcheck.status(), newest_photo=self.photos.newest())
+        state["talk_available"] = self.talk_hook is not None
+        return state
+
+    def talk(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+        """Push-to-talk from the dashboard: calls integration's hook on a thread."""
+        if self.talk_hook is None:
+            return 503, {"ok": False, "error": "Push-to-talk isn't connected."}
+        threading.Thread(target=self.talk_hook, daemon=True).start()
+        return 202, {"ok": True}
 
     def set_mode(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
         mode = body.get("mode")
@@ -163,7 +174,7 @@ class Dashboard:
 def _make_handler(app: Dashboard):
     posts = {"/api/mode": app.set_mode, "/api/home": app.go_home,
              "/api/say": app.say, "/api/rules/delete": app.delete_rule,
-             "/api/sensor": app.sensor}
+             "/api/sensor": app.sensor, "/api/talk": app.talk}
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "Faraday"

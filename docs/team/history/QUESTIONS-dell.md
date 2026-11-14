@@ -1,4 +1,6 @@
-# Open questions for the owner (written while you were away)
+# Open questions from Dell (written while the owner was away)
+
+Named `QUESTIONS-dell.md`, because NV's open PRs add their own `QUESTIONS.md`. That way neither merge conflicts.
 
 Each one has the default I used. Change it and I'll follow.
 
@@ -11,3 +13,5 @@ Each one has the default I used. Change it and I'll follow.
 7. **Repeated porch-light sends.** The baseline sends `outlet_on porch_light` on every armed motion, even when it's already on. Each send makes the Flipper deaf for about 1.2 s (NV's numbers). *Default:* left as is, and the seams note tells NV they can skip repeats in `integration/`. Say if you'd rather the pipeline skipped them.
 8. **PR #5 (NV's Flipper driver) was merged while I worked.** I merged main into `dell/polish`. NV's 28 tests pass here with a stand-in `serial` module, because pyserial isn't installed on this laptop. The radio numbers in the README and submission docs come from PR #5 and NV's handoff note. *Default:* written as "tested on a Windows laptop", with the Mac mini still [TBD].
 9. **OpenCV wasn't installed on this laptop, and installing it was blocked** (the auto-mode classifier denied the pip install). `describe_photo` shrinks photos with OpenCV only if it's there. That path is tested with a stand-in module but hasn't been run for real. *Default:* fine, because `requirements.txt` already lists `opencv-python`. Just run `pip install -r requirements.txt` on the Mac.
+10. **Vision is built twice.** NV's PR #7 does camera → Bonsai vision → `photo_described` in `hardware/vision.py` (shrinks to 512 px, live-tested at 3.3 s), already wired into `py -m integration`. I wrote the same seam as `brain/vision.py` (PLAN.md seam 4) before seeing that. *Default:* integration uses NV's. `brain/vision.py` stays as an unused duplicate for now, and one of them gets deleted after the demo. The seams note says so.
+11. **Push-to-talk button (NV's question 3).** Added a "Talk" button to the dashboard. It calls `board.talk_hook()` if integration sets one, and stays hidden otherwise. *Default:* one press calls the hook, and integration decides whether that starts or stops recording.

@@ -31,6 +31,7 @@
     document.body.dataset.status = s.status.color;
     $("mode").textContent = s.mode.toUpperCase();
     $("alert").textContent = s.alert === "normal" ? "" : "⚠ " + s.alert.toUpperCase();
+    $("btn-talk").hidden = !s.talk_available;
     for (const m of ["away", "night", "home"]) {
       $("btn-" + m).classList.toggle("active", s.mode === m);
     }
@@ -177,6 +178,7 @@
     });
   };
 
+  $("btn-talk").onclick = () => post("/api/talk", {});
   $("btn-ring").onclick = () => post("/api/sensor", { type: "doorbell" }).then(poll);
   $("btn-motion").onclick = () => post("/api/sensor", { type: "motion" }).then(poll);
 

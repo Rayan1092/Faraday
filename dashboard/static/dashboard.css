@@ -101,6 +101,8 @@ body[data-status="red"] .mode { animation: pulse 1s ease-in-out infinite; }
 .btn.away  { border-color: var(--blue); }
 .btn.night { border-color: var(--purple); }
 .btn.home  { border-color: var(--green); }
+.btn.talk  { border-color: var(--text); }
+.btn[hidden] { display: none; }
 .btn.away.active  { background: var(--blue); color: #fff; }
 .btn.night.active { background: var(--purple); color: #fff; }
 .btn.home.active  { background: var(--green); color: #000; }

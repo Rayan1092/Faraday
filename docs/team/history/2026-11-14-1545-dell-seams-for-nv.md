@@ -12,7 +12,8 @@
 | Every incoming event | `pipeline.handle(event)` | Doorbell, motion, speech, `photo_described`. Thread-safe (one lock). Returns `Result(events, actions)`, but you don't need it if you use the callbacks |
 | Dashboard Away/Night | `pipeline.owner_set_mode("away")` | The dashboard calls this itself. Only use it for a physical button |
 | Typed passphrase | `pipeline.owner_passphrase(text)` | Returns `None` if wrong. The dashboard already does this |
-| Photo description | `describe_photo(path, caused_by=action.id, describer=describer)` | `from brain import Describer, describe_photo`. Build once with `describer = Describer.from_settings(settings)`. Always returns a valid `photo_described`; feed it to `pipeline.handle()` |
+| Photo description | Your PR #7 already does this in `hardware/vision.py`. Use that. | `brain/vision.py` (`describe_photo`) does the same thing. I wrote it before seeing #7, and it's now an unused duplicate we'll drop after the demo. Either way, feed the `photo_described` event to `pipeline.handle()` |
+| Push-to-talk button | `board.talk_hook = toggle_recording` | The dashboard shows a **Talk** button only when this is set. Each press calls it once, on a thread. Your code decides start or stop |
 | Log | `pipeline.log.recent(n)`, `pipeline.log.messages()` | **Don't write to the log yourself.** The pipeline already logs every event and action, redacted |
 | Dashboard | `board = Dashboard.from_settings(pipeline, settings).start()` | `from dashboard import Dashboard`. Serves `dashboard.host:port` (127.0.0.1:8080) |
 | Shutdown | `pipeline.wait_background(5); board.stop()` | Waits for a pending alarm confrontation |

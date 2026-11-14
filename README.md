@@ -6,7 +6,7 @@ It answers the door, takes messages, turns on lights, learns simple rules when y
 
 We built it for the Cornell Local AI Hackathon.
 
-> Status: the software runs end to end in our simulator. There are 214 passing tests: 186 for the software and 28 for the radio driver, which replay real radio captures. The Flipper radio driver works on real hardware (on a Windows laptop). The full run on the Mac mini is next. Anything marked **[TBD]** hasn't been proven on real hardware yet.
+> Status: the software runs end to end in our simulator. There are 215 passing tests: 187 for the software and 28 for the radio driver, which replay real radio captures. The Flipper radio driver works on real hardware (on a Windows laptop). The full run on the Mac mini is next. Anything marked **[TBD]** hasn't been proven on real hardware yet.
 
 ## Why offline
 
