@@ -29,3 +29,6 @@
   - Open Question 3 in QUESTIONS.md: a push-to-talk button on the dashboard?
 - **Local:** `config/settings.json` was created on the NV laptop with `llm.profile: nv_backup` (gitignored). Change the passphrase there.
 - **Open questions:** `docs/team/history/QUESTIONS.md` (12 items, each with the default used).
+- **Fixed after the first pass (16:00):**
+  - **Windows TTS:** the in-process pyttsx3 engine hung on the second line from a worker thread, which would silence Faraday. Each line now runs in its own pyttsx3 process (~0.4 s, killed on timeout).
+  - **Camera failure:** a failed snapshot now still sends `photo_described` ("Camera unavailable.", empty `photo_path`), so the doorbell greeting still happens.
