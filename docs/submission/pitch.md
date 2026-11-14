@@ -12,6 +12,8 @@ Lines in quotes are what you say. Lines in *italics* are what you do. Keep it lo
 - LM Studio running the 9B with Parallel above 1. Argmax running. Wi-Fi still on, so you can turn it off in front of them.
 - Practice the timing once. Bonsai takes a few seconds per answer. **[TBD: real timings on the Mac mini]**
 - **Hold the doorbell for 1 to 2 seconds.** A quick tap doesn't register. If it still doesn't fire, press "Ring doorbell" on the dashboard and say so.
+- **If the Flipper LED stays dark,** point at the dashboard instead. Its colour bar shows exactly what the LED should. **[TBD: NV's LED fix]**
+- **If the second wave doesn't turn everything red,** wave again within the minute. If it still doesn't, keep going and say the alarm needs a second trigger. **[TBD: NV's second-wave fix]**
 
 ---
 
