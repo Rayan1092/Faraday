@@ -218,3 +218,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Faraday
+config/settings.json
+captures/
+logs/
+.DS_Store

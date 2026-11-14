@@ -1,0 +1,340 @@
+# Faraday formats
+
+This file is the source of truth for every message passed between modules. The matching Python is in `shared/` (`shared/events.py`, `shared/actions.py`). If they ever disagree, fix the code to match this file. Change either one only by agreement between both laptops.
+
+## Common rules
+
+- Every message is one JSON object. The log file `logs/events.jsonl` has one event or action per line, in the order they happened.
+- `kind` is `"event"` (something happened) or `"action"` (something Faraday should do).
+- `id` is a prefix plus 8 hex characters: `evt_3f9a1c2e`, `act_b71d04aa`. Use `shared.new_id()`.
+- `timestamp` is local time in ISO 8601 with milliseconds and UTC offset: `2026-11-14T16:03:12.481-05:00`. Use `shared.now_iso()`.
+- `source` says which module made the message. Allowed values: `flipper`, `speech`, `camera`, `vision`, `brain`, `modes`, `rules`, `dashboard`, `sim`, `system`.
+- `caused_by` is the `id` of the message that led to this one, or `null`. It lets the dashboard and `summarize_log` follow a chain like doorbell → take_photo → photo_described → speak.
+- Unknown keys are rejected. Missing optional keys take the defaults listed below.
+- File paths are relative to the repo root and use forward slashes on every OS, for example `captures/photos/20261114-160312.jpg`.
+- Sim events look exactly like real ones except `source: "sim"`. No code may treat a sim event differently.
+
+Modes: `home` (disarmed, green LED), `away` (armed, blue LED), `night` (armed, LED still to be decided, see PLAN.md Open Questions).
+Outlets: `porch_light` (outlet 1), `living_room_lamp` (outlet 2), `spare` (outlet 3).
+
+---
+
+## Events
+
+Envelope:
+
+| key | type | notes |
+|---|---|---|
+| `kind` | `"event"` | |
+| `id` | string | `evt_xxxxxxxx` |
+| `type` | string | one of the five types below |
+| `timestamp` | string | ISO 8601, see above |
+| `source` | string | see above |
+| `caused_by` | string or null | |
+| `data` | object | shape depends on `type` |
+
+### doorbell
+
+The doorbell sends Princeton 24-bit key `0x00DEC608`. The button has to be held for about 1 s, and all packets from one press become one event.
+
+| data key | type | default | notes |
+|---|---|---|---|
+| `key` | string | required | `"0x00DEC608"` |
+| `protocol` | string | `"Princeton"` | |
+| `bits` | int | `24` | |
+| `packets` | int | `1` | packets seen in this press |
+| `duration_ms` | int | `0` | time from first packet to last |
+
+```json
+{
+  "kind": "event",
+  "id": "evt_3f9a1c2e",
+  "type": "doorbell",
+  "timestamp": "2026-11-14T16:03:12.481-05:00",
+  "source": "flipper",
+  "caused_by": null,
+  "data": {"key": "0x00DEC608", "protocol": "Princeton", "bits": 24, "packets": 9, "duration_ms": 1040}
+}
+```
+
+### motion
+
+The motion sensor sends Princeton 24-bit key `0x00C5AFAE`, about 17 packets per trigger. All packets inside the merge window (`sensors.motion.merge_window_s` in settings) become one event.
+
+| data key | type | default | notes |
+|---|---|---|---|
+| `key` | string | required | `"0x00C5AFAE"` |
+| `protocol` | string | `"Princeton"` | |
+| `bits` | int | `24` | |
+| `packets` | int | `1` | packets merged into this event |
+| `duration_ms` | int | `0` | time from first packet to last |
+
+```json
+{
+  "kind": "event",
+  "id": "evt_8c21d7f0",
+  "type": "motion",
+  "timestamp": "2026-11-14T23:41:05.112-05:00",
+  "source": "flipper",
+  "caused_by": null,
+  "data": {"key": "0x00C5AFAE", "protocol": "Princeton", "bits": 24, "packets": 17, "duration_ms": 1830}
+}
+```
+
+### speech_heard
+
+A transcript from Argmax STT on the Mac, or from the Windows stand-in. Before anything is logged or sent to the brain, `modes/` checks the text for the passphrase. If it matches, the passphrase is replaced with `[passphrase]` in `text`.
+
+| data key | type | default | notes |
+|---|---|---|---|
+| `text` | string | required | not empty |
+| `audio_path` | string or null | `null` | `captures/audio/....wav` |
+| `duration_s` | number or null | `null` | length of the recording |
+
+```json
+{
+  "kind": "event",
+  "id": "evt_51ab9e03",
+  "type": "speech_heard",
+  "timestamp": "2026-11-14T16:03:30.207-05:00",
+  "source": "speech",
+  "caused_by": "act_c40f2b19",
+  "data": {"text": "Hi, I have a package for Sam.", "audio_path": "captures/audio/20261114-160326.wav", "duration_s": 3.4}
+}
+```
+
+### photo_described
+
+A camera snapshot plus a short description from Bonsai vision. `caused_by` is the `take_photo` action that asked for it.
+
+| data key | type | default | notes |
+|---|---|---|---|
+| `photo_path` | string | required | `captures/photos/....jpg` |
+| `description` | string | required | one or two short sentences |
+| `model` | string or null | `null` | LM Studio model id used |
+
+```json
+{
+  "kind": "event",
+  "id": "evt_e6047a55",
+  "type": "photo_described",
+  "timestamp": "2026-11-14T16:03:16.930-05:00",
+  "source": "vision",
+  "caused_by": "act_9d3e61c8",
+  "data": {"photo_path": "captures/photos/20261114-160313.jpg", "description": "A person in a dark jacket holding a cardboard box at the front door.", "model": "ternary-bonsai-2-4b@q2_0"}
+}
+```
+
+### mode_changed
+
+Sent by `modes/` after every mode change. `integration/` listens for it to set the Flipper LED. Going from `away` or `night` to `home` is only valid with `changed_by: "passphrase"`. The one exception is `startup`, the first event after launch.
+
+| data key | type | default | notes |
+|---|---|---|---|
+| `mode` | string | required | new mode |
+| `previous` | string | required | old mode |
+| `changed_by` | string | required | `passphrase`, `brain`, `rule`, `dashboard`, `startup` |
+| `reason` | string | `""` | short text for the dashboard |
+
+```json
+{
+  "kind": "event",
+  "id": "evt_07fd3c92",
+  "type": "mode_changed",
+  "timestamp": "2026-11-14T16:01:02.554-05:00",
+  "source": "modes",
+  "caused_by": "act_2a7710be",
+  "data": {"mode": "away", "previous": "home", "changed_by": "brain", "reason": "Owner said they are leaving."}
+}
+```
+
+---
+
+## Actions
+
+Envelope:
+
+| key | type | notes |
+|---|---|---|
+| `kind` | `"action"` | |
+| `id` | string | `act_xxxxxxxx` |
+| `type` | string | one of the eight types below |
+| `timestamp` | string | ISO 8601 |
+| `source` | string | usually `brain`, `rules` or `dashboard` |
+| `caused_by` | string or null | the event that led to it |
+| `args` | object | shape depends on `type` |
+
+**The AI can only choose these eight actions. None of them disarms.** Disarming means going to `home` from an armed mode, and only the passphrase check in `modes/` can do it. `set_mode` rejects `home` for every source. A dashboard Home button has to go through the passphrase check too.
+
+Who runs each action:
+- `outlet_on`, `outlet_off`, `speak` and `take_photo` touch hardware, so `integration/` runs them (NV laptop).
+- `set_mode`, `save_message`, `summarize_log` and `add_rule` are handled by `modes/`, `log/`, `brain/` and `rules/` (Dell laptop).
+
+### set_mode
+
+| args key | type | default | notes |
+|---|---|---|---|
+| `mode` | string | required | `away` or `night` only |
+
+```json
+{
+  "kind": "action",
+  "id": "act_2a7710be",
+  "type": "set_mode",
+  "timestamp": "2026-11-14T16:01:02.390-05:00",
+  "source": "brain",
+  "caused_by": "evt_a90c4d11",
+  "args": {"mode": "away"}
+}
+```
+
+### outlet_on
+
+| args key | type | default | notes |
+|---|---|---|---|
+| `outlet` | string | required | `porch_light`, `living_room_lamp`, `spare` |
+
+`integration/` maps the outlet name to `outletN_on` and runs `subghz tx_from_file /ext/subghz/outletN_on.sub 10 0`. It pauses rx first and starts it again afterwards.
+
+```json
+{
+  "kind": "action",
+  "id": "act_5be2f8a0",
+  "type": "outlet_on",
+  "timestamp": "2026-11-14T23:41:05.640-05:00",
+  "source": "rules",
+  "caused_by": "evt_8c21d7f0",
+  "args": {"outlet": "porch_light"}
+}
+```
+
+### outlet_off
+
+Same args as `outlet_on`.
+
+```json
+{
+  "kind": "action",
+  "id": "act_f13a9c77",
+  "type": "outlet_off",
+  "timestamp": "2026-11-14T23:46:05.640-05:00",
+  "source": "brain",
+  "caused_by": null,
+  "args": {"outlet": "porch_light"}
+}
+```
+
+### speak
+
+| args key | type | default | notes |
+|---|---|---|---|
+| `text` | string | required | 1 to 240 characters |
+
+```json
+{
+  "kind": "action",
+  "id": "act_c40f2b19",
+  "type": "speak",
+  "timestamp": "2026-11-14T16:03:17.402-05:00",
+  "source": "brain",
+  "caused_by": "evt_e6047a55",
+  "args": {"text": "Hello. Nobody can come to the door right now. Would you like to leave a message?"}
+}
+```
+
+### take_photo
+
+| args key | type | default | notes |
+|---|---|---|---|
+| `reason` | string | `""` | short, shown on the dashboard |
+
+The result arrives later as a `photo_described` event whose `caused_by` is this action's id.
+
+```json
+{
+  "kind": "action",
+  "id": "act_9d3e61c8",
+  "type": "take_photo",
+  "timestamp": "2026-11-14T16:03:12.733-05:00",
+  "source": "brain",
+  "caused_by": "evt_3f9a1c2e",
+  "args": {"reason": "doorbell"}
+}
+```
+
+### save_message
+
+| args key | type | default | notes |
+|---|---|---|---|
+| `text` | string | required | 1 to 500 characters |
+| `sender` | string | `"visitor"` | |
+
+```json
+{
+  "kind": "action",
+  "id": "act_7e0b5d26",
+  "type": "save_message",
+  "timestamp": "2026-11-14T16:03:31.015-05:00",
+  "source": "brain",
+  "caused_by": "evt_51ab9e03",
+  "args": {"text": "Delivery driver has a package for Sam and left it by the side door.", "sender": "visitor"}
+}
+```
+
+### summarize_log
+
+| args key | type | default | notes |
+|---|---|---|---|
+| `minutes` | int | `60` | how far back to look, 1 to 1440 |
+
+The brain turns the summary into a `speak` action and also shows it on the dashboard.
+
+```json
+{
+  "kind": "action",
+  "id": "act_33c8e4f1",
+  "type": "summarize_log",
+  "timestamp": "2026-11-14T18:30:44.820-05:00",
+  "source": "brain",
+  "caused_by": "evt_d2b6a0e8",
+  "args": {"minutes": 180}
+}
+```
+
+### add_rule
+
+| args key | type | default | notes |
+|---|---|---|---|
+| `when` | object | required | `{"event": <event type>, "modes": [<mode>, ...]}`. An empty or missing `modes` list means any mode |
+| `then` | list | required | 1 to 3 items of `{"type": <action type>, "args": {...}}`. Each item is checked like a normal action. No `add_rule` inside a rule, and `set_mode` still cannot be `home` |
+| `description` | string | `""` | the user's own words, for the dashboard |
+
+When a rule fires, `rules/` sends each `then` item as an action with `source: "rules"` and `caused_by` set to the event that matched.
+
+```json
+{
+  "kind": "action",
+  "id": "act_6a19fd02",
+  "type": "add_rule",
+  "timestamp": "2026-11-14T21:12:09.300-05:00",
+  "source": "brain",
+  "caused_by": "evt_0e4c7b35",
+  "args": {
+    "when": {"event": "motion", "modes": ["night"]},
+    "then": [{"type": "outlet_on", "args": {"outlet": "porch_light"}}],
+    "description": "When there's motion at night, turn on the porch light."
+  }
+}
+```
+
+---
+
+## What the LLM returns
+
+Keep the prompt short. Bonsai sees the current mode, the new event, and a few recent log lines, and replies with only this:
+
+```json
+{"actions": [{"type": "take_photo", "args": {"reason": "doorbell"}}, {"type": "outlet_on", "args": {"outlet": "porch_light"}}]}
+```
+
+`brain/` wraps each item in the action envelope (`kind`, `id`, `timestamp`, `source: "brain"`, `caused_by`) and checks it with `shared.validate_action()`. Invalid items are dropped and logged, never retried in a loop. An empty list `{"actions": []}` means do nothing.

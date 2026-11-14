@@ -1,0 +1,108 @@
+{
+  "_readme": "Copy to config/settings.json (gitignored) and edit there. Keys named 'mac' / 'windows' are picked by OS: sys.platform 'darwin' -> mac, 'win32' -> windows.",
+
+  "flipper": {
+    "serial_port": {
+      "windows": "COM5",
+      "mac": "/dev/cu.usbmodemflip_*"
+    },
+    "baud": 230400,
+    "rx_command": "subghz rx 433920000 0",
+    "tx_command": "subghz tx_from_file /ext/subghz/{name}.sub 10 0",
+    "led": {
+      "home": "green",
+      "away": "blue",
+      "night": "blue",
+      "warning": "yellow",
+      "alarm": "red"
+    }
+  },
+
+  "sensors": {
+    "doorbell": {
+      "protocol": "Princeton",
+      "bits": 24,
+      "key": "0x00DEC608",
+      "min_duration_ms": 800
+    },
+    "motion": {
+      "protocol": "Princeton",
+      "bits": 24,
+      "key": "0x00C5AFAE",
+      "merge_window_s": 5
+    }
+  },
+
+  "outlets": {
+    "porch_light":      {"number": 1, "on": "outlet1_on", "off": "outlet1_off"},
+    "living_room_lamp": {"number": 2, "on": "outlet2_on", "off": "outlet2_off"},
+    "spare":            {"number": 3, "on": "outlet3_on", "off": "outlet3_off"}
+  },
+
+  "llm": {
+    "_note": "Bonsai 2 via LM Studio OpenAI-compatible server only. Pick a profile; NV laptop uses nv_backup.",
+    "profile": "mac",
+    "profiles": {
+      "mac": {
+        "base_url": "http://localhost:1234",
+        "model": "bonsai-2-9b"
+      },
+      "nv_backup": {
+        "base_url": "http://127.0.0.1:1234",
+        "model": "ternary-bonsai-2-4b@q2_0"
+      }
+    },
+    "max_tokens": 200,
+    "temperature": 0.2,
+    "timeout_s": 30,
+    "recent_log_lines": 8
+  },
+
+  "stt": {
+    "mac": {
+      "kind": "argmax",
+      "url": "http://localhost:50060/v1/audio/transcriptions",
+      "language": "en"
+    },
+    "windows": {
+      "kind": "standin"
+    }
+  },
+
+  "tts": {
+    "mac": {
+      "kind": "argmax",
+      "command": ["argmax-cli", "tts", "--text", "{text}", "--output-path", "{out_wav}"]
+    },
+    "windows": {
+      "kind": "standin"
+    }
+  },
+
+  "audio": {
+    "mic_device": null,
+    "speaker_device": null,
+    "sample_rate": 16000,
+    "max_record_s": 8
+  },
+
+  "camera": {
+    "index": 0,
+    "width": 1280,
+    "height": 720
+  },
+
+  "security": {
+    "passphrase": "CHANGE_ME_NOT_IN_GIT"
+  },
+
+  "dashboard": {
+    "host": "127.0.0.1",
+    "port": 8080
+  },
+
+  "paths": {
+    "captures": "captures",
+    "logs": "logs"
+  }
+}
