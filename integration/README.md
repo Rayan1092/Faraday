@@ -1,11 +1,29 @@
 # integration/
 
-**Owner: NV laptop.**
+**Owner: NV laptop.** This is the main app. It wires the hardware to Dell's pipeline.
 
-Wires everything into one process: the event bus, the main loop and the hardware action executor.
+```
+py -m integration                 # real Flipper (autodetect by USB id, then the settings port)
+py -m integration --fake          # fake Flipper, no hardware (or set integration.fake_flipper)
+py -m integration --fake --offline --no-browser --log tmp.jsonl   # quick try, no LM Studio
+```
 
-- Feeds every event (real or sim) to `brain.handle_event()` and to `log/`.
-- Runs the hardware actions (`outlet_on`, `outlet_off`, `speak`, `take_photo`) on `hardware/`.
-- Sets the Flipper LED from `mode_changed` and `alert_changed` events. The alert colour (yellow warning, red alarm) wins over the mode colour (green Home, blue Away, purple Night).
+| Flow | How |
+|---|---|
+| Flipper events → `Pipeline.handle()` | thread-safe queue, one worker |
+| `outlet_on` / `outlet_off` → Flipper | `Flipper.execute()`, queued inside the driver (rx pause, send, resume) |
+| `mode_changed` / `alert_changed` → LED | `Flipper.apply_event()`, alert beats mode |
+| `speak` | speech worker, one line at a time |
+| `take_photo` | camera worker → `photo_described` back onto the queue |
+| Dashboard | `Dashboard.from_settings(pipeline, settings)`, started with the app |
 
-See "Seams" in [docs/PLAN.md](../docs/PLAN.md).
+Nothing slow runs inside the pipeline callbacks: `on_action` can come from dashboard and confrontation threads (PLAN Q22). The pipeline logs every event and action itself (Q21).
+
+**Console:**
+- `t <text>`: typed speech
+- `1` / `2` / `3`: Home (passphrase) / Away / Night
+- `d` / `m`: fake doorbell / wave (fake only)
+- `s`: status
+- `q`: quit
+
+**Tests:** `python -m unittest integration.tests.test_app` runs the whole flow on the fake Flipper with an offline brain and a temp log.
