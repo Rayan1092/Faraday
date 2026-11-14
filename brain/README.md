@@ -26,7 +26,7 @@ Then the software actions run: `set_mode` goes back through `modes/`, `add_rule`
 | File | What it does |
 |---|---|
 | `core.py` | `Brain.decide()`: plain-code cases first, then Bonsai, then guard rails, then fallback. Builds the prompt |
-| `tools.py` | One tool per action. Each (event, mode) pair is offered only a few tools. `set_mode` is never offered while armed. In Away (a visitor) speech gets only `save_message` and `speak`: no rules, lights or summary |
+| `tools.py` | One tool per action. Each (event, mode) pair is offered only a few tools. `set_mode` is shown as `arm_away` / `arm_night` with no arguments (with a `mode` argument the 4B kept writing "home"), and it's never offered while armed. In Away (a visitor) speech gets only `save_message` and `speak`: no rules, lights or summary |
 | `guard.py` | Parses tool calls (or JSON in the text) and drops unknown actions, tools that weren't offered, bad args, `set_mode` while armed, and rules that change mode |
 | `fallback.py` | Keyword rules used when Bonsai errors, times out, returns garbage or nothing usable. Includes `parse_rule()` for rules by voice |
 | `summary.py` | `summarize_log`. The window is "since the house was last armed". Plain code collects the facts, `Brain.summarize()` turns them into speech, and `spoken_list()` is the fallback |
@@ -34,8 +34,17 @@ Then the software actions run: `set_mode` goes back through `modes/`, `add_rule`
 | `pipeline.py` | `Pipeline.handle(event)`, the Dell-side entry point (PLAN.md Q21) |
 | `safety.py` | Spots disarm requests so they're answered in code. The passphrase check and mode state are in `modes/`, and the brain never gets them |
 | `settings.py` | Loads settings and picks the `llm.profile` |
+| `prompts.py` | Prompt profiles. `small` is for 2B/4B and tuned with the bench. `9b` is for the Mac mini. Picked from the model id, or `llm.prompt_profile` |
+| `vision.py` | `describe_photo(path, caused_by, describer)` gives a `photo_described` event (PLAN.md seam 4). It tries Bonsai vision, and if that fails it still returns a valid event saying "No description available" |
+| `bench.py` | `python -m brain.bench [--profile mac] [--prompts 9b]`: every demo moment 10 times against Bonsai. Writes `docs/bench/` |
 
 Answered in plain code without calling Bonsai: `mode_changed`, disarm requests ("disarm", "turn off the alarm", ...) → "I can't disarm. Only the owner can do that." (it never mentions the passphrase), any speech that contains the passphrase, `alert_changed`, doorbell and all motion (the baseline handles those), and "what happened while I was out?" at Home (straight to `summarize_log`, saving one model round trip).
+
+Code fix-ups on top of Bonsai's answer, all recorded in `Decision.fixups`, so the benchmark can count them as "model wrong":
+- It promised "I'll take that message" but didn't save it: code saves the visitor's words.
+- The owner clearly said "heading out" or "goodnight" and Bonsai armed the other mode: code goes with the words.
+- It armed the house, saved a message or stored a rule without saying anything: code adds a spoken confirmation.
+- A doorbell greeting with no offer to take a message: code adds the offer.
 
 Free-text Bonsai calls (no tools): `Brain.summarize(facts)` and `Brain.confront(description)`. Each returns one clean line, or `None` when there's no model or the call fails.
 

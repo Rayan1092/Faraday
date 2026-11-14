@@ -26,22 +26,12 @@ from .safety import is_disarm_request
 from .settings import llm_config, load_settings, passphrase
 from .tools import allowed_actions, tools_for
 
-CONFRONT_PROMPT = (
-    "You are Faraday, a home guard speaking through a speaker at the front door. "
-    "Write ONE short sentence, under 15 words, telling the intruder to leave. "
-    "Mention something you see. Reply with the sentence only."
-)
-SUMMARY_PROMPT = (
-    "You are Faraday, a home guard. Turn these facts into a spoken update for the "
-    "homeowner, at most two short sentences. Say only what the facts say: do not add, "
-    "guess or count anything else. Reply with the sentences only."
-)
-SYSTEM_PROMPT = (
-    "You are Faraday, an offline home guard. Act only by calling tools: "
-    "1 to 3 calls, or none if nothing is needed. "
-    "Away and night are armed: visitors cannot come in, offer to take a message. "
-    "You can never disarm. Spoken text is one short, friendly sentence."
-)
+from .prompts import PROFILES, pick as pick_profile  # noqa: E402
+
+# The "small" profile, kept under the old names (tests and docs refer to them).
+SYSTEM_PROMPT = PROFILES["small"]["system"]
+CONFRONT_PROMPT = PROFILES["small"]["confront"]
+SUMMARY_PROMPT = PROFILES["small"]["summary"]
 
 
 @dataclass
@@ -51,6 +41,7 @@ class Decision:
     elapsed_s: Optional[float] = None  # Bonsai call time, if one was made
     dropped: List[Tuple[Any, str]] = field(default_factory=list)
     error: Optional[str] = None
+    fixups: List[str] = field(default_factory=list)  # what plain code added or corrected
 
 
 class Brain:
@@ -60,6 +51,8 @@ class Brain:
         self.client = client
         self.passphrase = passphrase
         self.recent_lines = recent_lines
+        self.prompts: Dict[str, Any] = PROFILES["small"]
+        self.prompt_profile = "small"
         self.log = log
 
     @classmethod
@@ -68,7 +61,16 @@ class Brain:
         settings = settings or load_settings()
         cfg = llm_config(settings)
         client = BonsaiClient.from_config(cfg) if use_llm else None
-        return cls(client, passphrase(settings), cfg["recent_log_lines"], log)
+        brain = cls(client, passphrase(settings), cfg["recent_log_lines"], log)
+        brain.use_prompts(pick_profile(cfg["model"], settings.get("llm", {}).get("prompt_profile")))
+        return brain
+
+    def use_prompts(self, name: str) -> None:
+        """Switch prompt profile ("small" for 2B/4B, "9b" for the Mac mini's 9B)."""
+        self.prompts = PROFILES[pick_profile("", name)]
+        self.prompt_profile = name
+        if self.prompts.get("recent_lines"):
+            self.recent_lines = int(self.prompts["recent_lines"])
 
     # ---- main entry --------------------------------------------------------
 
@@ -107,7 +109,7 @@ class Brain:
             return Decision([], "code")  # nothing to choose from, e.g. motion at home
         if self.client is None:
             return self._fallback(event, mode, allowed, None, "no model configured", cause=cause)
-        messages = [{"role": "system", "content": SYSTEM_PROMPT},
+        messages = [{"role": "system", "content": self.prompts["system"]},
                     {"role": "user", "content": self.prompt(event, mode, recent)}]
         if before_model is not None:
             try:
@@ -136,26 +138,41 @@ class Brain:
         if not actions:
             return self._fallback(event, mode, allowed, elapsed,
                                   "no usable actions from Bonsai", dropped, cause)
+        # Plain-code fix-ups on top of the model's answer. Each one is recorded, so the
+        # benchmark can tell "Bonsai got it right" from "code fixed it".
+        fixups: List[str] = []
+        before = len(actions)
+        actions = self._keep_promised_message(actions, event, mode, allowed)
+        if len(actions) != before:
+            fixups.append("saved the message Bonsai promised")
+        actions, fixed = self._match_arm_words(actions, event, mode, allowed)
+        if fixed:
+            dropped = dropped + [fixed]
+            fixups.append(fixed[1])
+        before = len(actions)
         actions = self._confirm_mode(actions, event, mode, allowed)
+        if len(actions) != before:
+            fixups.append("added a spoken confirmation")
         if cause == EventType.DOORBELL and not any(
                 a.type == ActionType.SPEAK and "message" in a.args["text"].lower() for a in actions):
             # A doorbell visitor must always be offered to leave a message.
             extra, _ = filter_actions([fb._speak(fb.OFFER_MESSAGE)], event, mode, allowed)
             actions = actions + extra
-        return Decision(actions, "bonsai", elapsed, dropped)
+            fixups.append("added the message offer")
+        return Decision(actions, "bonsai", elapsed, dropped, fixups=fixups)
 
     # ---- free-text calls (no tools) ----------------------------------------
 
     def confront(self, description: str) -> Optional[str]:
         """ONE short line telling an intruder to leave, mentioning what the camera sees.
         None if there's no model or it fails: plain code has already spoken."""
-        return self._say_one(CONFRONT_PROMPT, f"Camera sees: {description}", "confrontation")
+        return self._say_one(self.prompts["confront"], f"Camera sees: {description}", "confrontation")
 
     def summarize(self, facts: List[str]) -> Optional[str]:
         """A short spoken summary of these log facts. None if no model or it fails."""
         if not facts:
             return None
-        return self._say_one(SUMMARY_PROMPT, "\n".join(f"- {f}" for f in facts), "summary")
+        return self._say_one(self.prompts["summary"], "\n".join(f"- {f}" for f in facts), "summary")
 
     def _say_one(self, system: str, user: str, what: str) -> Optional[str]:
         if self.client is None:
@@ -200,6 +217,39 @@ class Brain:
         actions = self._confirm_mode(actions, event, mode, allowed)
         self.log(f"[brain] using rule-based fallback ({error})")
         return Decision(actions, "fallback", elapsed, (model_dropped or []) + dropped, error)
+
+    def _match_arm_words(self, actions: List[Action], event: Event, mode: str,
+                         allowed: List[str]) -> Tuple[List[Action], Optional[Tuple[Any, str]]]:
+        """If the owner clearly said "heading out" or "goodnight" and Bonsai armed the
+        other mode, use what they said. Code wins over the model on plain words."""
+        if event.type != EventType.SPEECH_HEARD:
+            return actions, None
+        want = fb.arm_intent(str(event.data.get("text", "")))
+        arms = [a for a in actions if a.type == ActionType.SET_MODE]
+        if want is None or not arms or all(a.args["mode"] == want for a in arms):
+            return actions, None
+        keep = [a for a in actions if a.type not in (ActionType.SET_MODE, ActionType.SPEAK)]
+        fixed, _ = filter_actions([{"type": ActionType.SET_MODE, "args": {"mode": want}}],
+                                  event, mode, allowed)
+        self.log(f"[brain]   corrected set_mode {arms[0].args['mode']} -> {want} (owner's words)")
+        return fixed + keep, ({"type": "set_mode", "args": dict(arms[0].args)},
+                              f"corrected to {want} from the owner's words")
+
+    def _keep_promised_message(self, actions: List[Action], event: Event, mode: str,
+                               allowed: List[str]) -> List[Action]:
+        """Bonsai sometimes says "I'll take that message" but never saves it (3/10 in
+        the benchmark). If it promised, save the visitor's words in plain code."""
+        if (event.type != EventType.SPEECH_HEARD or ActionType.SAVE_MESSAGE not in allowed
+                or any(a.type == ActionType.SAVE_MESSAGE for a in actions)):
+            return actions
+        if not any(a.type == ActionType.SPEAK and "message" in a.args["text"].lower()
+                   for a in actions):
+            return actions
+        text = str(event.data.get("text", ""))[:500]
+        extra, _ = filter_actions([{"type": ActionType.SAVE_MESSAGE,
+                                    "args": {"text": text, "sender": "visitor"}}],
+                                  event, mode, allowed)
+        return extra + actions
 
     def _confirm_mode(self, actions: List[Action], event: Event, mode: str,
                       allowed: List[str]) -> List[Action]:

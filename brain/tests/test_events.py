@@ -124,6 +124,16 @@ class EveryEventGivesValidActions(unittest.TestCase):
                                                        Mode.AWAY, recent).actions]
         self.assertEqual(texts, ["Hi! Want to leave a message?"])
 
+    def test_promised_message_is_saved_in_code(self):
+        brain = make_brain(tool_calls(("speak", {"text": "I'll take that message for you."})))
+        actions = brain.decide(events.speech("Package for Sam, side door."), Mode.AWAY).actions
+        self.assertEqual(actions[0].type, ActionType.SAVE_MESSAGE)
+        self.assertEqual(actions[0].args["text"], "Package for Sam, side door.")
+        # No promise, no message: plain chat stays chat.
+        brain = make_brain(tool_calls(("speak", {"text": "Hello there!"})))
+        actions = brain.decide(events.speech("Hi, is anyone home?"), Mode.AWAY).actions
+        self.assertEqual([a.type for a in actions], [ActionType.SPEAK])
+
     def test_photo_cause_tracing(self):
         bell = events.doorbell()
         photo = make_action(ActionType.TAKE_PHOTO, {"reason": "motion at night"}, Source.RULES,

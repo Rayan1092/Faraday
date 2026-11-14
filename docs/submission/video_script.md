@@ -7,6 +7,7 @@ Opens on the doorbell, shows the Wi-Fi going off within the first 10 seconds, th
 - Use a throwaway passphrase for the shoot, then change it. Or bleep it in the edit. Anyone who watches the video hears it.
 - Cutting out wait time is fine. Don't speed up footage, and don't stage anything Faraday didn't actually do.
 - Two phones: one on the door and the lights, one on the Mac mini and the dashboard. Screen-record the dashboard too.
+- Hold the doorbell for 1 to 2 seconds in the opening shot. A tap doesn't register.
 
 | Time | Picture | Sound | On screen |
 |---|---|---|---|

@@ -51,6 +51,14 @@ def fallback(event: Event, mode: str, photo_cause: str = "") -> List[RawItem]:
     return []
 
 
+def arm_intent(text: str) -> Optional[str]:
+    """'away' or 'night' if the owner clearly said so ("heading out", "goodnight"), else None."""
+    leaving, bed = bool(_LEAVING.search(text)), bool(_BED.search(text))
+    if leaving == bed:
+        return None
+    return Mode.AWAY if leaving else Mode.NIGHT
+
+
 def is_summary_request(text: str) -> bool:
     return bool(_SUMMARY.search(text))
 

@@ -6,7 +6,7 @@ It answers the door, takes messages, turns on lights, learns simple rules when y
 
 We built it for the Cornell Local AI Hackathon.
 
-> Status: the software runs end to end in our simulator, with 151 passing tests. The real hardware run is next. Anything marked **[TBD]** hasn't been proven on real hardware yet.
+> Status: the software runs end to end in our simulator. There are 215 passing tests: 187 for the software and 28 for the radio driver, which replay real radio captures. The Flipper radio driver works on real hardware (on a Windows laptop). The full run on the Mac mini is next. Anything marked **[TBD]** hasn't been proven on real hardware yet.
 
 ## Why offline
 
@@ -28,7 +28,15 @@ Faraday does all of it on one computer in your house. The radio, the AI, the spe
  projector <-- local dashboard (http://127.0.0.1:8080) <----------+
 ```
 
-**The radio.** Cheap 433 MHz sensors (a doorbell button and a motion sensor) send short fixed codes. A Flipper Zero plugged into the Mac listens with its normal firmware and tells us which code it heard. The doorbell and the motion sensor each have their own code. The motion sensor sends about 17 copies per trigger, so we merge them into one event. To switch a light, the Flipper replays a saved code to a cheap remote outlet. The porch light is outlet 1 and the living room lamp is outlet 2. **[TBD: confirm on the real Flipper]**
+**The radio.** Cheap 433 MHz sensors (a doorbell button and a motion sensor) send short fixed codes. A Flipper Zero plugged in by USB listens with its normal firmware, and our driver reads every code it reports.
+- **Codes.** Each sensor has its own. We match on the sensor's serial and ignore the button bits, because our doorbell sometimes sends a slightly different code for the same press.
+- **Motion.** One wave sends 17 copies of the code over about 2 seconds, and we merge them into one event.
+- **Lights.** The Flipper replays a saved code to a cheap remote outlet. Outlet 1 is the porch light and outlet 2 the living room lamp.
+- **Listening and sending.** The Flipper can't do both at once. So the driver pauses listening, sends, and starts again about 1.2 seconds later.
+- **LED.** The Flipper's LED shows the mode (green, blue, purple), or the alert colour (yellow, red), and it buzzes three times on an alarm.
+- **Reconnect.** If the USB cable drops, the driver reconnects by itself in about 8 seconds.
+
+We tested all of that on the real Flipper on a Windows laptop, with 25 tests that replay real radio captures. **[TBD: same check on the Mac mini]**
 
 **The modes.** Faraday is in Home, Away or Night. Each mode has a table of what always happens, written in plain code:
 
@@ -44,7 +52,7 @@ The lights and photos come from code, not the AI, so they happen even if the mod
 
 **Speech.** Argmax runs speech-to-text and text-to-speech on the Mac. Faraday hears you through the mic and answers through the speaker. **[TBD: confirm the Argmax commands on the Mac]**
 
-**The camera.** When something happens, Faraday takes a photo and gets a one-line description of it. **[TBD: which Bonsai build can describe images, see Open Question 2 in docs/PLAN.md]**
+**The camera.** When something happens, Faraday takes a photo, shows it on the dashboard right away, and asks Bonsai for a one-line description. We checked that the 4B Bonsai in LM Studio really looks at images: it correctly described a test picture of a green triangle. Big photos are slow (a full HD image timed out), so we shrink them to 640 px first. **[TBD: real camera photos on the Mac mini]**
 
 **Safety: AI for understanding, code for safety.**
 - The AI can arm the house but can never disarm it. Disarming only happens when someone says or types the passphrase, and that check is plain code.
@@ -102,8 +110,10 @@ We'd rather be honest about these:
 
 - **Cheap sensors use fixed codes.** The doorbell and motion sensor send the same code every time, so anyone with a radio like a Flipper could record and replay it. That could fake a doorbell press or trigger the alarm. It can't disarm anything, because disarming needs the passphrase. A real product should use rolling-code sensors.
 - **The outlets work the same way.** Someone nearby could replay the "light on" code.
-- **Small models make mistakes.** The 4B model sometimes picks the wrong action. It kept trying to switch to Home mode, and sometimes forgot to offer a message. Our code catches that: wrong actions get dropped, and missing pieces get added by plain code. The 9B should do better, but code is still the safety net.
-- **It's not instant.** On a laptop running the 4B model, a Bonsai call took about 4 to 14 seconds. So lights and photos never wait for the AI, and Faraday says "One moment, please" to visitors while it thinks. **[TBD: timings on the Mac mini with the 9B]**
+- **Our cheap doorbell is flaky.** It has to be held for a second or two, because a quick tap never registers. Late in testing, even holds only got through about 1 time in 3, with or without our code. We're swapping in a new doorbell. **[TBD: new doorbell results]** Until then, the dashboard has a "Ring doorbell" button that sends the same event, and the log marks it as coming from the dashboard.
+- **The radio goes deaf for a moment.** It can't hear sensors for about 1.2 seconds while it switches an outlet, and about 2.5 seconds during the alarm buzz.
+- **Small models make mistakes.** Before tuning, the 4B picked the right action on its own only 61% of the time. It kept trying to switch to Home mode when you said "I'm heading out". We built a benchmark (`python -m brain.bench`) and tuned the tools and prompts with it. After tuning it was right on its own 97% of the time (136 of 140 runs), including reworded sentences we never tuned on. Code fixed most of the rest, for 99% final. Nothing unsafe got through in any run. Full numbers are in [docs/bench/](docs/bench/README.md). It's still a small model, so code stays the safety net.
+- **It's not instant.** On a laptop running the 4B model, a Bonsai call took 2.5 seconds on average and 5.7 seconds at worst in the benchmark. So lights and photos never wait for the AI, and Faraday says "One moment, please" to visitors while it thinks. **[TBD: timings on the Mac mini with the 9B]**
 - **The passphrase is spoken out loud.** Anyone who hears you say it could use it. We also accept a typed passphrase on the dashboard, and wrong guesses get locked out for 30 seconds after 5 tries.
 - **One house, one door, one camera.** It's a demo setup, not a full security system. It doesn't call anyone or send alerts off the box.
 

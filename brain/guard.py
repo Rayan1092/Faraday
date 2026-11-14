@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from shared import Action, ActionType, Event, Mode, Source, make_action
 from shared.actions import MESSAGE_MAX_CHARS, SPEAK_MAX_CHARS
 
+from .tools import ALIASES
+
 MAX_ACTIONS = 4
 
 RawItem = Dict[str, Any]
@@ -131,6 +133,9 @@ def _check(item: Any, event: Event, mode: str,
     if not isinstance(item, dict):
         return None, "not an object"
     kind = item.get("type")
+    if isinstance(kind, str) and kind in ALIASES:  # arm_away / arm_night -> set_mode
+        kind, fixed = ALIASES[kind]
+        item = {"type": kind, "args": dict(fixed)}
     if not isinstance(kind, str) or kind not in ActionType.ALL:
         return None, f"unknown action {kind!r}"
     if kind not in allowed:

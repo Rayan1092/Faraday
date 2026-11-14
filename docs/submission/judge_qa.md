@@ -5,13 +5,19 @@ Short answers you can say in your own words. If you don't know something, say so
 ## The radio
 
 **How does the radio part work?**
-Cheap 433 MHz sensors send a short code when something happens. Each sensor has its own code. Our doorbell button sends one code and our motion sensor sends another. The Flipper Zero is plugged into the Mac by USB and runs its normal firmware. We put it in listen mode, it tells us every code it hears, and we match the code to the sensor.
+Cheap 433 MHz sensors send a short code when something happens. Each sensor has its own code. The Flipper Zero is plugged in by USB and runs its normal firmware. We keep it in listen mode, our driver reads every code it reports, and we match the code to the sensor. We match on the sensor's serial number and ignore the button bits, because our doorbell sometimes sent a slightly different code for the same button.
 
 **Why merge the motion packets?**
-The motion sensor sends about 17 copies of its code every time it triggers. We merge copies that arrive within a few seconds into one motion event, so one wave is one event.
+The motion sensor sends 17 copies of its code over about 2 seconds every time it triggers. We merge copies that arrive close together into one motion event, so one wave is one event. On the real hardware, every wave came through as exactly one event.
 
 **How do the lights turn on?**
-Cheap remote outlets listen for their own 433 MHz codes. We saved those codes on the Flipper, and it replays the right one. The Flipper can't listen and send at the same time, so we pause listening, send, then start listening again.
+Cheap remote outlets listen for their own 433 MHz codes. We saved those codes on the Flipper, and it replays the right one. The Flipper can't listen and send at the same time, so we pause listening, send, then start listening again. On the real hardware, listening was back about 1.2 seconds after each send. A motion event arrived 1.3 seconds after an outlet switched, so we don't miss much.
+
+**Does the radio work for real?**
+Yes, on the Flipper plugged into a Windows laptop: doorbell events, motion events, switching outlet 1, the LED colours and the alarm buzz. If the USB cable drops, it reconnects in about 8 seconds. We have 25 tests that replay real radio captures. **[TBD: the same on the Mac mini]**
+
+**Why is the doorbell sometimes slow to react?**
+Our cheap doorbell is flaky. It has to be held for a second or two, and late in testing even holds got through only about 1 time in 3. Raw Flipper listening with none of our code was just as bad, so it's the doorbell, not our code. We're swapping it for a new one. **[TBD: new doorbell results]**
 
 **Can someone fake your sensors?**
 Yes. These sensors send the same fixed code every time, so anyone with a radio could record it and replay it. That could fake a doorbell or set off the alarm. It can't disarm the house, because disarming needs the passphrase. A real product should use rolling-code sensors. We used fixed-code ones because they're cheap and easy to read for a weekend build.
@@ -32,6 +38,9 @@ In Away mode we assume whoever is talking is a visitor. They can leave a message
 
 ## Small models
 
+**How do you know it works, not just in one lucky demo?**
+We wrote a benchmark: `python -m brain.bench` runs every demo moment 10 times against the real model, plus reworded versions it never saw. We check what the model picked on its own, what Faraday finally did after our checks, and whether anything unsafe got through. We saved the before and after numbers in `docs/bench/`.
+
 **How do you keep a small model reliable?**
 A few things:
 - **Fewer choices.** Each event only gets the few actions that make sense for it, six at most. Doorbell and motion get none, because code handles them.
@@ -42,7 +51,11 @@ A few things:
 - **Code does the must-happen stuff.** The lights, photos and alarm lines never depend on the model at all.
 
 **Does it actually make mistakes?**
-Yes. In our early tests the 4B picked the right action on its own about 5 out of 7 times. It kept trying to switch to Home mode, and our checks dropped that every time. We expect the 9B to do better, but the code safety net stays either way. **[TBD: how the 9B does on the Mac mini]**
+Yes. We built a benchmark that runs every demo moment 10 times against the model.
+
+Before tuning, the 4B was right on its own 61% of the time. Its worst habit: when you said "I'm heading out" it tried to switch to Home mode, 10 times out of 10. Our checks dropped that every time.
+
+The fix was simple. Instead of an "arm" tool with a mode to fill in, it gets two buttons: "arm away" and "arm night". After that and some sharper descriptions, it was right on its own in 136 of 140 runs (97%). That includes sentences we never tuned on, like "I'm off to work, see you later". Code fixed the rest except one, and zero unsafe actions got through. **[TBD: how the 9B does on the Mac mini]**
 
 ## Bonsai and Argmax
 
@@ -54,7 +67,7 @@ Bonsai 2 runs locally in LM Studio. It does the parts that need understanding:
 - writing a one-line warning that mentions what the camera sees,
 - summarizing what happened while you were out.
 
-**[TBD: whether Bonsai also describes the camera photos. See Open Question 2]**
+It also describes the camera photo. We checked the 4B really looks at the image: given a test picture of a green triangle on black, it said exactly that. Asked the same thing with no image, it made something up. Big photos are slow, so we shrink them to 640 px first. **[TBD: real camera photos on the Mac mini]**
 
 **What does Argmax do?**
 Speech. It turns what you say into text, and turns Faraday's replies into audio, on the Mac itself. **[TBD: confirm both work on the Mac mini]**
@@ -65,7 +78,7 @@ The whole point is that your front door doesn't leave your house. And the hackat
 ## Speed
 
 **How fast is it?**
-The lights, photos and alarm happen right away, because they're plain code. Bonsai answers took about 4 to 14 seconds on the laptop we tested with the 4B. While Faraday waits on Bonsai for a visitor, it says "One moment, please", so there's no awkward silence. The alarm warning line is asked for in the background, so nothing waits for it. **[TBD: timings on the Mac mini with the 9B]**
+The lights, photos and alarm happen right away, because they're plain code. In the benchmark, a Bonsai answer took 2.5 seconds on average and 5.7 seconds at worst on the laptop with the 4B. Our very first tests, before tuning and with thinking still on, were much slower. While Faraday waits on Bonsai for a visitor, it says "One moment, please", so there's no awkward silence. The alarm warning line is asked for in the background, so nothing waits for it. **[TBD: timings on the Mac mini with the 9B]**
 
 **Why is it that slow?**
 It's a model running on a small computer. Even a tiny request took a couple of seconds on the test laptop. That's why anything urgent is plain code.
@@ -87,7 +100,7 @@ That's a real weakness. Someone could overhear it. You can also type it on the d
 We wrote everything in this repo: the pipeline, the safety checks, the modes and alarm, the rules, the log, the dashboard and the simulator. We used the Flipper's normal firmware, LM Studio, the Bonsai model and Argmax.
 
 **How did you test without hardware?**
-We built a simulator that sends the exact same events the hardware does. We have 151 automated tests that run without any hardware or AI. Then we tested against a real Bonsai model, and then on the real devices. **[TBD: real hardware results]**
+We built a simulator that sends the exact same events the hardware does. We have 187 automated tests for the software that run without any hardware or AI, plus 28 for the radio driver that replay real radio captures. Then we tested against a real Bonsai model, and then on the real devices. **[TBD: real hardware results]**
 
 **Why "Faraday"?**
 A Faraday cage keeps signals out. This keeps your data in.
