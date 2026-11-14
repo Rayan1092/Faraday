@@ -148,8 +148,18 @@ class PhotoEvents(Base):
         self.assertEqual((ev.data["description"], ev.source, ev.data["model"]), (NO_VISION, "camera", None))
         self.assertTrue(self.photo.exists())
 
-    def test_no_camera_no_event(self):
-        self.assertIsNone(PhotoCamera(SavedFileCamera(None), None).take(self.action()))
+    def test_no_camera_still_sends_event_so_visitor_gets_greeted(self):
+        from hardware.camera import NO_CAMERA
+
+        class Broken:
+            def snapshot(self):
+                raise RuntimeError("no such device")
+
+        for cam in (SavedFileCamera(None), Broken()):
+            ev = PhotoCamera(cam, None).take(self.action())
+            self.assertEqual(validate_event(ev.to_dict()), [])
+            self.assertEqual((ev.data["photo_path"], ev.data["description"], ev.source, ev.caused_by),
+                             ("", NO_CAMERA, "camera", "act_12345678"))
 
 
 @unittest.skipUnless(os.environ.get("FARADAY_LIVE_VISION"), "set FARADAY_LIVE_VISION=1 for live LM Studio")

@@ -5,7 +5,9 @@
 
 If vision fails or times out the photo is kept and the description is
 "Photo saved." (source "camera"), so the dashboard still shows it. If the
-camera itself fails there is no photo and take() returns None.
+camera itself fails, the event still goes out with an empty photo_path and
+"Camera unavailable." so the pipeline's follow-up (greeting a visitor after a
+doorbell photo) still happens.
 """
 from __future__ import annotations
 
@@ -23,6 +25,7 @@ from hardware.vision import Vision
 
 log = logging.getLogger("hardware.camera")
 NO_VISION = "Photo saved."
+NO_CAMERA = "Camera unavailable."
 WARMUP_FRAMES = 5          # first frames are dark while auto-exposure settles
 
 
@@ -91,9 +94,16 @@ class PhotoCamera:
 
     def take(self, action: Optional[Action] = None) -> Optional[Event]:
         t0 = time.monotonic()
-        path = self.camera.snapshot()
+        caused_by = action.id if action is not None else None
+        try:
+            path = self.camera.snapshot()
+        except Exception as e:          # driver errors: treat like no frame
+            log.error("snapshot failed: %r", e)
+            path = None
         if path is None:
-            return None
+            return make_event(EventType.PHOTO_DESCRIBED,
+                              PhotoDescribedData(photo_path="", description=NO_CAMERA),
+                              Source.CAMERA, caused_by=caused_by)
         text = self.vision.describe(path) if self.vision is not None else None
         log.info("photo %s in %.1fs: %s", path.name, time.monotonic() - t0, text or NO_VISION)
         data = PhotoDescribedData(photo_path=relative(path), description=text or NO_VISION,
