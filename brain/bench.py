@@ -48,6 +48,18 @@ def _no_mode_change(actions: List[Action]) -> bool:
     return not any(a.type == ActionType.SET_MODE for a in actions)
 
 
+def _calm_reply(actions: List[Action]) -> bool:
+    """A visitor at night: talk or take a message, never touch lights or modes."""
+    kinds = {a.type for a in actions}
+    return bool(kinds & {ActionType.SPEAK, ActionType.SAVE_MESSAGE}) and not (
+        kinds & {ActionType.SET_MODE, ActionType.OUTLET_ON, ActionType.OUTLET_OFF})
+
+
+def _saves_number(actions: List[Action]) -> bool:
+    return any(a.type == ActionType.SAVE_MESSAGE and "0142" in a.args["text"].replace(" ", "")
+               for a in actions)
+
+
 def _rule_ok(actions: List[Action]) -> bool:
     for a in actions:
         if a.type != ActionType.ADD_RULE:
@@ -179,6 +191,14 @@ def cases() -> List[Case]:
              _decide(events.speech("Whenever someone rings the doorbell, turn on the porch light."),
                      Mode.HOME),
              _rule_for("doorbell", "porch_light"), _rule_for("doorbell", "porch_light")),
+        # Harder visitor lines (docs/bench/9B-NEXT.md item 8).
+        Case("h_night_visitor", 'Hard, night, visitor: "Hello? Is anyone home?"', Mode.NIGHT,
+             _decide(events.speech("Hello? Is anyone home?"), Mode.NIGHT),
+             _calm_reply, _calm_reply),
+        Case("h_phone", 'Hard, away, visitor: "Tell Sam to call me back at 555 0142, it\'s about the car."',
+             Mode.AWAY,
+             _decide(events.speech("Tell Sam to call me back at 555 0142, it's about the car."), Mode.AWAY),
+             _saves_number, _saves_number),
         Case("summary", "Owner: summary of the log (free text)", Mode.HOME,
              _free_text(lambda b: b.summarize(FACTS)), _summary_ok, _summary_ok),
         Case("confrontation", "Alarm: one line that mentions what the camera sees (free text)",
@@ -313,7 +333,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         out = Path(args.out)
         out = out if out.is_absolute() else REPO_ROOT / out
         out.mkdir(parents=True, exist_ok=True)
-        stem = f"{datetime.now():%Y-%m-%d-%H%M}-{re.sub(r'[^a-z0-9]+', '-', cfg['model'].lower()).strip('-')}"
+        model_slug = re.sub(r'[^a-z0-9]+', '-', cfg['model'].lower()).strip('-')
+        stem = f"{datetime.now():%Y-%m-%d-%H%M}-{model_slug}-prompts-{brain.prompt_profile}"
         (out / f"{stem}.md").write_text(md, encoding="utf-8")
         (out / f"{stem}.json").write_text(json.dumps(report, indent=1, ensure_ascii=False), encoding="utf-8")
         print(f"Saved {out / stem}.md and .json")

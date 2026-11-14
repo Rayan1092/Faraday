@@ -36,7 +36,7 @@ Then the software actions run: `set_mode` goes back through `modes/`, `add_rule`
 | `settings.py` | Loads settings and picks the `llm.profile` |
 | `prompts.py` | Prompt profiles. `small` is for 2B/4B and tuned with the bench. `9b` is for the Mac mini. Picked from the model id, or `llm.prompt_profile` |
 | `vision.py` | `describe_photo(path, caused_by, describer)` gives a `photo_described` event (PLAN.md seam 4). It tries Bonsai vision, and if that fails it still returns a valid event saying "No description available" |
-| `bench.py` | `python -m brain.bench [--profile mac] [--prompts 9b]`: every demo moment 10 times against Bonsai. Writes `docs/bench/` |
+| `bench.py` | `python -m brain.bench [--profile mac] [--prompts 9b]`: every demo moment 10 times against Bonsai, plus reworded variants and two hard visitor lines. Writes `docs/bench/<date>-<model>-prompts-<profile>.md` |
 
 Answered in plain code without calling Bonsai: `mode_changed`, disarm requests ("disarm", "turn off the alarm", ...) → "I can't disarm. Only the owner can do that." (it never mentions the passphrase), any speech that contains the passphrase, `alert_changed`, doorbell and all motion (the baseline handles those), and "what happened while I was out?" at Home (straight to `summarize_log`, saving one model round trip).
 
@@ -45,6 +45,8 @@ Code fix-ups on top of Bonsai's answer, all recorded in `Decision.fixups`, so th
 - The owner clearly said "heading out" or "goodnight" and Bonsai armed the other mode: code goes with the words.
 - It armed the house, saved a message or stored a rule without saying anything: code adds a spoken confirmation.
 - A doorbell greeting with no offer to take a message: code adds the offer.
+- The visitor replied to "Would you like to leave a message?" and Bonsai answered with something else: code saves the reply as the message.
+- The spoken summary left out the visitor's message: code adds it (`summary.ensure_messages`).
 
 Free-text Bonsai calls (no tools): `Brain.summarize(facts)` and `Brain.confront(description)`. Each returns one clean line, or `None` when there's no model or the call fails.
 

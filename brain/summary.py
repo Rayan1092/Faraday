@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional
@@ -138,6 +140,31 @@ def spoken_list(h: Happened) -> str:
     if h.messages:
         text += f" Latest message: {h.messages[-1]}"
     return _short(text, 240)
+
+
+# Words too common to prove the message was mentioned ("door" is in most summaries).
+_STOP = {"the", "and", "for", "with", "that", "this", "left", "from", "have", "about", "your",
+         "you", "are", "was", "his", "her", "its", "but", "not", "can", "will", "just",
+         "door", "front", "side", "back", "house", "home", "here", "there", "outside", "please"}
+
+
+def ensure_messages(text: str, h: Happened) -> str:
+    """Bonsai's summary sometimes leaves out the visitor's message (1/5 in the bench),
+    and that's the one thing the owner must hear. If the latest message isn't
+    mentioned, plain code adds it, still within 240 characters."""
+    if not h.messages:
+        return text
+    latest = h.messages[-1]
+    lowered = text.lower()
+    keywords = [w for w in re.findall(r"[a-z0-9']+", latest.lower()) if len(w) >= 3 and w not in _STOP]
+    if "message" in lowered or any(w in lowered for w in keywords[:4]):
+        return text
+    extra = f" Visitor message: {latest}"
+    room = 240 - len(text)
+    if room < 30:  # make room by shortening Bonsai's part
+        text = _short(text, 240 - min(len(extra), 120))
+        room = 240 - len(text)
+    return text + _short(extra, room)
 
 
 def _times(n: int) -> str:

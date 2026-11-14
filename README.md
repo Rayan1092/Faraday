@@ -6,7 +6,7 @@ It answers the door, takes messages, turns on lights, learns simple rules when y
 
 We built it for the Cornell Local AI Hackathon.
 
-> Status: the software runs end to end in our simulator. There are 215 passing tests: 187 for the software and 28 for the radio driver, which replay real radio captures. The Flipper radio driver works on real hardware (on a Windows laptop). The full run on the Mac mini is next. Anything marked **[TBD]** hasn't been proven on real hardware yet.
+> Status: the software runs end to end in our simulator. There are 269 passing tests, and none of them need hardware: 199 for the core software and 70 for the hardware drivers and the app wiring, which replay real radio captures and use fake devices. The Flipper radio driver works on real hardware (on a Windows laptop). The full run on the Mac mini is next. Anything marked **[TBD]** hasn't been proven on real hardware yet.
 
 ## Why offline
 
@@ -100,7 +100,12 @@ python -m sim --dashboard
 
 On Windows use `py` instead of `python`.
 
-**On the Mac mini with the real hardware.** **[TBD: the start command once integration/ is merged]**. Plug in the Flipper (close any app on it first), the camera, the mic and the speaker. Start LM Studio with the 9B model and raise its Parallel setting above 1, so a background call doesn't wait in line. Start Argmax. Then turn the Wi-Fi off.
+**With the real hardware.** Plug in the Flipper (close any app on it first), the camera, the mic and the speaker.
+- **On the Mac mini:** start LM Studio with the 9B model, and raise its Parallel setting above 1 so a background call doesn't wait in line. Start Argmax (`argmax-cli serve`). Then run `integration/start_mac.sh`. It checks that LM Studio and Argmax answer, warns you if the Wi-Fi is still on, and starts Faraday with the dashboard.
+- **On a Windows laptop:** `py -m integration`.
+- **No hardware at all:** `py -m integration --fake --offline` gives you a fake Flipper with no LM Studio.
+
+Then turn the Wi-Fi off. **[TBD: full run on the Mac mini]**
 
 **Tests:** `python -m unittest discover`
 

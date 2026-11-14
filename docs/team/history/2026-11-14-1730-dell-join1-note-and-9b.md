@@ -1,0 +1,11 @@
+# Join 1 checklist for NV, `log.check`, 9B prompt work (Dell)
+- Laptop / branch / PR: Dell / `dell/notes-9b` / PR "Join 1 checklist for NV, log.check, 9B prompt comparison"
+- What changed:
+  - `docs/team/history/2026-11-14-1715-dell-join1-checklist-for-nv.md`: the Join 1 real-hardware checklist, rewritten for NV to run alone (Dell doesn't run hardware tests).
+  - `python -m log.check <log>` (new, `log/check.py`): counts per type and source, likely duplicates, passphrase leak check, last entries. For Join 1 and stage checks.
+  - Bench: two harder visitor cases (night "is anyone home?", visitor leaving a phone number). The output filename now includes the prompt profile.
+  - 9B prompt profile: compared with the small profile on the 4B (results below), plus notes in `docs/bench/9B-NEXT.md`.
+  - README and setup checklist: real start commands (`integration/start_mac.sh`, `py -m integration`) now that NV's PRs are merged. Test counts updated (269, none need hardware).
+- How it was tested: `python -m unittest discover` passes 269 (1 skipped, live vision) with every `requirements.txt` package installed.
+- 9B profile results on the 4B: 80/80 for `9b` against 76/80 for `small` (5 runs per case, 16 cases, 0 unsafe for both). The `9b` confrontation prompt now uses the small wording, after it first scored 3/5. New code safety net: the spoken summary always mentions the visitor's message (`summary.ensure_messages`). Defaults are unchanged. Details are in `docs/bench/README.md`.
+- What's left: measure both profiles on the Mac's 9B (`python -m brain.bench --profile mac` and `--prompts small`). Join 1 itself (NV).
