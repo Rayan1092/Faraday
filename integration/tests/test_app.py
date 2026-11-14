@@ -90,6 +90,9 @@ class Flow(unittest.TestCase):
         self.assertTrue(wait_until(lambda: "outlet2_on" in self.fl.device.tx))
         self.assertTrue(wait_until(lambda: self.fl.device.rgb == RED and self.fl.device.vibro_count >= 3))
         self.assertTrue(self.fl.device.rx)        # listening again after all that
+        # the baseline asked for porch light twice; it was only transmitted once
+        self.assertEqual(self.fl.device.tx.count("outlet1_on"), 1)
+        self.assertTrue(any("skip repeat outlet_on porch_light" in s for s in self.said))
 
         self.assertIsNotNone(self.app.pipeline.owner_passphrase(
             self.settings["security"]["passphrase"]))
