@@ -185,6 +185,41 @@ class TTS(Base):
         else:
             self.assertEqual(type(tts).__name__, "Pyttsx3TTS" if _has_pyttsx3() else "PrintTTS")
 
+    def test_play_mode_waits_with_mic_muted_and_no_wav(self):
+        """Mac: argmax-cli ... --play streams to the speaker itself (no {out_wav})."""
+        gate, played = MicGate(), []
+        tts = ArgmaxTTS([sys.executable, "-c", "import time; time.sleep(0.8)",
+                         "--text", "{text}", "--speaker", "aiden", "--play"],
+                        gate=gate, player=lambda p, d: played.append(p))
+        self.assertTrue(tts.plays_itself)
+        self.assertEqual(tts.build("Hi there, you", Path("x.wav"))[3:5], ["--text", "Hi there, you"])
+        result = []
+        t = threading.Thread(target=lambda: result.append(tts.say("Away mode on.")))
+        t.start()
+        time.sleep(0.4)
+        self.assertTrue(gate.muted)                 # still playing: mic muted
+        t.join(10)
+        self.assertEqual(result, [True])
+        self.assertFalse(gate.muted)                # finished: mic back
+        self.assertEqual(played, [])                # nothing to play: --play did it
+
+    def test_long_line_gets_a_longer_timeout(self):
+        tts = ArgmaxTTS(["argmax-cli", "--text", "{text}", "--play"], timeout_s=30)
+        self.assertEqual(tts._timeout("short"), 30)
+        self.assertGreater(tts._timeout("word " * 60), 40)
+
+    def test_example_mac_settings(self):
+        import json
+        from hardware.settings import CONFIG_DIR
+        s = json.loads((CONFIG_DIR / "settings.example.json").read_text(encoding="utf-8"))
+        tts_cfg, stt_cfg = s["tts"]["mac"], s["stt"]["mac"]
+        tts = ArgmaxTTS(tts_cfg["command"])
+        self.assertTrue(tts.plays_itself)
+        self.assertTrue(tts_cfg["command"][0].endswith("argmax-cli"))
+        self.assertIn("--play", tts_cfg["command"])
+        self.assertEqual((stt_cfg["url"], stt_cfg["model"]),
+                         ("http://127.0.0.1:50060/v1/audio/transcriptions", "large-v3-v20240930_626MB"))
+
     @unittest.skipUnless(_has_pyttsx3() and sys.platform.startswith("win"), "pyttsx3 on Windows")
     def test_pyttsx3_renders_offline_to_file(self):
         from hardware.speech import Pyttsx3TTS

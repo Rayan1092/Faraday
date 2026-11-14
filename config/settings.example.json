@@ -71,7 +71,8 @@
   "stt": {
     "mac": {
       "kind": "argmax",
-      "url": "http://localhost:50060/v1/audio/transcriptions",
+      "url": "http://127.0.0.1:50060/v1/audio/transcriptions",
+      "model": "large-v3-v20240930_626MB",
       "language": "en"
     },
     "windows": {
@@ -82,7 +83,9 @@
   "tts": {
     "mac": {
       "kind": "argmax",
-      "command": ["argmax-cli", "tts", "--text", "{text}", "--output-path", "{out_wav}"]
+      "_note": "Tested on the Mac mini: starts almost instantly, --play streams straight to the speaker (no wav). STT server: .build/release/argmax-cli serve",
+      "command": ["/Users/captain/clueless/vendor/argmax-oss-swift/.build/release/argmax-cli",
+                  "tts", "--text", "{text}", "--speaker", "aiden", "--play"]
     },
     "windows": {
       "kind": "standin"
