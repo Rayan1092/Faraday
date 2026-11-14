@@ -1,0 +1,34 @@
+# Join 1 wiring, camera, speech, Mac prep (NV, owner away, no hardware)
+
+- **Laptop / branches / PRs:** NV.
+  - PR #5 merged (decisions applied, learn mode added).
+  - Stacked PRs, merge in this order: #6 `nv/integration` → #7 `nv/camera` → #8 `nv/speech` → #9 `nv/mac`.
+- **What changed:**
+  - `py -m integration` wires the Flipper (or `--fake`), an event queue, Dell's `Pipeline`, the log and the dashboard. Outlets and LED go back to the Flipper. Speech and camera run on worker threads.
+  - `hardware/flipper/fake.py` fakes only the serial port, so the real driver runs in tests.
+  - Camera: OpenCV snapshot → `captures/photos/` → Bonsai vision → `photo_described`. If vision fails: "Photo saved.".
+  - Speech: push-to-talk (`r`) → wav → Argmax STT → `speech_heard`. TTS is argmax-cli on the Mac and pyttsx3 on Windows. The mic is muted while Faraday talks.
+  - `integration/start_mac.sh` checks LM Studio and Argmax, then starts the app.
+  - Learn mode: `python -m hardware.flipper.manual_test --learn`.
+- **How it was tested:** no hardware, as agreed. The full suite passes (215 at the speech step, plus 5 start_mac tests).
+  - Whole-flow tests on the fake Flipper.
+  - Saved image and wav files, with fake LM Studio and fake Argmax servers.
+  - Live LM Studio vision on the 4B: described the test image correctly in 3.3 s.
+  - The full demo script ran through `py -m integration --fake` with live Bonsai.
+- **What works (fake/live software):**
+  - All 8 demo steps run through the integration layer, with no crashes or deadlocks.
+  - The alarm confrontation came back in 0.7 s and was spoken.
+  - The rule by voice was stored and fired on the next motion.
+- **What's broken or faked:**
+  - Nothing here has run on real hardware.
+  - Windows has no STT (standin), so use `t <text>`.
+  - The argmax TTS command is still a guess (PLAN Q3).
+  - The 9B id is still a placeholder (Q1).
+- **For Dell:**
+  - Demo step 3 on the 4B: "Package for Sam, I left it by the side door." got a greeting from Bonsai, not `save_message`. The offline fallback does save it.
+  - Open Question 3 in QUESTIONS.md: a push-to-talk button on the dashboard?
+- **Local:** `config/settings.json` was created on the NV laptop with `llm.profile: nv_backup` (gitignored). Change the passphrase there.
+- **Open questions:** `docs/team/history/QUESTIONS.md` (12 items, each with the default used).
+- **Fixed after the first pass (16:00):**
+  - **Windows TTS:** the in-process pyttsx3 engine hung on the second line from a worker thread, which would silence Faraday. Each line now runs in its own pyttsx3 process (~0.4 s, killed on timeout).
+  - **Camera failure:** a failed snapshot now still sends `photo_described` ("Camera unavailable.", empty `photo_path`), so the doorbell greeting still happens.
