@@ -163,16 +163,20 @@ def _make_handler(app: Dashboard):
 
         def do_POST(self) -> None:
             path = urlparse(self.path).path
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > MAX_BODY:
+                self.close_connection = True
+                return self._json(413, {"error": "too large"})
+            # Read the body before any reply: answering early with unread data makes
+            # Windows abort the connection on the client side.
+            raw = self.rfile.read(length) if length else b""
             handler = posts.get(path)
             if handler is None:
                 return self._json(404, {"error": "not found"})
             if self.headers.get("X-Faraday") != "1":
                 return self._json(403, {"error": "missing X-Faraday header"})
-            length = int(self.headers.get("Content-Length") or 0)
-            if length > MAX_BODY:
-                return self._json(413, {"error": "too large"})
             try:
-                body = json.loads(self.rfile.read(length) or b"{}")
+                body = json.loads(raw or b"{}")
                 if not isinstance(body, dict):
                     raise ValueError
             except ValueError:

@@ -21,7 +21,7 @@ decision.elapsed_s  # Bonsai call time (also printed)
 5. "One moment, please." is said for visitors.
 6. Bonsai's actions are added on top, minus repeats.
 
-Then the software actions run: `set_mode` goes back through `modes/`, `add_rule` is stored in `rules/`, and `summarize_log` is spoken. At alarm in Away, a background thread asks Bonsai for one confrontation line once the photo description arrives. It's dropped if the owner disarmed meanwhile. `on_action` / `on_event` fire as soon as each thing exists, and one lock serializes the app, the dashboard and background threads. See PLAN.md Q21/Q22.
+Then the software actions run: `set_mode` goes back through `modes/`, `add_rule` is stored in `rules/`, and `summarize_log` is spoken. At an alarm (Away or Night), a background thread asks Bonsai for one confrontation line once the photo description arrives. It's dropped if the owner disarmed meanwhile. `on_action` / `on_event` fire as soon as each thing exists, and one lock serializes the app, the dashboard and background threads. See PLAN.md Q21/Q22.
 
 | File | What it does |
 |---|---|

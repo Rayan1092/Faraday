@@ -32,11 +32,12 @@ Lights, photos and warnings are guaranteed by plain code in `modes/` and `rules/
 |---|---|---|---|
 | `doorbell` | announce only ("Someone is at the door.") | `take_photo` → Bonsai greets and offers to take a message → `save_message` | `outlet_on porch_light`, `take_photo`, quiet alert (no speech; the dashboard shows "Doorbell at night") |
 | `motion`, alert `warning` | nothing | `outlet_on porch_light`, `take_photo`, "You're on camera. The owner has been alerted." | `outlet_on porch_light`, `take_photo` |
-| `motion`, alert `alarm` | nothing | also `outlet_on living_room_lamp`, "Alarm. You are being recorded. Leave now.", then a confrontation | also `outlet_on living_room_lamp` |
+| `motion`, alert `alarm` | nothing | also `outlet_on living_room_lamp`, "Alarm. You are being recorded. Leave now.", then a confrontation | also `outlet_on living_room_lamp`, then a confrontation |
 
 Notes:
 - **Alert levels** (in `modes/`): the first motion in Away/Night sets `warning`, and motion again within `alerts.alarm_window_s` sets `alarm`. Only the passphrase returns it to `normal`. Motion at Home never raises an alert.
-- **Confrontation, alarm in Away only:** plain code speaks the alarm line first. Once the photo description arrives, Bonsai is asked in a background thread for ONE short line that mentions what it sees, so nothing waits for it. The line is dropped if it comes back after the owner disarmed. If Bonsai fails, nothing more is said.
+- **Confrontation, at alarm in Away and Night** (Night added 2026-11-14): in Away, plain code speaks the alarm line first. Once the photo description arrives, Bonsai is asked in a background thread for ONE short line that mentions what it sees, so nothing waits for it. The line is dropped if it comes back after the owner disarmed. If Bonsai fails, nothing more is said. Night has no plain-code alarm line, so the confrontation is the only thing spoken at a Night alarm.
+- **LM Studio on the Mac:** raise the model's Parallel setting (concurrent requests) above 1 when loading the 9B. Otherwise a background confrontation queues behind any other Bonsai call: on the NV laptop it waited 15 s behind a summary.
 - **Reply after `photo_described`:** traced through `caused_by` (`photo_described` → `take_photo` → event). Only a doorbell photo in Away gets a greeting. If Bonsai's reply never mentions a message, code adds "Would you like to leave a message?". Motion photos and anything at Night get no reply.
 - **Never waits for Bonsai:** motion and the doorbell are handled entirely in plain code.
 - **"One moment, please.":** said by plain code while Bonsai thinks about a visitor (speech while armed, or the photo after a doorbell).
