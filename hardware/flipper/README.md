@@ -28,11 +28,11 @@ fl.stop()
 
 ```
 python -m hardware.flipper.manual_test          # live events; 1/2/3 outlets, c colours, h/a/n modes, w/x/r alerts, v buzz, q quit
-python -m hardware.flipper.capture NAME          # record raw rx lines to samples/NAME.log
+python -m hardware.flipper.capture NAME          # record raw rx lines to samples/NAME.txt
 python -m unittest hardware.flipper.test_flipper # parser, bursts, driver logic on the real samples
 ```
 
-`samples/` holds real captures from this hardware: `doorbell_hold.log` has 2 holds, `motion_wave.log` has 2 waves of 17 packets each, and `help.log` is the CLI command list.
+`samples/` holds real captures from this hardware: `doorbell_hold.txt` has 2 holds, `motion_wave.txt` has 2 waves of 17 packets each, and `help.txt` is the CLI command list.
 
 ## Known limits
 

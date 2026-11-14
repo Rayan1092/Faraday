@@ -1,6 +1,6 @@
 """Parse `subghz rx` CLI output into packets.
 
-Real output, captured on stock firmware (see samples/doorbell_hold.log):
+Real output, captured on stock firmware (see samples/doorbell_hold.txt):
 
     Princeton 24bit
     Key:0x00DEC608

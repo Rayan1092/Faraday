@@ -49,14 +49,14 @@ def settings():
 
 class ParserOnRealSamples(unittest.TestCase):
     def test_doorbell_holds(self):
-        packets = parse("doorbell_hold.log")
+        packets = parse("doorbell_hold.txt")
         self.assertEqual(len(packets), 2)            # two ~1 s holds, quick tap not decoded
         for pk in packets:
             self.assertEqual((pk.protocol, pk.bits, pk.key, pk.te_us),
                              ("Princeton", 24, DOORBELL, 203))
 
     def test_motion_waves(self):
-        packets = parse("motion_wave.log")
+        packets = parse("motion_wave.txt")
         self.assertGreaterEqual(len(packets), 30)
         self.assertTrue(all(pk.key == MOTION and pk.protocol == "Princeton" and pk.bits == 24
                             for pk in packets))
@@ -84,12 +84,12 @@ class ParserOnRealSamples(unittest.TestCase):
 
 class BurstsOnRealSamples(unittest.TestCase):
     def test_each_doorbell_hold_is_one_burst(self):
-        bursts = merge(parse("doorbell_hold.log"))
+        bursts = merge(parse("doorbell_hold.txt"))
         self.assertEqual(len(bursts), 2)
         self.assertTrue(all(b.key == DOORBELL and b.packets == 1 for b in bursts))
 
     def test_each_wave_is_one_burst(self):
-        bursts = merge(parse("motion_wave.log"))
+        bursts = merge(parse("motion_wave.txt"))
         self.assertEqual(len(bursts), 2)
         for b in bursts:
             self.assertEqual(b.key, MOTION)
@@ -137,7 +137,7 @@ class DriverLogic(unittest.TestCase):
         return events
 
     def test_doorbell_sample_gives_two_valid_events(self):
-        events = self.replay("doorbell_hold.log")
+        events = self.replay("doorbell_hold.txt")
         self.assertEqual([e.type for e in events], ["doorbell", "doorbell"])
         for e in events:
             self.assertEqual(validate_event(e.to_dict()), [])
@@ -146,7 +146,7 @@ class DriverLogic(unittest.TestCase):
                                       "packets": 1, "duration_ms": 0})
 
     def test_motion_sample_gives_two_valid_events(self):
-        events = self.replay("motion_wave.log")
+        events = self.replay("motion_wave.txt")
         self.assertEqual([e.type for e in events], ["motion", "motion"])
         for e in events:
             self.assertEqual(validate_event(e.to_dict()), [])

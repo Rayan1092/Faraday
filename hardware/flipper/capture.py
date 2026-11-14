@@ -1,4 +1,4 @@
-"""Record raw Flipper output to hardware/flipper/samples/<name>.log.
+"""Record raw Flipper output to hardware/flipper/samples/<name>.txt (not .log: the repo gitignores *.log).
 
 Each line is "<seconds since start>\\t<raw line>", so the parser tests can
 replay real timing. Ctrl+C here stops recording (and stops rx on the Flipper).
@@ -21,7 +21,7 @@ SAMPLES = Path(__file__).resolve().parent / "samples"
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("name", help="sample file name, without .log")
+    ap.add_argument("name", help="sample file name, without .txt")
     ap.add_argument("--seconds", type=float, default=20)
     ap.add_argument("--cmd", default=None, help="CLI command (default: settings rx_command)")
     args = ap.parse_args()
@@ -38,7 +38,7 @@ def main() -> int:
         return 1
 
     SAMPLES.mkdir(exist_ok=True)
-    out = SAMPLES / f"{args.name}.log"
+    out = SAMPLES / f"{args.name}.txt"
     fl.write_line(cmd)
     t0 = time.monotonic()
     print(f"running '{cmd}' for {args.seconds:.0f}s -> {out}")
