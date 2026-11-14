@@ -10,6 +10,7 @@ Each has the default I used, so work continued. Answer inline and I'll adjust.
 3. **Push-to-talk trigger.**
    - Default: in the `py -m integration` console, type `r` and Enter to start recording, then Enter to stop. Recording also stops by itself after `audio.max_record_s`.
    - A big dashboard button would be nicer on stage, but `dashboard/` is Dell's. Should we ask Dell to add one that calls an integration hook?
+   - **Update 16:10:** Dell's PR #10 adds a Talk button when `board.talk_hook` is set. That's wired now (`app.board.talk_hook = voice.toggle`), so the button shows once #10 is merged.
 4. **`sensors.motion.merge_window_s` (5) is unused.**
    - The driver merges bursts with `flipper.burst_gap_s` (1.5).
    - Default: left in the file, since removing it wasn't in the PR #5 decisions. Remove it?
