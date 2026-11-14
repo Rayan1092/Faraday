@@ -6,7 +6,7 @@ the whitelist the guard rails enforce afterwards.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from shared import ActionType, EventType, Mode, Outlet
 
@@ -35,19 +35,20 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "outlet_off", "Turn a light off.",
         {"outlet": {"type": "string", "enum": _OUTLETS}}, ["outlet"]),
     ActionType.SPEAK: _tool(
-        "speak", "Say one short sentence out loud.",
+        "speak", "Say one short sentence out loud. Can be used with other tools.",
         {"text": {"type": "string"}}, ["text"]),
     ActionType.TAKE_PHOTO: _tool(
         "take_photo", "Photograph the front door.",
         {"reason": {"type": "string"}}, []),
     ActionType.SAVE_MESSAGE: _tool(
-        "save_message", "A visitor says something for the owner: save their words.",
+        "save_message", "Save what a visitor wants the owner to know: deliveries, names, "
+        "requests. Use it whenever a visitor gives any information.",
         {"text": {"type": "string"}, "sender": {"type": "string"}}, ["text"]),
     ActionType.SUMMARIZE_LOG: _tool(
         "summarize_log", "The owner asks what happened: summarize the log.",
         {"minutes": {"type": "integer"}}, []),
     ActionType.ADD_RULE: _tool(
-        "add_rule", "The owner says 'from now on' or 'whenever': store the rule.",
+        "add_rule", "Only for sentences with 'when', 'whenever' or 'from now on': store the rule.",
         {"when": {"type": "object", "properties": {
             "event": {"type": "string", "enum": _RULE_EVENTS},
             "modes": {"type": "array", "items": {"type": "string", "enum": sorted(Mode.ALL)}}},
@@ -93,5 +94,22 @@ def allowed_actions(event_type: str, mode: str) -> List[str]:
     return names
 
 
+# set_mode is shown to Bonsai as two tools with no arguments. With a "mode"
+# argument the 4B kept writing "home" (0/10 for "I'm heading out" in the
+# benchmark): with these there's nothing to type. guard.py maps them back.
+ALIASES: Dict[str, Tuple[str, Dict[str, Any]]] = {
+    "arm_away": (ActionType.SET_MODE, {"mode": Mode.AWAY}),
+    "arm_night": (ActionType.SET_MODE, {"mode": Mode.NIGHT}),
+}
+ARM_TOOLS = [
+    _tool("arm_away", "Owner is leaving: 'heading out', 'leaving', 'going out', 'bye'.", {}, []),
+    _tool("arm_night", "Owner is going to sleep: 'goodnight', 'going to bed'. Not for leaving.",
+          {}, []),
+]
+
+
 def tools_for(event_type: str, mode: str) -> List[Dict[str, Any]]:
-    return [TOOLS[name] for name in allowed_actions(event_type, mode)]
+    tools: List[Dict[str, Any]] = []
+    for name in allowed_actions(event_type, mode):
+        tools += ARM_TOOLS if name == ActionType.SET_MODE else [TOOLS[name]]
+    return tools

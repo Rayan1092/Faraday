@@ -101,20 +101,35 @@ body[data-status="red"] .mode { animation: pulse 1s ease-in-out infinite; }
 .btn.away  { border-color: var(--blue); }
 .btn.night { border-color: var(--purple); }
 .btn.home  { border-color: var(--green); }
+.btn.talk  { border-color: var(--text); }
+.btn[hidden] { display: none; }
 .btn.away.active  { background: var(--blue); color: #fff; }
 .btn.night.active { background: var(--purple); color: #fff; }
 .btn.home.active  { background: var(--green); color: #000; }
 .btn.small { font-size: 1rem; padding: 0.5rem 1rem; }
 
-.notice {
+.badge.offline.online { background: #3a0d0d; color: var(--red); border-color: var(--red); animation: pulse 1s ease-in-out infinite; }
+
+/* One big message for the audience: alarm, passphrase moment, AI refusal, warnings. */
+.banner {
+  display: flex;
+  align-items: baseline;
+  gap: 1.2rem;
+  padding: 0.4rem 1.2rem;
+  border-radius: 0.6rem;
   background: var(--yellow);
   color: #000;
-  font-weight: 900;
-  font-size: 1.4rem;
-  padding: 0.3rem 1rem;
-  border-radius: 0.5rem;
 }
-.notice.alarm { background: var(--red); color: #fff; }
+.banner-title { font-size: 2.2rem; font-weight: 900; letter-spacing: 0.03em; white-space: nowrap; }
+.banner-text { font-size: 1.35rem; font-weight: 700; }
+.banner.alarm { background: var(--red); color: #fff; animation: pulse 1s ease-in-out infinite; }
+.banner.ok { background: var(--green); color: #000; }
+.banner.safety { background: var(--blue); color: #fff; }
+.banner.warn { background: var(--yellow); color: #000; }
+.banner.bell { background: #f97316; color: #000; }
+.backup-label { margin-left: 0.8rem; white-space: nowrap; }
+.banner[hidden] { display: none; }
+.feed-list li.safety .text { color: #8cb8ff; font-weight: 800; }
 
 /* ---- panels ----------------------------------------------------------- */
 
@@ -266,7 +281,7 @@ body[data-status="red"] .mode { animation: pulse 1s ease-in-out infinite; }
   align-items: center;
   justify-content: center;
 }
-.overlay[hidden], .notice[hidden], .summary[hidden] { display: none; }
+.overlay[hidden], .summary[hidden] { display: none; }
 .dialog {
   background: var(--panel);
   border: 3px solid var(--green);

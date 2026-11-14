@@ -113,6 +113,10 @@ Add new ones at the bottom. When one is settled, write the answer next to it and
 
 1. **Bonsai 9B model id on the Mac.** `bonsai-2-9b` in the settings example is a placeholder. Confirm with `curl http://localhost:1234/v1/models` on the Mac mini.
 2. **Vision.** Which Bonsai 2 build accepts images in LM Studio (2B/4B/9B, which quant)? The rules allow no other model, so if none does, we need a plan B (for example, describe only from sensor context).
+    **Partly answered 2026-11-14 (Dell):** `ternary-bonsai-2-4b@q2_0` in LM Studio on the NV laptop does accept images.
+    - It described a generated green triangle correctly. Asked the same question with no image, it made something up.
+    - Speed: a 256 px image took about 3.5 s, a fresh 1280×720 about 15 s, and 1920×1080 timed out at 30 s. So `brain/vision.py` shrinks photos to 640 px when OpenCV is installed.
+    - Still to check: real camera photos, and the 9B on the Mac.
 3. **Argmax TTS command.** The exact argmax-cli TTS subcommand and flags are not confirmed. The settings example has a guess. Does it write a WAV that we play, or does it play directly?
 4. **Argmax STT server.** The exact `argmax-cli serve` start command and model on the Mac, plus warm-up time before the first request.
 5. ~~**Night LED colour.**~~ **Closed 2026-11-14:** purple. Updated in CLAUDE.md and `settings.example.json`.
