@@ -10,6 +10,7 @@ Each has the default I used, so work continued. Answer inline and I'll adjust.
 3. **Push-to-talk trigger.**
    - Default: in the `py -m integration` console, type `r` and Enter to start recording, then Enter to stop. Recording also stops by itself after `audio.max_record_s`.
    - A big dashboard button would be nicer on stage, but `dashboard/` is Dell's. Should we ask Dell to add one that calls an integration hook?
+   - **Update 16:10:** Dell's PR #10 adds a Talk button when `board.talk_hook` is set. That's wired now (`app.board.talk_hook = voice.toggle`), so the button shows once #10 is merged.
 4. **`sensors.motion.merge_window_s` (5) is unused.**
    - The driver merges bursts with `flipper.burst_gap_s` (1.5).
    - Default: left in the file, since removing it wasn't in the PR #5 decisions. Remove it?
@@ -31,3 +32,8 @@ Each has the default I used, so work continued. Answer inline and I'll adjust.
    - Added `pyttsx3; sys_platform == "win32"` to `requirements.txt`.
 10. **Mic mute while speaking.**
     - Default: the mic drops audio while TTS talks, plus 0.4 s after. A recording can't start while Faraday is talking.
+11. **Mac profile.**
+    - Default: the `mac` profile in `settings.example.json` stays `http://localhost:1234` with the placeholder `bonsai-2-9b` (PLAN Open Question 1).
+    - `start_mac.sh` fails with the exact fix if LM Studio lists a different id. Put the real id in `config/settings.json` on the Mac.
+12. **start_mac.sh location.**
+    - Default: `integration/start_mac.sh` (inside NV's folder) rather than the repo root. Move it?
