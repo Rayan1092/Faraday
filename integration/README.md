@@ -27,3 +27,16 @@ Nothing slow runs inside the pipeline callbacks: `on_action` can come from dashb
 - `q`: quit
 
 **Tests:** `python -m unittest integration.tests.test_app` runs the whole flow on the fake Flipper with an offline brain and a temp log.
+
+## On the Mac mini
+
+```
+integration/start_mac.sh            # checks LM Studio + Argmax answer, then python3 -m integration
+integration/start_mac.sh --offline  # extra args go to the app
+```
+
+The script creates `config/settings.json` from the example with `llm.profile: "mac"` if it's missing. It **fails** if LM Studio doesn't answer or lacks the model, or if `argmax-cli serve` doesn't answer. It **warns** about Wi-Fi on, a missing `argmax-cli`, a missing Flipper port, or the example passphrase.
+
+Env switches: `FARADAY_SKIP_CHECKS=1`, `FARADAY_DRY_RUN=1`, `PYTHON=...`.
+
+Tests: `python -m unittest integration.tests.test_start_mac` (uses Git Bash on Windows).

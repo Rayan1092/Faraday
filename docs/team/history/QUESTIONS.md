@@ -31,3 +31,8 @@ Each has the default I used, so work continued. Answer inline and I'll adjust.
    - Added `pyttsx3; sys_platform == "win32"` to `requirements.txt`.
 10. **Mic mute while speaking.**
     - Default: the mic drops audio while TTS talks, plus 0.4 s after. A recording can't start while Faraday is talking.
+11. **Mac profile.**
+    - Default: the `mac` profile in `settings.example.json` stays `http://localhost:1234` with the placeholder `bonsai-2-9b` (PLAN Open Question 1).
+    - `start_mac.sh` fails with the exact fix if LM Studio lists a different id. Put the real id in `config/settings.json` on the Mac.
+12. **start_mac.sh location.**
+    - Default: `integration/start_mac.sh` (inside NV's folder) rather than the repo root. Move it?
