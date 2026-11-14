@@ -38,15 +38,20 @@ def wait_until(cond, timeout=8.0, step=0.05):
 
 class Flow(unittest.TestCase):
     dashboard = False
+    led_settle_s = 0.6
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="faraday-int-"))
         s = json.loads((CONFIG_DIR / "settings.example.json").read_text(encoding="utf-8"))
         s["flipper"]["burst_gap_s"] = 0.3       # fast tests
         s["flipper"]["led_refresh_s"] = 0       # deterministic LED commands
+        s["flipper"]["led_settle_s"] = self.led_settle_s
         self.settings = s
         self.said = []
-        self.fl = FakeFlipper(s)
+        # The fake models the firmware's charge indicator rewriting red/green
+        # after every long rx pause (startup, outlet send, buzz).
+        self.fl = FakeFlipper(s, charge_poll_s=0.2, tx_time_s=0.5)
+        self.fl.device.charge_min_off_s = 0.3
         self.app = App(s, self.fl, camera=StandInCamera(), use_llm=False, mode=Mode.HOME,
                        event_log=EventLog(self.tmp / "events.jsonl", s["security"]["passphrase"]),
                        rules=RuleStore(self.tmp / "rules.json"),
@@ -66,12 +71,33 @@ class Flow(unittest.TestCase):
     def entries(self, typ):
         return [e for e in self.app.pipeline.log.recent(500) if e["type"] == typ]
 
+    def listening(self):
+        """True when the Flipper is in rx with nothing queued or scheduled. Radio
+        sent during a pause (send, LED re-send) is lost, on the fake as on the device."""
+        return (self.fl.device.rx and self.fl._cmds.empty() and self.fl._refresh_due is None)
+
     def wave(self):
+        self.assertTrue(wait_until(self.listening))
         self.fl.device.wave(packets=4, gap_s=0.05)
 
     def test_startup_shows_home_green(self):
         self.assertTrue(wait_until(lambda: self.fl.device.rgb == GREEN))
         self.assertEqual(self.entries("mode_changed")[0]["data"]["changed_by"], "startup")
+
+    def test_led_holds_despite_charge_indicator(self):
+        """Join 1 bug 1: the Flipper's charge indicator rewrites red/green about a
+        second after listening restarts, so the LED was dark for most of the run."""
+        time.sleep(1.5)                                   # startup: firmware rewrite, then settle
+        self.assertGreaterEqual(self.fl.device.charge_writes, 1)   # the firmware did interfere
+        self.assertEqual(self.fl.device.rgb, GREEN)
+        self.app.pipeline.owner_set_mode(Mode.NIGHT)
+        self.wave()                                       # warning + outlet send (long pause)
+        self.assertTrue(wait_until(lambda: "outlet1_on" in self.fl.device.tx))
+        writes = self.fl.device.charge_writes
+        time.sleep(2.5)
+        self.assertGreater(self.fl.device.charge_writes, writes)   # rewritten after the send
+        self.assertEqual(self.fl.device.rgb, YELLOW)               # and put back
+        self.assertTrue(self.fl.device.rx)
 
     def test_night_motion_warning_then_alarm_then_disarm(self):
         self.app.pipeline.owner_set_mode(Mode.NIGHT)
@@ -89,7 +115,8 @@ class Flow(unittest.TestCase):
         self.assertTrue(wait_until(lambda: self.app.pipeline.modes.alert == "alarm"))
         self.assertTrue(wait_until(lambda: "outlet2_on" in self.fl.device.tx))
         self.assertTrue(wait_until(lambda: self.fl.device.rgb == RED and self.fl.device.vibro_count >= 3))
-        self.assertTrue(self.fl.device.rx)        # listening again after all that
+        self.assertTrue(wait_until(self.listening))   # listening again after all that
+        self.assertEqual(self.fl.device.rgb, RED)     # still red after the firmware's rewrite
         # the baseline asked for porch light twice; it was only transmitted once
         self.assertEqual(self.fl.device.tx.count("outlet1_on"), 1)
         self.assertTrue(any("porch_light already on, not resent" in s for s in self.said))
@@ -181,6 +208,25 @@ class Flow(unittest.TestCase):
         self.wave()
         self.assertTrue(wait_until(lambda: any("FAILED" in s for s in self.said)))
         self.assertTrue(wait_until(lambda: self.fl.device.rx))
+
+
+class WithoutLedSettle(unittest.TestCase):
+    """The same firmware behaviour with the fix switched off: shows what the bug
+    looked like, and that the fake really models it."""
+
+    def test_home_green_is_wiped_at_startup(self):
+        s = json.loads((CONFIG_DIR / "settings.example.json").read_text(encoding="utf-8"))
+        s["flipper"].update(burst_gap_s=0.3, led_refresh_s=0, led_settle_s=0)
+        fl = FakeFlipper(s, charge_poll_s=0.2)
+        fl.device.charge_min_off_s = 0.3
+        fl.start()
+        try:
+            self.assertTrue(fl.connected.wait(5))
+            self.assertTrue(wait_until(lambda: fl.device.charge_writes >= 1))
+            time.sleep(1.0)
+            self.assertEqual(fl.device.rgb, [0, 0, 0])    # Home green wiped: LED dark
+        finally:
+            fl.stop()
 
 
 class RealCameraPath(unittest.TestCase):

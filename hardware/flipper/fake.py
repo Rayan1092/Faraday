@@ -37,8 +37,21 @@ PROMPT = b"\r\n>: "
 class FakeDevice:
     """State of the pretend Flipper. Survives fake unplug/replug."""
 
-    def __init__(self, files=OUTLET_FILES):
+    def __init__(self, files=OUTLET_FILES, charge_poll_s: float = 1.0, tx_time_s: float = 0.0):
         self.files = {f.lower() for f in files}
+        # Charge indicator, as seen on the real Flipper (battery full, on USB): it
+        # owns the LED's red and green. Listening pauses charging, and the power
+        # service, polling every charge_poll_s, rewrites red/green on each change:
+        # charged = green on, not charging = both off. 0 turns the emulation off.
+        self.charge_poll_s = charge_poll_s
+        # Tests set this so their own few-millisecond LED pauses are never noticed
+        # (on the real device a ~0.35 s LED pause is noticed only some of the time).
+        self.charge_min_off_s = 0.0
+        self._rx_off_at = time.monotonic()
+        self.tx_time_s = tx_time_s            # how long a tx_from_file takes (real: ~0.9 s)
+        self.charge_state = "charged"
+        self.charge_writes = 0
+        self._next_poll = time.monotonic() + charge_poll_s
         self.rx = False
         self.rgb: List[int] = [0, 0, 0]
         self.vibro = False
@@ -75,15 +88,32 @@ class FakeDevice:
     def unplug(self) -> None:
         self.plugged = False
         self.rx = False
+        self._rx_off_at = time.monotonic()
 
     def plug(self) -> None:
         self.plugged = True
 
     # ---- serial side -----------------------------------------------------------
-    def _say(self, data: bytes) -> None:
-        self._out.append((time.monotonic(), data, False))
+    def _say(self, data: bytes, delay_s: float = 0.0) -> None:
+        self._out.append((time.monotonic() + delay_s, data, False))
+
+    def _power_tick(self) -> None:
+        now = time.monotonic()
+        if self.charge_poll_s <= 0 or now < self._next_poll:
+            return
+        while self._next_poll <= now:
+            self._next_poll += self.charge_poll_s
+        resumed = not self.rx and now - self._rx_off_at >= self.charge_min_off_s
+        state = "charged" if resumed else "not_charging"
+        if not self.rx and not resumed:
+            state = self.charge_state           # too short to tell: no change yet
+        if state != self.charge_state:
+            self.charge_state = state
+            self.rgb[0], self.rgb[1] = 0, (255 if state == "charged" else 0)
+            self.charge_writes += 1
 
     def take_due(self) -> bytes:
+        self._power_tick()
         now = time.monotonic()
         with self._lock:
             due = [o for o in self._out if o[0] <= now]
@@ -103,6 +133,7 @@ class FakeDevice:
             return sum(len(o[1]) for o in self._out if o[0] <= now)
 
     def receive(self, data: bytes) -> None:
+        self._power_tick()
         with self._lock:
             for byte in data:
                 ch = bytes([byte])
@@ -110,6 +141,7 @@ class FakeDevice:
                     self._line = b""
                     if self.rx:
                         self.rx = False
+                        self._rx_off_at = time.monotonic()
                         self._say(b"\r\nPackets received 0\r\n" + PROMPT)
                     else:
                         self._say(PROMPT)
@@ -142,6 +174,8 @@ class FakeDevice:
                     self.outlet_lit[n] = not self.outlet_lit[n]
                 self._say(f"Listening at {parts[2]}. Frequency=315000000, Protocol=Princeton\r\n"
                           "Press CTRL+C to stop\r\n.\r\n".encode())
+                self._say(PROMPT, self.tx_time_s)       # the send takes a while
+                return
             else:
                 self._say(f"subghz tx_from_file: Error open file {parts[2]}\r\n".encode())
         elif parts[:1] == ["led"] and len(parts) == 3 and parts[1] in "rgb":
@@ -201,7 +235,7 @@ class FakeSerial(FlipperSerial):
 class FakeFlipper(Flipper):
     def __init__(self, settings: Optional[Dict[str, Any]] = None,
                  on_event: Optional[Callable[[Event], None]] = None,
-                 source: str = Source.SIM):
+                 source: str = Source.SIM, charge_poll_s: float = 1.0, tx_time_s: float = 0.0):
         super().__init__(settings, on_event, source=source)
-        self.device = FakeDevice()
+        self.device = FakeDevice(charge_poll_s=charge_poll_s, tx_time_s=tx_time_s)
         self.conn = FakeSerial(self.device)
