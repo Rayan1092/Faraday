@@ -6,7 +6,7 @@ It answers the door, takes messages, turns on lights, learns simple rules when y
 
 We built it for the Cornell Local AI Hackathon.
 
-> Status: the software runs end to end in our simulator. There are 269 passing tests, and none of them need hardware: 199 for the core software and 70 for the hardware drivers and the app wiring, which replay real radio captures and use fake devices. **The whole app has now run on real hardware on a Windows laptop.** Real doorbell and motion sensors go through the Flipper into our software, Bonsai decides, and the real lamps switch. That run found two bugs that are being fixed: the Flipper's LED stays off while the full app runs, and a second wave doesn't raise the alarm yet. **[TBD: both fixes]** The full run on the Mac mini, and speech, are next. Anything marked **[TBD]** hasn't been proven on real hardware yet.
+> Status: the software runs end to end in our simulator. There are 269 passing tests, and none of them need hardware: 199 for the core software and 70 for the hardware drivers and the app wiring, which replay real radio captures and use fake devices. **The whole app has now run on real hardware on a Windows laptop.** Real doorbell and motion sensors go through the Flipper into our software, Bonsai decides, and the real lamps switch. That run found one bug that's being fixed: a second wave doesn't raise the alarm yet. **[TBD: the fix]** The full run on the Mac mini, and speech, are next. Anything marked **[TBD]** hasn't been proven on real hardware yet.
 
 ## Why offline
 
@@ -33,10 +33,10 @@ Faraday does all of it on one computer in your house. The radio, the AI, the spe
 - **Motion.** One wave sends 17 copies of the code over about 2 seconds, and we merge them into one event.
 - **Lights.** The Flipper replays a saved code to a cheap remote outlet. Outlet 1 is the porch light and outlet 2 the living room lamp.
 - **Listening and sending.** The Flipper can't do both at once. So the driver pauses listening, sends, and starts again about 1.2 seconds later.
-- **LED.** The Flipper's LED shows the mode (green, blue, purple), or the alert colour (yellow, red), and it buzzes three times on an alarm.
+- **LED.** The Flipper's LED stays off. On an alarm it turns red and buzzes three times.
 - **Reconnect.** If the USB cable drops, the driver reconnects by itself in about 8 seconds.
 
-We tested the driver on its own with the real Flipper on a Windows laptop, and there are tests that replay real radio captures. Then we ran the whole app the same way: real sensor, Flipper, our software, Bonsai, real lamp. **[TBD: the LED inside the full app and the alarm on a second wave are being fixed]** **[TBD: same check on the Mac mini]**
+We tested the driver on its own with the real Flipper on a Windows laptop, and there are tests that replay real radio captures. Then we ran the whole app the same way: real sensor, Flipper, our software, Bonsai, real lamp. **[TBD: the alarm on a second wave is being fixed]** **[TBD: same check on the Mac mini]**
 
 **The modes.** Faraday is in Home, Away or Night. Each mode has a table of what always happens, written in plain code:
 
@@ -62,7 +62,7 @@ The lights and photos come from code, not the AI, so they happen even if the mod
 - In Away mode whoever is talking is a visitor, so they can only leave a message. They can't add rules, switch lights or hear the summary.
 
 **The dashboard.** A big local web page for the projector shows:
-- the mode, with the same colour as the Flipper's LED,
+- the mode, with its own colour for each mode and alert,
 - live events,
 - the latest photo,
 - what Faraday heard and said,

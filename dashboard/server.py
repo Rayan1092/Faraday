@@ -66,9 +66,9 @@ class Dashboard:
     """Owns the HTTP server thread. `pipeline` is a brain.pipeline.Pipeline."""
 
     def __init__(self, pipeline: Any, host: str = "127.0.0.1", port: int = 8080,
-                 led: Optional[Dict[str, str]] = None):
+                 colors: Optional[Dict[str, str]] = None):
         self.pipeline = pipeline
-        self.led = led
+        self.colors = colors
         self.limiter = PassphraseLimiter()
         self.netcheck = NetCheck()
         self.photos = PhotoWatcher(MEDIA_DIR / "photos", REPO_ROOT)
@@ -83,9 +83,8 @@ class Dashboard:
     def from_settings(cls, pipeline: Any, settings: Dict[str, Any],
                       port: Optional[int] = None) -> "Dashboard":
         cfg = settings.get("dashboard", {})
-        led = settings.get("flipper", {}).get("led")
         board = cls(pipeline, cfg.get("host", "127.0.0.1"),
-                    cfg.get("port", 8080) if port is None else port, led)
+                    cfg.get("port", 8080) if port is None else port)
         for name in board.sensor_keys:
             key = settings.get("sensors", {}).get(name, {}).get("key")
             if key:
@@ -112,7 +111,7 @@ class Dashboard:
     def state(self) -> Dict[str, Any]:
         p = self.pipeline
         rules = p.rules.all() if getattr(p, "rules", None) is not None else []
-        state = build_state(p.log.recent(500), p.modes.mode, p.modes.alert, rules, self.led,
+        state = build_state(p.log.recent(500), p.modes.mode, p.modes.alert, rules, self.colors,
                             network=self.netcheck.status(), newest_photo=self.photos.newest())
         state["talk_available"] = self.talk_hook is not None
         return state
