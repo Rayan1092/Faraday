@@ -44,7 +44,11 @@ def build_app(args: argparse.Namespace, settings) -> App:
         from rules import RuleStore
         log = EventLog(args.log, settings["security"]["passphrase"])
         rules = RuleStore(Path(args.log).with_name(Path(args.log).stem + "-rules.json"))
-    camera = StandInCamera()
+    if args.standin_camera or settings.get("camera", {}).get("enabled") is False:
+        camera = StandInCamera()
+    else:
+        from hardware.camera import PhotoCamera
+        camera = PhotoCamera.from_settings(settings)   # webcam + Bonsai vision
     return App(settings, flipper, camera=camera, use_llm=not args.offline, mode=args.mode,
                event_log=log, rules=rules, dashboard=not args.no_dashboard, port=args.port)
 
@@ -97,6 +101,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="py -m integration", description="Start Faraday")
     ap.add_argument("--fake", action="store_true", help="fake Flipper (no hardware)")
     ap.add_argument("--offline", action="store_true", help="skip Bonsai, rules-only brain")
+    ap.add_argument("--standin-camera", action="store_true",
+                    help="no webcam: answer take_photo with a fixed description")
     ap.add_argument("--mode", choices=sorted(Mode.ALL), default=Mode.HOME)
     ap.add_argument("--log", help="log file (default: logs/events.jsonl)")
     ap.add_argument("--port", type=int, help="dashboard port (default from settings)")
