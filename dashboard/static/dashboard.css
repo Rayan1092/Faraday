@@ -1,0 +1,288 @@
+/* Faraday dashboard. Built for a projector: dark, high contrast, huge text.
+   Fully offline: system fonts only, no external assets. */
+
+:root {
+  --bg: #07090c;
+  --panel: #12161c;
+  --line: #262d36;
+  --text: #f4f6f8;
+  --muted: #9aa4b0;
+  --green: #22c55e;
+  --blue: #3b82f6;
+  --purple: #a855f7;
+  --yellow: #facc15;
+  --red: #ef4444;
+  --status: var(--green);
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+body[data-status="green"]  { --status: var(--green); }
+body[data-status="blue"]   { --status: var(--blue); }
+body[data-status="purple"] { --status: var(--purple); }
+body[data-status="yellow"] { --status: var(--yellow); }
+body[data-status="red"]    { --status: var(--red); }
+
+* { box-sizing: border-box; }
+
+html { font-size: clamp(16px, 1.35vw, 30px); }
+
+body {
+  margin: 0;
+  height: 100vh;      /* one screen, no scrolling: it's on a projector */
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  line-height: 1.25;
+  border-top: 0.9rem solid var(--status);
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  padding: 0.8rem 1.2rem 1rem;
+}
+
+h2 {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ---- top bar ---------------------------------------------------------- */
+
+.top {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.label { font-size: 0.8rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--muted); }
+
+.mode {
+  font-size: clamp(3rem, 7.5vw, 9.5rem);
+  font-weight: 900;
+  line-height: 0.95;
+  color: var(--status);
+  letter-spacing: 0.02em;
+}
+
+.alert-line { font-size: 1.6rem; font-weight: 800; color: var(--status); min-height: 1.6rem; }
+body[data-status="red"] .mode { animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.55; } }
+
+.badges { display: flex; flex-direction: column; gap: 0.5rem; align-items: flex-end; }
+.badge {
+  border-radius: 999px;
+  padding: 0.35rem 1rem;
+  font-weight: 800;
+  font-size: 1rem;
+  white-space: nowrap;
+}
+.badge.offline { background: #0f2a18; color: var(--green); border: 2px solid var(--green); }
+.badge.link { color: var(--muted); border: 2px solid var(--line); font-size: 0.8rem; }
+.badge.link.down { color: var(--red); border-color: var(--red); }
+
+.buttons { display: flex; gap: 0.7rem; }
+.btn {
+  font: inherit;
+  font-weight: 800;
+  font-size: 1.4rem;
+  padding: 0.7rem 1.4rem;
+  border-radius: 0.6rem;
+  border: 3px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+.btn:hover { filter: brightness(1.25); }
+.btn:focus-visible { outline: 4px solid var(--text); outline-offset: 2px; }
+.btn.away  { border-color: var(--blue); }
+.btn.night { border-color: var(--purple); }
+.btn.home  { border-color: var(--green); }
+.btn.away.active  { background: var(--blue); color: #fff; }
+.btn.night.active { background: var(--purple); color: #fff; }
+.btn.home.active  { background: var(--green); color: #000; }
+.btn.small { font-size: 1rem; padding: 0.5rem 1rem; }
+
+.notice {
+  background: var(--yellow);
+  color: #000;
+  font-weight: 900;
+  font-size: 1.4rem;
+  padding: 0.3rem 1rem;
+  border-radius: 0.5rem;
+}
+.notice.alarm { background: var(--red); color: #fff; }
+
+/* ---- panels ----------------------------------------------------------- */
+
+.grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1.15fr 1fr 1fr;
+  gap: 0.8rem;
+  min-height: 0;
+}
+.bottom {
+  display: grid;
+  grid-template-columns: 1fr 1.3fr 1.3fr;
+  gap: 0.8rem;
+  height: 23vh;
+  min-height: 0;
+}
+
+.panel {
+  background: var(--panel);
+  border: 2px solid var(--line);
+  border-radius: 0.8rem;
+  padding: 0.8rem 1rem;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.panel > ol, .panel > ul, .panel > .light-list { flex: 1; min-height: 0; overflow: hidden; }
+/* Chat: newest at the bottom, older lines fade off the top. Feed: newest on top. */
+.talk-list {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 3rem);
+  mask-image: linear-gradient(to bottom, transparent, #000 3rem);
+}
+.feed-list {
+  -webkit-mask-image: linear-gradient(to top, transparent, #000 3rem);
+  mask-image: linear-gradient(to top, transparent, #000 3rem);
+}
+
+.photo-frame {
+  background: #000;
+  border-radius: 0.5rem;
+  flex: 1;
+  min-height: 5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.photo-frame img { width: 100%; height: 100%; object-fit: contain; }
+.photo-text {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0.5rem 0 0.1rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  flex: none;
+}
+.meta { color: var(--muted); font-size: 0.9rem; margin: 0; }
+
+.talk-list, .feed-list, .rule-list, .message-list { list-style: none; margin: 0; padding: 0; }
+
+.talk-list li {
+  flex: none;
+  margin: 0.5rem 0 0;
+  padding: 0.5rem 0.8rem;
+  border-radius: 0.6rem;
+  font-size: 1.25rem;
+  max-width: 92%;
+}
+.talk-list li.heard { background: #1d2530; }
+.talk-list li.said { background: #10283d; margin-left: auto; text-align: right; }
+.talk-list .who { display: block; font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+
+.feed-list li {
+  display: grid;
+  grid-template-columns: 5.2rem 1fr;
+  gap: 0.6rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 1.05rem;
+}
+.feed-list li:first-child { animation: flash 1.2s ease-out; }
+@keyframes flash { from { background: #2a3442; } }
+.feed-list .time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.feed-list li.warn  .text { color: var(--yellow); font-weight: 800; }
+.feed-list li.alarm .text { color: var(--red); font-weight: 900; }
+.feed-list li.ok    .text { color: var(--green); font-weight: 800; }
+.feed-list li.action .text { color: #cfd6de; }
+
+.light-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.light {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 1.2rem;
+  font-weight: 800;
+  padding: 0.3rem 0.7rem;
+  border-radius: 0.5rem;
+  border: 2px solid var(--line);
+}
+.light .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.light .state { padding: 0.1rem 0.8rem; border-radius: 999px; background: #222a33; color: var(--muted); }
+.light.on { border-color: var(--yellow); }
+.light.on .state { background: var(--yellow); color: #000; }
+
+.rule-list li, .message-list li { font-size: 1.15rem; padding: 0.4rem 0; border-bottom: 1px solid var(--line); }
+.rule-list .rule-text { font-weight: 800; }
+.rule-list .said, .message-list .meta { display: block; color: var(--muted); font-size: 0.85rem; }
+.rule-list button { float: right; }
+.empty { color: var(--muted); font-style: italic; }
+
+.summary {
+  background: #10283d;
+  border-left: 0.4rem solid var(--blue);
+  padding: 0.5rem 0.8rem;
+  border-radius: 0.4rem;
+  font-size: 1.3rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+/* ---- text box and dialog ---------------------------------------------- */
+
+.say { display: flex; gap: 0.6rem; align-items: center; font-size: 0.9rem; color: var(--muted); }
+.say input, .dialog input {
+  flex: 1;
+  font: inherit;
+  font-size: 1.1rem;
+  padding: 0.5rem 0.8rem;
+  border-radius: 0.5rem;
+  border: 2px solid var(--line);
+  background: #0c1015;
+  color: var(--text);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.overlay[hidden], .notice[hidden], .summary[hidden] { display: none; }
+.dialog {
+  background: var(--panel);
+  border: 3px solid var(--green);
+  border-radius: 1rem;
+  padding: 1.5rem 2rem;
+  width: min(36rem, 90vw);
+  font-size: 1.3rem;
+}
+.dialog input { width: 100%; font-size: 1.6rem; }
+.dialog-buttons { display: flex; gap: 0.8rem; margin-top: 1rem; }
+.error { color: var(--red); font-weight: 800; min-height: 1.4rem; margin: 0.5rem 0 0; }
+
+@media (max-width: 900px) {
+  body { height: auto; overflow: auto; }
+  .bottom { height: auto; }
+  .top { grid-template-columns: 1fr; }
+  .badges { align-items: flex-start; flex-direction: row; }
+  .grid, .bottom { grid-template-columns: 1fr; }
+}

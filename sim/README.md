@@ -8,7 +8,9 @@ Fake hardware for development. It sends any FORMATS.md event with `source: "sim"
 python -m sim              # uses Bonsai from config/settings.json
 python -m sim --offline    # rule-based fallback only, no LM Studio needed
 python -m sim -v           # also print full JSON for every event and action
-python -m sim --log x.jsonl  # write somewhere other than logs/events.jsonl
+python -m sim --log x.jsonl  # write somewhere other than logs/events.jsonl (rules go to x-rules.json)
+python -m sim --dashboard  # also serve the dashboard and open it in the browser
+python -m sim --offline --dashboard --port 8081 --no-browser
 ```
 
 Type a key, then Enter:

@@ -3,7 +3,8 @@
 Sends fake events through the real pipeline (modes/ -> log/ -> rules/ baseline
 -> brain) and prints every event and action. Hardware actions are print-only.
 take_photo is answered with a fake photo_described event. Everything is written
-to logs/events.jsonl like a real run.
+to logs/events.jsonl like a real run. --dashboard serves the dashboard too,
+so the whole thing can be tried without hardware.
 
 Keys (then Enter):
   d            doorbell
@@ -20,6 +21,8 @@ import argparse
 import getpass
 import json
 import sys
+import threading
+import webbrowser
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -30,7 +33,9 @@ from shared import Action, ActionType, Event, Mode  # noqa: E402
 
 from brain.pipeline import Pipeline  # noqa: E402
 from brain.settings import llm_config, load_settings, settings_path  # noqa: E402
+from dashboard import Dashboard  # noqa: E402
 from log import EventLog  # noqa: E402
+from rules import RuleStore  # noqa: E402
 from sim import events  # noqa: E402
 
 
@@ -115,7 +120,11 @@ class Sim:
         if self.verbose:
             print("       " + action.to_json())
         if action.type == ActionType.TAKE_PHOTO:  # stand-in camera + vision
-            self._pending.append(events.photo_described(action.id, self.photo_text))
+            photo = events.photo_described(action.id, self.photo_text)
+            if threading.current_thread() is threading.main_thread():
+                self._pending.append(photo)  # sent right after the current event
+            else:  # asked for from the dashboard thread: answer from a thread too
+                threading.Thread(target=self.pipeline.handle, args=(photo,), daemon=True).start()
 
     def status(self) -> None:
         print(f"  mode: {self.modes.mode}, alert: {self.modes.alert}, log: {self.pipeline.log.path}")
@@ -143,12 +152,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--photo", default=events.FAKE_DESCRIPTION, help="fake camera description")
     parser.add_argument("--log", help="log file (default: logs/events.jsonl from settings)")
     parser.add_argument("-v", "--verbose", action="store_true", help="print full JSON messages")
+    parser.add_argument("--dashboard", action="store_true", help="serve the dashboard and open it")
+    parser.add_argument("--port", type=int, help="dashboard port (default: dashboard.port in settings)")
+    parser.add_argument("--no-browser", action="store_true", help="with --dashboard: don't open a browser")
     args = parser.parse_args(argv)
 
     settings = load_settings()
     cfg = llm_config(settings)
-    log = EventLog(args.log, settings["security"]["passphrase"]) if args.log else None
-    pipeline = Pipeline.from_settings(settings, use_llm=not args.offline, log=log, mode=args.mode)
+    log, rules = None, None
+    if args.log:  # keep the rules next to a custom log, so test runs don't touch logs/
+        log = EventLog(args.log, settings["security"]["passphrase"])
+        rules = RuleStore(Path(args.log).with_name(Path(args.log).stem + "-rules.json"))
+    pipeline = Pipeline.from_settings(settings, use_llm=not args.offline, log=log, mode=args.mode,
+                                      rules=rules)
     sim = Sim(pipeline, args.verbose, args.photo)
 
     print(f"Faraday sim. Settings: {settings_path().name}. Log: {pipeline.log.path}")
@@ -156,7 +172,14 @@ def main(argv: Optional[List[str]] = None) -> int:
           else f"Bonsai: {cfg['model']} at {cfg['base_url']} (timeout {cfg['timeout_s']:.0f}s)")
     if settings_path().name == "settings.example.json":
         print("Note: using settings.example.json, so the passphrase is the public example.")
+    print(f"Rules: {pipeline.rules.path} ({len(pipeline.rules.all())} stored)")
     print("Keys: d doorbell, m motion, t <text> speech, 1/2/3 home/away/night, s status, h help, q quit")
+    board = None
+    if args.dashboard:
+        board = Dashboard.from_settings(pipeline, settings, args.port).start()
+        print(f"Dashboard: {board.url}")
+        if not args.no_browser:
+            webbrowser.open(board.url)
     pipeline.start()
 
     while True:
@@ -167,6 +190,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             break
         if not sim.command(line):
             break
+    pipeline.wait_background(20)
+    if board:
+        board.stop()
     return 0
 
 

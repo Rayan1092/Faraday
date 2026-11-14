@@ -122,19 +122,20 @@ class PipelineTests(unittest.TestCase):
         bell_photo = next(a for a in p.handle(events.doorbell()).actions if a.type == ActionType.TAKE_PHOTO)
         texts = [a.args.get("text") for a in p.handle(events.photo_described(bell_photo.id)).actions]
         self.assertEqual(texts, [FILLER, "Hello!", "Would you like to leave a message?"])
-        motion_photo = next(a for a in p.handle(events.motion()).actions if a.type == ActionType.TAKE_PHOTO)
-        texts = [a.args.get("text") for a in p.handle(events.photo_described(motion_photo.id)).actions]
-        self.assertEqual(texts, ["You're on camera. The owner has been alerted."])
+        motion = p.handle(events.motion()).actions
+        self.assertIn("You're on camera. The owner has been alerted.",
+                      [a.args.get("text") for a in motion])  # spoken by the baseline, at once
+        motion_photo = next(a for a in motion if a.type == ActionType.TAKE_PHOTO)
+        self.assertEqual(p.handle(events.photo_described(motion_photo.id)).actions, [])
 
     def test_motion_photo_traced_even_after_a_busy_log(self):
-        p, _, client = self.pipeline(tool_calls(("speak", {"text": "Hello visitor!"})), Mode.NIGHT)
+        p, _, client = self.pipeline(tool_calls(("speak", {"text": "Hello visitor!"})), Mode.AWAY)
         photo = next(a for a in p.handle(events.motion()).actions if a.type == ActionType.TAKE_PHOTO)
         for i in range(12):  # push the motion event past the prompt's 10-line window
             p.log.write(events.speech(f"filler {i}"))
         calls = len(client.calls)
-        texts = [a.args["text"] for a in p.handle(events.photo_described(photo.id)).actions]
-        self.assertEqual(texts, ["You're on camera. The owner has been alerted."])
-        self.assertEqual(len(client.calls), calls)  # answered in code
+        self.assertEqual(p.handle(events.photo_described(photo.id)).actions, [])
+        self.assertEqual(len(client.calls), calls)  # answered in code, no greeting
 
     def test_no_filler_when_no_model_call(self):
         cases = [(Mode.HOME, events.speech("Turn on the porch light"), True),   # owner at home

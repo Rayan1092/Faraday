@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Faraday</title>
+  <!-- Fully offline: every asset is served from dashboard/static/. No CDNs, no web fonts. -->
+  <link rel="stylesheet" href="/static/dashboard.css">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+</head>
+<body data-status="green">
+  <header class="top">
+    <div class="mode-block">
+      <div id="mode" class="mode" aria-label="Mode">—</div>
+      <div id="alert" class="alert-line"></div>
+    </div>
+    <div class="badges">
+      <div class="badge offline" title="Nothing leaves this machine">● OFFLINE</div>
+      <div id="link" class="badge link">connecting…</div>
+    </div>
+    <nav class="buttons">
+      <button id="btn-away" class="btn away" type="button">Away</button>
+      <button id="btn-night" class="btn night" type="button">Night</button>
+      <button id="btn-home" class="btn home" type="button">Home</button>
+    </nav>
+  </header>
+
+  <div id="notice" class="notice" hidden></div>
+
+  <main class="grid">
+    <section class="panel camera">
+      <h2>Camera</h2>
+      <div class="photo-frame">
+        <img id="photo" alt="Latest photo" src="/static/no-photo.svg">
+      </div>
+      <p id="photo-text" class="photo-text">No photo yet.</p>
+      <p id="photo-meta" class="meta"></p>
+    </section>
+
+    <section class="panel talk">
+      <h2>Heard &amp; said</h2>
+      <ol id="talk" class="talk-list"></ol>
+    </section>
+
+    <section class="panel feed">
+      <h2>Live events</h2>
+      <ol id="feed" class="feed-list"></ol>
+    </section>
+  </main>
+
+  <footer class="bottom">
+    <section class="panel lights">
+      <h2>Lights</h2>
+      <div id="lights" class="light-list"></div>
+    </section>
+    <section class="panel rules">
+      <h2>Rules</h2>
+      <ul id="rules" class="rule-list"></ul>
+    </section>
+    <section class="panel notes">
+      <h2 id="notes-title">Messages</h2>
+      <div id="summary" class="summary" hidden></div>
+      <ul id="messages" class="message-list"></ul>
+    </section>
+  </footer>
+
+  <form id="say-form" class="say" autocomplete="off">
+    <label for="say-text">Type what someone said (backup for the mic):</label>
+    <input id="say-text" type="text" maxlength="500" placeholder="Faraday, I'm heading out.">
+    <button class="btn small" type="submit">Send</button>
+  </form>
+
+  <div id="home-dialog" class="overlay" hidden>
+    <form id="home-form" class="dialog" autocomplete="off">
+      <h2>Disarm</h2>
+      <p>Only the owner can disarm. Enter the passphrase.</p>
+      <input id="home-pass" type="password" autocomplete="off" aria-label="Passphrase">
+      <p id="home-error" class="error" role="alert"></p>
+      <div class="dialog-buttons">
+        <button class="btn home" type="submit">Disarm</button>
+        <button id="home-cancel" class="btn small" type="button">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

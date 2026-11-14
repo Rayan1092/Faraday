@@ -60,7 +60,7 @@ TOOLS: Dict[str, Dict[str, Any]] = {
 }
 
 _A = ActionType
-_SPEECH_COMMON = [_A.SPEAK, _A.SUMMARIZE_LOG, _A.ADD_RULE, _A.OUTLET_ON, _A.OUTLET_OFF]
+_LIGHTS = [_A.OUTLET_ON, _A.OUTLET_OFF]
 
 # Tools per (event type, mode). An empty list means no model call at all.
 # Photos and lights for doorbell/motion come from rules/baseline.py (plain code),
@@ -74,9 +74,14 @@ _BY_EVENT_MODE: Dict[str, Dict[str, List[str]]] = {
     EventType.MOTION: {m: [] for m in Mode.ALL},
     EventType.PHOTO_DESCRIBED: {m: [_A.SPEAK] for m in Mode.ALL},
     # At home the owner is talking; when armed it is most likely a visitor.
-    EventType.SPEECH_HEARD: {Mode.HOME: [_A.SET_MODE] + _SPEECH_COMMON,
-                             Mode.AWAY: [_A.SAVE_MESSAGE] + _SPEECH_COMMON,
-                             Mode.NIGHT: [_A.SAVE_MESSAGE] + _SPEECH_COMMON},
+    # Who is talking decides what they may ask for:
+    # - home: the owner. Arm, lights, rules, "what happened?".
+    # - away: nobody is home, so it's a visitor. Messages and talk only: no
+    #   summary of the house log, no rules, no lights.
+    # - night: the owner (asleep inside) or a visitor. Rules and lights, but no summary.
+    EventType.SPEECH_HEARD: {Mode.HOME: [_A.SET_MODE, _A.SPEAK, _A.SUMMARIZE_LOG, _A.ADD_RULE] + _LIGHTS,
+                             Mode.AWAY: [_A.SAVE_MESSAGE, _A.SPEAK],
+                             Mode.NIGHT: [_A.SAVE_MESSAGE, _A.SPEAK, _A.ADD_RULE] + _LIGHTS},
     EventType.MODE_CHANGED: {m: [_A.SPEAK] for m in Mode.ALL},
 }
 

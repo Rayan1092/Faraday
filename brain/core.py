@@ -10,6 +10,7 @@ Order of work for each event:
 """
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -25,6 +26,16 @@ from .safety import is_disarm_request
 from .settings import llm_config, load_settings, passphrase
 from .tools import allowed_actions, tools_for
 
+CONFRONT_PROMPT = (
+    "You are Faraday, a home guard speaking through a speaker at the front door. "
+    "Write ONE short sentence, under 15 words, telling the intruder to leave. "
+    "Mention something you see. Reply with the sentence only."
+)
+SUMMARY_PROMPT = (
+    "You are Faraday, a home guard. Turn these facts into a spoken update for the "
+    "homeowner, at most two short sentences. Say only what the facts say: do not add, "
+    "guess or count anything else. Reply with the sentences only."
+)
 SYSTEM_PROMPT = (
     "You are Faraday, an offline home guard. Act only by calling tools: "
     "1 to 3 calls, or none if nothing is needed. "
@@ -80,12 +91,17 @@ class Brain:
             if is_disarm_request(text):
                 reply = fb.CANT_DISARM if mode in Mode.ARMED else "Faraday is already in home mode."
                 return self._code(event, mode, allowed, [fb._speak(reply)])
+            if mode == Mode.HOME and fb.is_summary_request(text):
+                # Skip one model round trip: the summary itself is Bonsai's job (summarize()).
+                return self._code(event, mode, allowed, [
+                    {"type": ActionType.SUMMARIZE_LOG, "args": {"minutes": 1440}}])
         if event.type == EventType.MODE_CHANGED:
             return self._code(event, mode, allowed, _mode_reply(event))
-        if event.type == EventType.PHOTO_DESCRIBED and cause == EventType.MOTION:
-            # Motion photo: a fixed warning while armed, nothing at home. Never the model.
-            items = [fb._speak(fb.ON_CAMERA)] if mode in Mode.ARMED else []
-            return self._code(event, mode, allowed, items)
+        if event.type == EventType.PHOTO_DESCRIBED and (cause == EventType.MOTION
+                                                         or mode == Mode.NIGHT):
+            # Motion lines come from the baseline (and the alarm confrontation from
+            # confront()); a night doorbell stays quiet. Nothing for the model to add.
+            return Decision([], "code")
 
         if not allowed:
             return Decision([], "code")  # nothing to choose from, e.g. motion at home
@@ -128,6 +144,35 @@ class Brain:
             actions = actions + extra
         return Decision(actions, "bonsai", elapsed, dropped)
 
+    # ---- free-text calls (no tools) ----------------------------------------
+
+    def confront(self, description: str) -> Optional[str]:
+        """ONE short line telling an intruder to leave, mentioning what the camera sees.
+        None if there's no model or it fails: plain code has already spoken."""
+        return self._say_one(CONFRONT_PROMPT, f"Camera sees: {description}", "confrontation")
+
+    def summarize(self, facts: List[str]) -> Optional[str]:
+        """A short spoken summary of these log facts. None if no model or it fails."""
+        if not facts:
+            return None
+        return self._say_one(SUMMARY_PROMPT, "\n".join(f"- {f}" for f in facts), "summary")
+
+    def _say_one(self, system: str, user: str, what: str) -> Optional[str]:
+        if self.client is None:
+            return None
+        started = time.perf_counter()
+        try:
+            reply = self.client.chat([{"role": "system", "content": system},
+                                      {"role": "user", "content": user}], None)
+            text = reply.get("content") if isinstance(reply, dict) else None
+        except Exception as e:
+            self.log(f"[brain] {what} call failed after {time.perf_counter() - started:.2f}s: {e}")
+            return None
+        elapsed = time.perf_counter() - started
+        line = _clean_line(text)
+        self.log(f"[brain] Bonsai {what} took {elapsed:.2f}s" + ("" if line else ": unusable reply"))
+        return line
+
     # ---- prompt ------------------------------------------------------------
 
     def prompt(self, event: Event, mode: str, recent: Iterable[Any] = ()) -> str:
@@ -168,10 +213,27 @@ class Brain:
                     Mode.NIGHT: "Night mode on. Sleep well."}[set_modes[0].args["mode"]]
         elif any(a.type == ActionType.SAVE_MESSAGE for a in actions):
             text = fb.MESSAGE_SAVED
+        elif any(a.type == ActionType.ADD_RULE for a in actions):
+            text = fb.RULE_SAVED
         else:
             return actions
         extra, _ = filter_actions([fb._speak(text)], event, mode, allowed)
         return actions + extra
+
+
+def _clean_line(text: Any) -> Optional[str]:
+    """Plain spoken text from a model reply, or None. No JSON, no tags, max 240 chars."""
+    if not isinstance(text, str):
+        return None
+    text = re.sub(r"<[^>]+>", " ", text)          # stray tool/think tags
+    text = " ".join(text.replace("*", "").split()).strip().strip('"').strip()
+    if not text or text[0] in "{[":
+        return None
+    if len(text) > 240:
+        cut = text[:240]
+        end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+        text = cut[:end + 1] if end > 40 else cut.rsplit(" ", 1)[0]
+    return text
 
 
 def _mode_reply(event: Event) -> List[RawItem]:
