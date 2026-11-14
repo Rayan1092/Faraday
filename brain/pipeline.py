@@ -14,7 +14,7 @@ For each incoming event, in this order:
 8. The brain's actions are added on top, minus anything already done.
 9. Software actions run: set_mode goes back through modes/ (which refuses unsafe
    changes), add_rule is stored, summarize_log is spoken.
-10. At alarm in Away, once the photo description arrives, Bonsai is asked for one
+10. At alarm (Away or Night), once the photo description arrives, Bonsai is asked for one
     confrontation line in a background thread. Plain code has already spoken.
 
 Actions and events are passed to on_action / on_event as soon as they exist,
@@ -142,7 +142,8 @@ class Pipeline:
                 self._emit(action, result, done)
         if event.type == EventType.PHOTO_DESCRIBED:
             cause = self._photo_cause.get(event.caused_by or "")
-            if cause == (EventType.MOTION, Mode.AWAY, AlertLevel.ALARM):
+            if (cause and cause[0] == EventType.MOTION and cause[1] in Mode.ARMED
+                    and cause[2] == AlertLevel.ALARM):
                 self._confront_later(event)
 
         def filler(ev: Event, md: str) -> None:
@@ -224,7 +225,7 @@ class Pipeline:
             with self.lock:
                 # Bonsai can take a while. If the owner disarmed (or the alert was
                 # cleared) meanwhile, the line is stale: never confront after that.
-                if self.modes.mode != Mode.AWAY or self.modes.alert != AlertLevel.ALARM:
+                if not self.modes.armed or self.modes.alert != AlertLevel.ALARM:
                     self.say(f"  [brain] confrontation dropped, no longer in alarm: {line}")
                     return
                 self._emit(action, Result(), [])

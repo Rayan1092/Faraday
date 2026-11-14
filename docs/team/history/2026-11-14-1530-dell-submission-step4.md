@@ -1,0 +1,15 @@
+# Submission drafts (Dell Step 4)
+- Laptop / branch / PR: Dell / `dell/submission` / PR "submission drafts"
+- What changed:
+  - **Root `README.md` rewritten:** what it is, why offline, how it works, how to run it, honest limits.
+  - **`docs/submission/` drafts:** `discord_post.md`, `video_script.md` (2:00), `pitch.md` (4:00) and `judge_qa.md`.
+  - **Code:** the Night alarm now gets the Bonsai confrontation line too, as decided. Fixed a flaky dashboard server test: refused POSTs now read the body first, because Windows aborted the connection otherwise.
+  - **PLAN.md:** mode table updated, plus a note to raise LM Studio's Parallel setting on the Mac.
+- How it was tested: `python -m unittest discover` passes 151/151. The server tests passed 6 runs in a row after the fix. The docs were checked for em dashes and `[TBD]` markers.
+- What works: the drafts match what the code does today and what was measured on the NV laptop (4B).
+- What's broken or faked: nothing has run on real hardware yet. The docs carry 27 `[TBD]` placeholders:
+  - Flipper confirmation, vision (Open Question 2), Argmax commands,
+  - 9B model id and timings, the start command, the full Wi-Fi-off run,
+  - the real spoken lines for the video, team name, members, video link.
+- Next step: after Join 3, fill in every `[TBD` (`grep -rn "\[TBD" README.md docs/submission`), shoot the video, then post by 11:30.
+- Open Questions added to PLAN.md: none (Parallel is a note in the mode table section).

@@ -155,9 +155,11 @@ class Step3(unittest.TestCase):
         self.assertEqual(last.source, Source.BRAIN)
         self.assertEqual(p.log.recent(1)[0]["args"]["text"], last.args["text"])
 
-    def test_confrontation_only_at_alarm_in_away(self):
-        for mode, alarm in ((Mode.AWAY, False), (Mode.NIGHT, True)):
-            client = SlowClient("Leave now.", delay=0)
+    def test_confrontation_only_at_alarm(self):
+        # (mode, reach alarm?, expected Bonsai confrontation calls)
+        for mode, alarm, calls in ((Mode.AWAY, False, 0), (Mode.NIGHT, False, 0),
+                                   (Mode.AWAY, True, 1), (Mode.NIGHT, True, 1)):
+            client = SlowClient("Step away from the door.", delay=0)
             p = self.pipeline(client, mode)
             if alarm:
                 photo, _ = self._to_alarm(p)
@@ -166,7 +168,9 @@ class Step3(unittest.TestCase):
                              if a.type == ActionType.TAKE_PHOTO)
             p.handle(events.photo_described(photo.id))
             p.wait_background(5)
-            self.assertEqual(client.calls, 0, (mode, alarm))
+            self.assertEqual(client.calls, calls, (mode, alarm))
+            said = [a.args.get("text") for a in self.emitted]
+            self.assertEqual("Step away from the door." in said, bool(calls), (mode, alarm))
 
     def test_late_confrontation_after_disarm_is_dropped(self):
         client = SlowClient("Step back, stranger in the jacket.", delay=5)
