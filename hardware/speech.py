@@ -161,8 +161,13 @@ class Pyttsx3TTS(TextToSpeech):
 
 
 class ArgmaxTTS(TextToSpeech):
-    """Mac: runs the argmax-cli TTS command from settings, then plays the wav.
-    command is a list; "{text}" and "{out_wav}" are filled in."""
+    """Mac: runs the argmax-cli TTS command from settings. command is a list;
+    "{text}" (and "{out_wav}") are filled in.
+
+    - With "{out_wav}": the command writes a wav, which is then played.
+    - Without it (the real Mac setup: `argmax-cli tts --text {text} --speaker aiden
+      --play`): the command streams to the speaker itself; we just wait for it.
+    Either way the mic stays muted until the process has finished playing."""
 
     def __init__(self, command: List[str], device: Any = None, gate: Optional[MicGate] = None,
                  timeout_s: float = 30, player=play_wav):
@@ -173,15 +178,28 @@ class ArgmaxTTS(TextToSpeech):
         return [part.replace("{text}", text).replace("{out_wav}", str(out_wav))
                 for part in self.command]
 
+    @property
+    def plays_itself(self) -> bool:
+        return not any("{out_wav}" in part for part in self.command)
+
+    def _timeout(self, text: str) -> float:
+        # with --play the process lives for the whole spoken line (~3 words/s)
+        return max(self.timeout_s, 10 + 0.15 * len(text))
+
+    def _run(self, cmd: List[str], text: str) -> bool:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self._timeout(text))
+        if proc.returncode != 0:
+            log.warning("argmax TTS failed (%s): %s", proc.returncode,
+                        (proc.stderr or proc.stdout)[-300:])
+        return proc.returncode == 0
+
     def _speak(self, text: str) -> bool:
         print(f"  SAY: {text}")
+        if self.plays_itself:
+            return self._run(self.build(text, Path("unused.wav")), text)
         with tempfile.TemporaryDirectory(prefix="faraday-tts-") as tmp:
             out = Path(tmp) / "say.wav"
-            cmd = self.build(text, out)
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout_s)
-            if proc.returncode != 0 or not out.exists():
-                log.warning("argmax TTS failed (%s): %s", proc.returncode,
-                            (proc.stderr or proc.stdout)[-300:])
+            if not self._run(self.build(text, out), text) or not out.exists():
                 return False
             self.player(out, self.device)
         return True
