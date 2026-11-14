@@ -5,6 +5,7 @@ in settings), the event queue, Dell's pipeline (modes, log, rules, brain) and
 the dashboard.
 
 Console keys (then Enter):
+  r          push-to-talk: start recording; Enter again stops and sends it to STT
   t <text>   typed speech (same as the dashboard text box)
   2 / 3      arm Away / Night        1   Home (asks for the passphrase)
   d / m      fake doorbell / fake motion wave (fake Flipper only)
@@ -49,8 +50,25 @@ def build_app(args: argparse.Namespace, settings) -> App:
     else:
         from hardware.camera import PhotoCamera
         camera = PhotoCamera.from_settings(settings)   # webcam + Bonsai vision
-    return App(settings, flipper, camera=camera, use_llm=not args.offline, mode=args.mode,
-               event_log=log, rules=rules, dashboard=not args.no_dashboard, port=args.port)
+    from hardware.audio import MicGate
+    from hardware.speech import PrintTTS, TextToSpeech
+    gate = MicGate()                     # the speaker mutes the mic while talking
+    speaker = PrintTTS(gate) if args.print_speech else TextToSpeech.from_settings(settings, gate)
+    app = App(settings, flipper, camera=camera, speaker=speaker, use_llm=not args.offline,
+              mode=args.mode, event_log=log, rules=rules, dashboard=not args.no_dashboard,
+              port=args.port)
+    app.voice = None
+    if not args.no_mic:
+        from hardware.audio import Recorder
+        from hardware.speech import SpeechToText
+        from integration.voice import Voice
+        app.voice = Voice(Recorder.from_settings(settings, gate),
+                          SpeechToText.from_settings(settings), app.submit)
+        if app.board is not None:
+            # Dell's dashboard (PR #10) shows a Talk button when this is set;
+            # each press toggles recording. Harmless on an older dashboard.
+            app.board.talk_hook = app.voice.toggle
+    return app
 
 
 def console(app: App, fake: bool) -> None:
@@ -63,9 +81,18 @@ def console(app: App, fake: bool) -> None:
             return
         key, _, rest = line.partition(" ")
         key = key.lower()
+        voice = getattr(app, "voice", None)
+        if voice is not None and voice.recording and key in ("", "r"):
+            voice.stop()
+            continue
         if key == "q":
             return
-        if key == "t" and rest.strip():
+        if key == "r":
+            if voice is None:
+                print("  mic is off (--no-mic)")
+            else:
+                voice.start()
+        elif key == "t" and rest.strip():
             app.submit(make_event(EventType.SPEECH_HEARD, SpeechHeardData(text=rest.strip()),
                                   Source.DASHBOARD))
         elif key in ("2", "3"):
@@ -88,7 +115,7 @@ def console(app: App, fake: bool) -> None:
         elif key == "s":
             print(f"  mode {modes.mode}, alert {modes.alert}, LED {app.flipper.current_color()}, "
                   f"flipper {'connected' if app.flipper.connected.is_set() else 'NOT connected'}")
-        elif key == "h" or line:
+        elif key == "h" or line:  # (empty Enter with no recording does nothing)
             print(__doc__.split("Console keys", 1)[1])
 
 
@@ -101,6 +128,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="py -m integration", description="Start Faraday")
     ap.add_argument("--fake", action="store_true", help="fake Flipper (no hardware)")
     ap.add_argument("--offline", action="store_true", help="skip Bonsai, rules-only brain")
+    ap.add_argument("--no-mic", action="store_true", help="no push-to-talk recording")
+    ap.add_argument("--print-speech", action="store_true", help="print speech instead of TTS")
     ap.add_argument("--standin-camera", action="store_true",
                     help="no webcam: answer take_photo with a fixed description")
     ap.add_argument("--mode", choices=sorted(Mode.ALL), default=Mode.HOME)
@@ -124,7 +153,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"Dashboard: {app.board.url}")
         if not args.no_browser:
             webbrowser.open(app.board.url)
-    print("Keys: t <text>, 1/2/3 home/away/night, d/m fake radio, s status, q quit")
+    print("Keys: r push-to-talk, t <text>, 1/2/3 home/away/night, d/m fake radio, s status, q quit")
     try:
         console(app, fake)
     finally:

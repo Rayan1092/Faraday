@@ -3,3 +3,4 @@ sounddevice
 soundfile
 opencv-python
 requests
+pyttsx3; sys_platform == "win32"
