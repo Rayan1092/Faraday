@@ -66,7 +66,7 @@ class GarbageFallsBack(unittest.TestCase):
 
     def test_visitor_always_gets_a_greeting(self):
         for reply in self.GARBAGE:
-            for mode in Mode.ALL:
+            for mode in (Mode.HOME, Mode.AWAY):  # night stays quiet
                 decision = make_brain(reply).decide(events.photo_described(None), mode)
                 self.assertEqual(decision.via, "fallback", reply)
                 self.assertEqual([a.type for a in decision.actions], [ActionType.SPEAK], reply)
