@@ -3,9 +3,9 @@ import json
 import unittest
 from pathlib import Path
 
-from shared import ActionType, ChangedBy, Mode, validate_event
+from shared import ActionType, Mode
 
-from brain.safety import ModeState, find_passphrase, is_disarm_request, redact
+from brain.safety import is_disarm_request
 from brain.tools import allowed_actions, tools_for
 from sim import events
 
@@ -84,7 +84,9 @@ class NoDisarmThroughBrain(unittest.TestCase):
             self.assertEqual(client.calls, [], text)
             self.assertEqual(decision.via, "code")
             self.assertEqual([a.type for a in decision.actions], [ActionType.SPEAK], text)
-            self.assertIn("passphrase", decision.actions[0].args["text"])
+            reply = decision.actions[0].args["text"]
+            self.assertEqual(reply, "I can't disarm. Only the owner can do that.")
+            self.assertNotIn("passphrase", reply.lower())  # never hint how to disarm
 
     def test_passphrase_never_reaches_the_model(self):
         client = FakeClient(tool_calls(("speak", {"text": "hi"})))
@@ -98,49 +100,13 @@ class NoDisarmThroughBrain(unittest.TestCase):
 
     def test_brain_code_has_no_route_to_disarm(self):
         brain_dir = Path(__file__).resolve().parents[1]
-        for name in ("core.py", "guard.py", "tools.py", "fallback.py", "bonsai.py"):
+        for name in ("core.py", "guard.py", "tools.py", "fallback.py", "bonsai.py", "safety.py"):
             source = (brain_dir / name).read_text(encoding="utf-8")
             self.assertNotIn("disarm_with_passphrase", source, name)
             self.assertNotIn("ModeState", source, name)
 
 
-class PassphraseGate(unittest.TestCase):
-    def test_only_the_passphrase_disarms(self):
-        for mode in ARMED:
-            state = ModeState(PASSPHRASE, mode)
-            for attempt in ("", "disarm", "blue pelican", "pelican blue seventeen",
-                            "blue pelicans seventeen", "[passphrase]"):
-                self.assertIsNone(state.disarm_with_passphrase(attempt))
-                self.assertEqual(state.mode, mode)
-            change = state.disarm_with_passphrase("Okay, Blue Pelican, seventeen.")
-            self.assertEqual(state.mode, Mode.HOME)
-            self.assertEqual(change.data["changed_by"], ChangedBy.PASSPHRASE)
-            self.assertEqual(validate_event(change.to_dict()), [])
-
-    def test_arm_cannot_disarm_and_brain_cannot_leave_armed(self):
-        state = ModeState(PASSPHRASE, Mode.AWAY)
-        for who in ChangedBy.ALL:
-            self.assertIsNone(state.arm(Mode.HOME, who))
-        self.assertIsNone(state.arm(Mode.NIGHT, ChangedBy.BRAIN))
-        self.assertIsNone(state.arm(Mode.NIGHT, ChangedBy.RULE))
-        self.assertEqual(state.mode, Mode.AWAY)
-        self.assertIsNotNone(state.arm(Mode.NIGHT, ChangedBy.DASHBOARD))
-        self.assertEqual(state.mode, Mode.NIGHT)
-        home = ModeState(PASSPHRASE)
-        change = home.arm(Mode.AWAY, ChangedBy.BRAIN)
-        self.assertEqual(validate_event(change.to_dict()), [])
-
-    def test_empty_passphrase_never_matches(self):
-        for secret in ("", "   ", "!!!"):
-            self.assertIsNone(find_passphrase("anything at all", secret))
-            self.assertIsNone(ModeState(secret, Mode.AWAY).disarm_with_passphrase(""))
-
-    def test_redact(self):
-        text, matched = redact("Hi, blue PELICAN seventeen. Disarm.", PASSPHRASE)
-        self.assertTrue(matched)
-        self.assertEqual(text, "Hi, [passphrase]. Disarm.")
-        self.assertEqual(redact("nothing here", PASSPHRASE), ("nothing here", False))
-
+class DisarmRequests(unittest.TestCase):
     def test_disarm_request_detection(self):
         self.assertTrue(is_disarm_request("Faraday, disarm"))
         self.assertTrue(is_disarm_request("turn off the alarm please"))

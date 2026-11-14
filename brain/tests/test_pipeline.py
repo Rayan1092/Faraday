@@ -1,0 +1,203 @@
+"""The whole path: modes -> log -> baseline -> brain, with fakes for Bonsai."""
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from shared import (ActionType, AlertLevel, EventType, Mode, Source,
+                    validate_action, validate_event)
+
+from brain.pipeline import FILLER, Pipeline
+from log import EventLog
+from modes import ModeState
+from sim import events
+
+from .helpers import PASSPHRASE, make_brain, tool_calls
+
+
+class Clock:
+    t = 0.0
+
+    def __call__(self):
+        return self.t
+
+
+class Recorder:
+    """Collects everything the pipeline emits, in order, and what the model saw."""
+
+    def __init__(self):
+        self.seen = []
+
+    def event(self, e):
+        self.seen.append(("event", e.type, e))
+
+    def action(self, a):
+        self.seen.append(("action", a.type, a))
+
+
+class SpyClient:
+    """Fake Bonsai that records what had already been emitted when it was called."""
+
+    def __init__(self, recorder, reply):
+        self.recorder, self.reply, self.calls = recorder, reply, []
+
+    def chat(self, messages, tools=None):
+        self.calls.append({"emitted_before": list(self.recorder.seen), "messages": messages})
+        if isinstance(self.reply, BaseException):
+            raise self.reply
+        return self.reply
+
+
+class PipelineTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.log_path = Path(self.tmp.name) / "events.jsonl"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def pipeline(self, reply=None, mode=Mode.HOME, use_client=True):
+        rec = Recorder()
+        brain = make_brain()
+        if use_client:
+            brain.client = SpyClient(rec, reply if reply is not None else {"content": ""})
+        self.clock = Clock()
+        modes = ModeState(PASSPHRASE, 60, mode, self.clock)
+        p = Pipeline(brain, modes, EventLog(self.log_path, PASSPHRASE),
+                     on_event=rec.event, on_action=rec.action, say=lambda _m: None)
+        return p, rec, brain.client
+
+    def logged(self):
+        return [json.loads(l) for l in self.log_path.read_text(encoding="utf-8").splitlines()]
+
+    # ---- baseline first ----------------------------------------------------
+
+    def test_motion_is_plain_code_and_never_waits_for_bonsai(self):
+        p, rec, client = self.pipeline(tool_calls(("speak", {"text": "Hello visitor!"})), Mode.NIGHT)
+        result = p.handle(events.motion())
+        self.assertEqual(client.calls, [])
+        self.assertEqual([(k, t) for k, t, _ in rec.seen],
+                         [("event", "motion"), ("event", "alert_changed"),
+                          ("action", "outlet_on"), ("action", "take_photo")])
+        self.assertEqual([a.source for a in result.actions], [Source.RULES, Source.RULES])
+        self.assertEqual(p.modes.alert, AlertLevel.WARNING)
+
+    def test_brain_repeats_are_not_duplicated(self):
+        p, _, _ = self.pipeline(tool_calls(("speak", {"text": FILLER}),
+                                           ("save_message", {"text": "Package for Sam."})), Mode.AWAY)
+        texts = [a.args.get("text") for a in p.handle(events.speech("Package for Sam.")).actions]
+        self.assertEqual(texts.count(FILLER), 1)
+
+    def test_baseline_survives_a_dead_or_crashing_brain(self):
+        for reply in (RuntimeError("down"), {"content": "garbage"}):
+            p, _, _ = self.pipeline(reply, Mode.AWAY)
+            self.assertIn(ActionType.TAKE_PHOTO, [a.type for a in p.handle(events.doorbell()).actions])
+        p, _, _ = self.pipeline(None, Mode.NIGHT)
+        p.brain.decide = lambda *a, **k: 1 / 0
+        types = [a.type for a in p.handle(events.motion()).actions]
+        self.assertEqual(types, [ActionType.OUTLET_ON, ActionType.TAKE_PHOTO])
+
+    def test_second_motion_within_window_raises_alarm(self):
+        p, _, _ = self.pipeline(None, Mode.AWAY, use_client=False)
+        p.handle(events.motion())
+        self.clock.t += 20
+        result = p.handle(events.motion())
+        alerts = [e.data["level"] for e in result.events if e.type == EventType.ALERT_CHANGED]
+        self.assertEqual(alerts, ["alarm"])
+
+    # ---- "One moment" filler -------------------------------------------------
+
+    def test_visitor_speech_gets_filler_before_the_model(self):
+        p, rec, client = self.pipeline(tool_calls(("save_message", {"text": "Package for Sam."})),
+                                       Mode.AWAY)
+        result = p.handle(events.speech("Package for Sam."))
+        self.assertEqual(result.actions[0].args, {"text": FILLER})
+        self.assertIn(("action", "speak"), [(k, t) for k, t, _ in client.calls[0]["emitted_before"]])
+        self.assertEqual(result.actions[1].type, ActionType.SAVE_MESSAGE)
+        # The model forgot to answer; plain code thanks the visitor.
+        self.assertEqual(result.actions[2].args, {"text": "Thank you. I saved your message."})
+
+    def test_doorbell_photo_gets_filler_but_motion_photo_does_not(self):
+        p, _, _ = self.pipeline(tool_calls(("speak", {"text": "Hello!"})), Mode.AWAY)
+        bell_photo = next(a for a in p.handle(events.doorbell()).actions if a.type == ActionType.TAKE_PHOTO)
+        texts = [a.args.get("text") for a in p.handle(events.photo_described(bell_photo.id)).actions]
+        self.assertEqual(texts, [FILLER, "Hello!", "Would you like to leave a message?"])
+        motion_photo = next(a for a in p.handle(events.motion()).actions if a.type == ActionType.TAKE_PHOTO)
+        texts = [a.args.get("text") for a in p.handle(events.photo_described(motion_photo.id)).actions]
+        self.assertEqual(texts, ["You're on camera. The owner has been alerted."])
+
+    def test_motion_photo_traced_even_after_a_busy_log(self):
+        p, _, client = self.pipeline(tool_calls(("speak", {"text": "Hello visitor!"})), Mode.NIGHT)
+        photo = next(a for a in p.handle(events.motion()).actions if a.type == ActionType.TAKE_PHOTO)
+        for i in range(12):  # push the motion event past the prompt's 10-line window
+            p.log.write(events.speech(f"filler {i}"))
+        calls = len(client.calls)
+        texts = [a.args["text"] for a in p.handle(events.photo_described(photo.id)).actions]
+        self.assertEqual(texts, ["You're on camera. The owner has been alerted."])
+        self.assertEqual(len(client.calls), calls)  # answered in code
+
+    def test_no_filler_when_no_model_call(self):
+        cases = [(Mode.HOME, events.speech("Turn on the porch light"), True),   # owner at home
+                 (Mode.AWAY, events.speech("Package for Sam."), False),        # offline
+                 (Mode.AWAY, events.speech("Faraday, disarm"), True)]          # answered in code
+        for mode, event, use_client in cases:
+            p, _, _ = self.pipeline(tool_calls(("speak", {"text": "ok"})), mode, use_client)
+            texts = [a.args.get("text") for a in p.handle(event).actions]
+            self.assertNotIn(FILLER, texts, event.data)
+
+    # ---- passphrase and mode changes ---------------------------------------
+
+    def test_spoken_passphrase_disarms_and_never_leaks(self):
+        p, rec, client = self.pipeline(tool_calls(("speak", {"text": "hi"})), Mode.NIGHT)
+        p.handle(events.motion())
+        result = p.handle(events.speech("Okay, Blue Pelican 17."))
+        self.assertEqual([e.type for e in result.events],
+                         [EventType.SPEECH_HEARD, EventType.MODE_CHANGED, EventType.ALERT_CHANGED])
+        self.assertEqual(result.events[0].data["text"], "Okay, [passphrase].")
+        self.assertEqual(result.events[1].caused_by, result.events[0].id)
+        self.assertEqual(result.events[2].caused_by, result.events[0].id)
+        self.assertEqual((p.modes.mode, p.modes.alert), (Mode.HOME, AlertLevel.NORMAL))
+        everything = (self.log_path.read_text(encoding="utf-8")
+                      + json.dumps([c["messages"] for c in client.calls])
+                      + repr([x for _, _, x in rec.seen])).lower()
+        self.assertNotIn("pelican", everything)
+
+    def test_typed_passphrase(self):
+        p, _, _ = self.pipeline(None, Mode.AWAY, use_client=False)
+        self.assertIsNone(p.owner_passphrase("wrong"))
+        self.assertFalse(self.log_path.exists())  # a wrong attempt is never logged
+        result = p.owner_passphrase("blue pelican seventeen")
+        self.assertEqual(result.events[0].data["changed_by"], "passphrase")
+        self.assertNotIn("pelican", self.log_path.read_text(encoding="utf-8"))
+
+    def test_brain_set_mode_goes_through_modes(self):
+        p, _, _ = self.pipeline(tool_calls(("set_mode", {"mode": "away"})), Mode.HOME)
+        result = p.handle(events.speech("I'm heading out."))
+        changes = [e for e in result.events if e.type == EventType.MODE_CHANGED]
+        self.assertEqual(changes[0].data["changed_by"], "brain")
+        self.assertEqual(p.modes.mode, Mode.AWAY)
+
+    def test_owner_mode_keys(self):
+        p, _, _ = self.pipeline(None, Mode.HOME, use_client=False)
+        self.assertIsNotNone(p.owner_set_mode(Mode.NIGHT))
+        self.assertIsNone(p.owner_set_mode(Mode.NIGHT))
+        self.assertIsNone(p.owner_set_mode(Mode.HOME))
+        self.assertEqual(p.modes.mode, Mode.NIGHT)
+
+    def test_everything_logged_is_valid(self):
+        p, _, _ = self.pipeline(tool_calls(("speak", {"text": "Hello."})), Mode.HOME)
+        p.start()
+        p.handle(events.speech("I'm heading out"))
+        p.owner_set_mode(Mode.NIGHT)
+        p.handle(events.doorbell())
+        p.handle(events.motion())
+        p.handle(events.speech("blue pelican seventeen"))
+        rows = self.logged()
+        self.assertGreater(len(rows), 8)
+        for row in rows:
+            check = validate_event if row["kind"] == "event" else validate_action
+            self.assertEqual(check(row), [], row)
+
+
+if __name__ == "__main__":
+    unittest.main()

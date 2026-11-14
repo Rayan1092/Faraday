@@ -63,12 +63,15 @@ _A = ActionType
 _SPEECH_COMMON = [_A.SPEAK, _A.SUMMARIZE_LOG, _A.ADD_RULE, _A.OUTLET_ON, _A.OUTLET_OFF]
 
 # Tools per (event type, mode). An empty list means no model call at all.
-# mode_changed is answered in plain code and never reaches Bonsai.
+# Photos and lights for doorbell/motion come from rules/baseline.py (plain code),
+# so the model is only asked for what it adds on top: the doorbell greeting,
+# on photo_described once the camera has looked, and conversations.
+# mode_changed and alert_changed are answered in plain code and never reach Bonsai.
 _BY_EVENT_MODE: Dict[str, Dict[str, List[str]]] = {
-    EventType.DOORBELL: {m: [_A.TAKE_PHOTO, _A.SPEAK] for m in Mode.ALL},
-    EventType.MOTION: {Mode.HOME: [],
-                       Mode.AWAY: [_A.TAKE_PHOTO, _A.SPEAK],
-                       Mode.NIGHT: [_A.OUTLET_ON, _A.TAKE_PHOTO]},
+    EventType.DOORBELL: {m: [] for m in Mode.ALL},
+    # Motion is fully plain code: baseline lights/photo, modes/ alert, and the
+    # "You're on camera" warning after the photo (core.py).
+    EventType.MOTION: {m: [] for m in Mode.ALL},
     EventType.PHOTO_DESCRIBED: {m: [_A.SPEAK] for m in Mode.ALL},
     # At home the owner is talking; when armed it is most likely a visitor.
     EventType.SPEECH_HEARD: {Mode.HOME: [_A.SET_MODE] + _SPEECH_COMMON,

@@ -13,6 +13,8 @@ decision.via        # "bonsai", "fallback" or "code"
 decision.elapsed_s  # Bonsai call time (also printed)
 ```
 
+`pipeline.py` wires everything for one event: `modes/` (passphrase, alerts) → `log/` → `rules/` baseline (emitted at once) → "One moment, please." for visitors → Bonsai's actions on top, minus repeats. Then `set_mode` goes back through `modes/`. `on_action` / `on_event` callbacks fire as soon as each thing exists. See PLAN.md Q21.
+
 | File | What it does |
 |---|---|
 | `core.py` | `Brain.decide()`: plain-code cases first, then Bonsai, then guard rails, then fallback. Builds the prompt |
@@ -20,10 +22,16 @@ decision.elapsed_s  # Bonsai call time (also printed)
 | `guard.py` | Parses tool calls (or JSON in the text) and drops unknown actions, tools that weren't offered, bad args, `set_mode` while armed, and rules that change mode |
 | `fallback.py` | Keyword rules used when Bonsai errors, times out, returns garbage or nothing usable |
 | `bonsai.py` | Stdlib HTTP client for LM Studio. Sends `reasoning_effort: "none"`, because with thinking on Bonsai spends `max_tokens` reasoning and never calls a tool |
-| `safety.py` | `ModeState` and the passphrase check, the **only** way back to Home. The brain never gets a `ModeState`. Moves to `modes/` later |
+| `pipeline.py` | `Pipeline.handle(event)`, the Dell-side entry point (PLAN.md Q21) |
+| `safety.py` | Spots disarm requests so they're answered in code. The passphrase check and mode state are in `modes/`, and the brain never gets them |
 | `settings.py` | Loads settings and picks the `llm.profile` |
 
-Answered in plain code without calling Bonsai: `mode_changed`, disarm requests ("disarm", "turn off the alarm", ...) → "I can't disarm. Say the passphrase.", any speech that contains the passphrase, and motion at Home.
+Answered in plain code without calling Bonsai: `mode_changed`, disarm requests ("disarm", "turn off the alarm", ...) → "I can't disarm. Only the owner can do that." (it never mentions the passphrase), any speech that contains the passphrase, `alert_changed`, doorbell (the baseline takes the photo; the greeting comes on `photo_described`) and all motion (baseline, alert and the warning after the photo).
+
+`photo_described` is traced back through `caused_by` (`photo_described` → `take_photo` → event, see `photo_cause()`):
+- **Doorbell photo:** Bonsai is asked to greet and offer to take a message. If its reply never mentions a message, code adds the offer. The fallback does the same.
+- **Motion photo while armed:** "You're on camera. The owner has been alerted.", in plain code, never the model.
+- **Motion photo at Home:** nothing.
 
 Tests (no LM Studio needed): `python -m unittest discover` from the repo root.
 
