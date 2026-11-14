@@ -10,7 +10,7 @@ import json
 from dataclasses import asdict, dataclass, field, fields, is_dataclass, MISSING
 from typing import Any, Dict, List, Optional
 
-from .common import Mode, Source, new_id, now_iso
+from .common import AlertLevel, Mode, Source, new_id, now_iso
 
 
 class EventType:
@@ -19,7 +19,9 @@ class EventType:
     SPEECH_HEARD = "speech_heard"
     PHOTO_DESCRIBED = "photo_described"
     MODE_CHANGED = "mode_changed"
-    ALL = frozenset({DOORBELL, MOTION, SPEECH_HEARD, PHOTO_DESCRIBED, MODE_CHANGED})
+    ALERT_CHANGED = "alert_changed"
+    ALL = frozenset({DOORBELL, MOTION, SPEECH_HEARD, PHOTO_DESCRIBED, MODE_CHANGED,
+                     ALERT_CHANGED})
 
 
 # ---- per-type data ---------------------------------------------------------
@@ -73,12 +75,31 @@ class ModeChangedData:
     reason: str = ""          # short human text for the dashboard
 
 
+@dataclass
+class AlertChangedData:
+    level: str                # AlertLevel.*
+    previous: str             # AlertLevel.*
+    reason: str = ""          # short human text for the dashboard
+
+
+# The only allowed (previous, level) steps. Going back to normal is emitted by
+# modes/ only from the passphrase disarm; that is enforced in modes/, since the
+# event itself does not carry the passphrase.
+ALERT_TRANSITIONS = frozenset({
+    (AlertLevel.NORMAL, AlertLevel.WARNING),   # first motion while armed
+    (AlertLevel.WARNING, AlertLevel.ALARM),    # motion again within 60 s
+    (AlertLevel.WARNING, AlertLevel.NORMAL),   # passphrase disarm
+    (AlertLevel.ALARM, AlertLevel.NORMAL),     # passphrase disarm
+})
+
+
 EVENT_DATA = {
     EventType.DOORBELL: DoorbellData,
     EventType.MOTION: MotionData,
     EventType.SPEECH_HEARD: SpeechHeardData,
     EventType.PHOTO_DESCRIBED: PhotoDescribedData,
     EventType.MODE_CHANGED: ModeChangedData,
+    EventType.ALERT_CHANGED: AlertChangedData,
 }
 
 
@@ -168,6 +189,14 @@ def validate_event(d: Dict[str, Any]) -> List[str]:
         if (data["mode"] == Mode.HOME and data["previous"] != Mode.HOME
                 and data["changed_by"] not in (ChangedBy.PASSPHRASE, ChangedBy.STARTUP)):
             errors.append("only the passphrase can disarm (go to home)")
+    if d["type"] == EventType.ALERT_CHANGED:
+        if d["source"] != Source.MODES:
+            errors.append("alert_changed must have source 'modes'")
+        for key in ("level", "previous"):
+            if data[key] not in AlertLevel.ALL:
+                errors.append(f"data.{key} '{data[key]}' is not an alert level")
+        if not errors and (data["previous"], data["level"]) not in ALERT_TRANSITIONS:
+            errors.append(f"alert cannot go from '{data['previous']}' to '{data['level']}'")
     if d["type"] == EventType.SPEECH_HEARD and not str(data["text"]).strip():
         errors.append("data.text is empty")
     return errors

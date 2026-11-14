@@ -25,11 +25,24 @@ def new_id(prefix: str) -> str:
 class Mode:
     HOME = "home"    # disarmed. Flipper LED green
     AWAY = "away"    # armed, nobody home. LED blue
-    NIGHT = "night"  # armed, people asleep. LED: see Open Questions in PLAN.md
+    NIGHT = "night"  # armed, people asleep. LED purple
     ALL = frozenset({HOME, AWAY, NIGHT})
     # Modes the AI (and rules) may switch to. HOME is missing on purpose:
     # going to HOME is disarming, and only the passphrase code in modes/ can do it.
     ARMED = frozenset({AWAY, NIGHT})
+
+
+class AlertLevel:
+    """Alert state, kept by modes/ next to the mode. Not an AI action.
+
+    First motion in Away/Night -> WARNING (LED yellow). Motion again within
+    60 s -> ALARM (LED red). Only the passphrase disarm returns to NORMAL,
+    and then the LED shows the mode colour again.
+    """
+    NORMAL = "normal"
+    WARNING = "warning"
+    ALARM = "alarm"
+    ALL = frozenset({NORMAL, WARNING, ALARM})
 
 
 class Source:

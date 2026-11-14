@@ -12,7 +12,7 @@
     "led": {
       "home": "green",
       "away": "blue",
-      "night": "blue",
+      "night": "purple",
       "warning": "yellow",
       "alarm": "red"
     }
@@ -31,6 +31,10 @@
       "key": "0x00C5AFAE",
       "merge_window_s": 5
     }
+  },
+
+  "alerts": {
+    "alarm_window_s": 60
   },
 
   "outlets": {

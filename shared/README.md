@@ -10,3 +10,5 @@ ev = make_event(EventType.DOORBELL, DoorbellData(key="0x00DEC608", packets=9, du
 act = make_action(ActionType.TAKE_PHOTO, {"reason": "doorbell"}, Source.BRAIN, caused_by=ev.id)
 print(ev.to_json())
 ```
+
+Tests: `python -m unittest shared.test_formats` from the repo root. They check every JSON example in FORMATS.md against the validators, so the doc and the code can't drift apart.
