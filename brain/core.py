@@ -141,9 +141,10 @@ class Brain:
         # Plain-code fix-ups on top of the model's answer. Each one is recorded, so the
         # benchmark can tell "Bonsai got it right" from "code fixed it".
         fixups: List[str] = []
-        before = len(actions)
-        actions = self._keep_promised_message(actions, event, mode, allowed)
-        if len(actions) != before:
+        had_message = any(a.type == ActionType.SAVE_MESSAGE for a in actions)
+        actions = self._keep_promised_message(actions, event, mode, allowed, recent)
+        if not had_message and any(a.type == ActionType.SAVE_MESSAGE for a in actions):
+            # Count it even when the number of actions didn't change (speech swapped out).
             fixups.append("saved the message Bonsai promised")
         actions, fixed = self._match_arm_words(actions, event, mode, allowed)
         if fixed:
@@ -236,19 +237,31 @@ class Brain:
                               f"corrected to {want} from the owner's words")
 
     def _keep_promised_message(self, actions: List[Action], event: Event, mode: str,
-                               allowed: List[str]) -> List[Action]:
-        """Bonsai sometimes says "I'll take that message" but never saves it (3/10 in
-        the benchmark). If it promised, save the visitor's words in plain code."""
+                               allowed: List[str], recent: Iterable[Any] = ()) -> List[Action]:
+        """Save the visitor's words in plain code when Bonsai didn't:
+        - Bonsai said "I'll take that message" but never saved it (3/10 in the benchmark).
+        - Faraday had just asked "Would you like to leave a message?" and Bonsai answered
+          the visitor's reply with another greeting (NV live run, demo step 3). Then the
+          reply *is* the message, unless the visitor declined."""
         if (event.type != EventType.SPEECH_HEARD or ActionType.SAVE_MESSAGE not in allowed
                 or any(a.type == ActionType.SAVE_MESSAGE for a in actions)):
             return actions
-        if not any(a.type == ActionType.SPEAK and "message" in a.args["text"].lower()
-                   for a in actions):
-            return actions
         text = str(event.data.get("text", ""))[:500]
-        extra, _ = filter_actions([{"type": ActionType.SAVE_MESSAGE,
-                                    "args": {"text": text, "sender": "visitor"}}],
-                                  event, mode, allowed)
+        promised = any(a.type == ActionType.SPEAK and "message" in a.args["text"].lower()
+                       for a in actions)
+        last = _last_said(recent).strip()
+        # an offer is a question about a message ("Would you like to leave a message?"),
+        # not a confirmation ("Thank you. I saved your message.")
+        offered = ("message" in last.lower() and last.endswith("?")
+                   and not _DECLINE.match(text))
+        if not (promised or offered):
+            return actions
+        items = [{"type": ActionType.SAVE_MESSAGE, "args": {"text": text, "sender": "visitor"}}]
+        if not promised:
+            # Bonsai's own line ignored the message (e.g. a second greeting): replace it.
+            actions = [a for a in actions if a.type != ActionType.SPEAK]
+            items.append(fb._speak(fb.MESSAGE_SAVED))
+        extra, _ = filter_actions(items, event, mode, allowed)
         return extra + actions
 
     def _confirm_mode(self, actions: List[Action], event: Event, mode: str,
@@ -295,6 +308,18 @@ def _mode_reply(event: Event) -> List[RawItem]:
     text = {Mode.AWAY: "Away mode on. I'll watch the door.",
             Mode.NIGHT: "Night mode on. Sleep well."}.get(new)
     return [fb._speak(text)] if text else []
+
+
+_DECLINE = re.compile(r"^\s*(no|nope|nah|not now|no thanks?|no thank you)\b[\s,.!]*(thanks?|thank you)?[\s.!]*$", re.I)
+
+
+def _last_said(recent: Iterable[Any]) -> str:
+    """The last thing Faraday said, from the recent log entries."""
+    for entry in reversed(list(recent)):
+        if (isinstance(entry, dict) and entry.get("kind") == "action"
+                and entry.get("type") == ActionType.SPEAK):
+            return str((entry.get("args") or {}).get("text", ""))
+    return ""
 
 
 def photo_cause(event: Event, recent: Iterable[Any]) -> str:
