@@ -17,6 +17,7 @@ Faraday is an offline AI home guard built for the Cornell Local AI Hackathon. Su
 - **The only LLM is Bonsai 2 (2B/4B/9B)**, through LM Studio's OpenAI-compatible server. Keep prompts short, because long context uses a lot of RAM.
 - **Speech uses Argmax OSS on the Mac.** STT is `argmax-cli serve` (OpenAI-compatible `/v1/audio/transcriptions`, default port 50060). TTS runs the argmax-cli TTS command as a subprocess. On Windows, use a stand-in behind the same interface.
 - The AI chooses only from: `set_mode`, `outlet_on`, `outlet_off`, `speak`, `take_photo`, `save_message`, `summarize_log`, `add_rule`. **The AI can never disarm.** Disarming is a passphrase check in plain code in `modes/`.
+- Alert rule (in `modes/`, not the AI): the first motion in Away or Night sets `warning`. Motion again within 60 s sets `alarm`. Only the passphrase disarm returns it to `normal`. Every change sends an `alert_changed` event.
 
 ## Hardware facts
 
@@ -26,7 +27,7 @@ Faraday is an offline AI home guard built for the Cornell Local AI Hackathon. Su
 - Motion: Princeton 24-bit key `0x00C5AFAE`, about 17 packets per trigger, merged into one event.
 - Send: `subghz tx_from_file /ext/subghz/<name>.sub 10 0` with `outlet1_on/off`, `outlet2_on/off`, `outlet3_on/off`. The Flipper can't listen while sending, so pause rx, send, then resume rx.
 - Outlet 1 is the porch light, outlet 2 the living room lamp, outlet 3 spare.
-- Flipper LED: green Home, blue Away, yellow warning, red alarm.
+- Flipper LED: green Home, blue Away, purple Night, yellow warning, red alarm. An alert colour overrides the mode colour.
 
 ## Ownership
 
@@ -45,3 +46,4 @@ Don't edit another laptop's folders. If you need a change there, add a note to O
 - Copy `config/settings.example.json` to `config/settings.json` and edit it. Never commit `settings.json`; it holds the passphrase.
 - Runtime output goes in `captures/` and `logs/`, both gitignored. Note that `log/` is code and `logs/` is data.
 - `shared/` is stdlib-only. Build messages with `make_event` / `make_action`, which validate them.
+- Format tests: `python -m unittest shared.test_formats`. They also check every JSON example in FORMATS.md, so run them after any change to `shared/` or FORMATS.md.

@@ -14,7 +14,8 @@ This file is the source of truth for every message passed between modules. The m
 - File paths are relative to the repo root and use forward slashes on every OS, for example `captures/photos/20261114-160312.jpg`.
 - Sim events look exactly like real ones except `source: "sim"`. No code may treat a sim event differently.
 
-Modes: `home` (disarmed, green LED), `away` (armed, blue LED), `night` (armed, LED still to be decided, see PLAN.md Open Questions).
+Modes: `home` (disarmed, green LED), `away` (armed, blue LED), `night` (armed, purple LED).
+Alert levels: `normal` (LED shows the mode colour), `warning` (yellow LED), `alarm` (red LED). An alert colour always overrides the mode colour.
 Outlets: `porch_light` (outlet 1), `living_room_lamp` (outlet 2), `spare` (outlet 3).
 
 ---
@@ -27,7 +28,7 @@ Envelope:
 |---|---|---|
 | `kind` | `"event"` | |
 | `id` | string | `evt_xxxxxxxx` |
-| `type` | string | one of the five types below |
+| `type` | string | one of the six types below |
 | `timestamp` | string | ISO 8601, see above |
 | `source` | string | see above |
 | `caused_by` | string or null | |
@@ -127,7 +128,7 @@ A camera snapshot plus a short description from Bonsai vision. `caused_by` is th
 
 ### mode_changed
 
-Sent by `modes/` after every mode change. `integration/` listens for it to set the Flipper LED. Going from `away` or `night` to `home` is only valid with `changed_by: "passphrase"`. The one exception is `startup`, the first event after launch.
+Sent by `modes/` after every mode change. `integration/` listens for it to set the Flipper LED, unless an alert colour is showing (see `alert_changed`). Going from `away` or `night` to `home` is only valid with `changed_by: "passphrase"`. The one exception is `startup`, the first event after launch.
 
 | data key | type | default | notes |
 |---|---|---|---|
@@ -145,6 +146,37 @@ Sent by `modes/` after every mode change. `integration/` listens for it to set t
   "source": "modes",
   "caused_by": "act_2a7710be",
   "data": {"mode": "away", "previous": "home", "changed_by": "brain", "reason": "Owner said they are leaving."}
+}
+```
+
+### alert_changed
+
+Sent by `modes/` when the alert level changes. `source` must be `modes`, and the validator rejects any other value. The AI and rules can't change the alert level, because no action exists for it.
+
+The rule, implemented in `modes/`:
+- The first `motion` while the mode is `away` or `night` moves the alert from `normal` to `warning` (yellow LED).
+- Another `motion` within 60 s of the last one moves it from `warning` to `alarm` (red LED). The window is `alerts.alarm_window_s` in settings.
+- If the next motion comes later than that, the alert stays at `warning` and the 60 s window restarts. No event is sent, because the level doesn't change.
+- Only the passphrase disarm returns the alert to `normal`. That disarm sends `mode_changed` (to `home`, `changed_by: "passphrase"`) and then `alert_changed` (to `normal`), and both have the same `caused_by`. The LED then shows the mode colour again.
+- Motion in `home` mode and doorbell presses never change the alert level. Switching between `away` and `night` doesn't reset it.
+
+The validator allows only these steps: `normal→warning`, `warning→alarm`, `warning→normal`, `alarm→normal`. Because the event doesn't carry the passphrase, `modes/` is responsible for sending `→normal` only from the passphrase disarm.
+
+| data key | type | default | notes |
+|---|---|---|---|
+| `level` | string | required | `normal`, `warning`, `alarm` |
+| `previous` | string | required | the level before this change |
+| `reason` | string | `""` | short text for the dashboard |
+
+```json
+{
+  "kind": "event",
+  "id": "evt_4d8a20bf",
+  "type": "alert_changed",
+  "timestamp": "2026-11-14T23:41:05.180-05:00",
+  "source": "modes",
+  "caused_by": "evt_8c21d7f0",
+  "data": {"level": "warning", "previous": "normal", "reason": "Motion at the porch in night mode."}
 }
 ```
 

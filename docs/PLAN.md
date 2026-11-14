@@ -16,10 +16,10 @@ What we want judges to remember: **useful, private, safe**. It's useful because 
 | 1 | Owner: "Faraday, I'm heading out." | `speech_heard` → brain → `set_mode away` → LED blue → speaks "Away mode on. I'll watch the door." | Voice to action |
 | 2 | Visitor presses the **doorbell** | `doorbell` → `take_photo` → `photo_described` ("person holding a box") → speaks "Nobody can come to the door. Want to leave a message?" | Radio + vision |
 | 3 | Visitor: "Package for Sam, I left it by the side door." | `speech_heard` → `save_message` → appears on the dashboard | Messages |
-| 4 | Owner (remotely staged): switch to **Night**. Wave at the **motion sensor** | `motion` → `outlet_on porch_light` (real lamp turns on) → LED yellow | Control |
-| 5 | Owner: "From now on, when there's motion at night, turn on the living room lamp too." | `add_rule` → rule shown on the dashboard. Wave again and both lights come on | Learns rules |
+| 4 | Owner (remotely staged): switch to **Night** (LED purple). Wave at the **motion sensor** | `motion` → `outlet_on porch_light` (real lamp turns on) + `alert_changed warning` → LED yellow | Control |
+| 5 | Owner: "From now on, when there's motion at night, turn on the living room lamp too." Wave again within 60 s | `add_rule` → rule shown on the dashboard. Both lights come on. Second motion within 60 s → `alert_changed alarm` → LED red | Learns rules |
 | 6 | Someone says "Faraday, disarm" / "turn off the alarm" | Brain can't. Speaks "I can't disarm. Say the passphrase." | Safety |
-| 7 | Owner says the passphrase | `modes/` checks it in code → `mode_changed home (passphrase)` → LED green | Safety |
+| 7 | Owner says the passphrase | `modes/` checks it in code → `mode_changed home (passphrase)` + `alert_changed normal` → LED green | Safety |
 | 8 | Owner: "What happened while I was out?" | `summarize_log` → spoken summary + dashboard card | Memory |
 
 Backup: if the mic or STT fails on stage, the dashboard has a text box that sends the same `speech_heard` event. If the Flipper fails, `sim/` sends the same events and we say so out loud.
@@ -37,7 +37,7 @@ Backup: if the mic or STT fails on stage, the dashboard has a text box that send
            hardware actions <-------------------+-------------> software actions
    outlet_on/off, speak, take_photo                  set_mode (modes/), save_message (log/),
    run by integration/ on hardware/                  summarize_log (brain/), add_rule (rules/)
-                                                     modes/ emits mode_changed -> integration sets LED
+                                                     modes/ emits mode_changed + alert_changed -> integration sets LED
 ```
 
 ### Seams (where the two laptops meet)
@@ -46,7 +46,7 @@ These are the only cross-team calls. Everything crossing them is a `shared.Event
 
 1. **NV → Dell:** `integration/` calls `brain.handle_event(event) -> list[Action]` for every event, including sim events. It also hands every event and action to `log/`.
 2. **Dell → NV:** for each returned action in `ActionType.HARDWARE`, `integration/` runs it. Dell code runs the other actions itself.
-3. **Dell → NV:** `modes/` publishes `mode_changed` through the bus, and `integration/` sets the Flipper LED from it.
+3. **Dell → NV:** `modes/` publishes `mode_changed` and `alert_changed` through the bus. `integration/` sets the Flipper LED from them: the alert colour (yellow/red) while the alert is not `normal`, otherwise the mode colour (green/blue/purple).
 4. **Camera → vision:** `take_photo` makes `hardware/camera` save a JPG. `integration/` passes the path to `brain.describe_photo(path, caused_by)`, which returns a `photo_described` event to put back on the bus.
 
 Exact function names may change by agreement. Write the change here first.
@@ -62,8 +62,8 @@ Exact function names may change by agreement. Write the change here first.
 
 | Step | NV laptop (hardware/, integration/) | Dell laptop (brain/, modes/, log/, rules/, dashboard/, sim/) |
 |---|---|---|
-| 1 | Flipper client: open the port from settings, start rx, parse Princeton lines, doorbell detection (hold) and motion merging → `doorbell`/`motion` events | `sim/` CLI that sends any event. `log/` JSONL writer/reader. `modes/` state + passphrase check + `mode_changed` |
-| 2 | Flipper tx with pause rx → send → resume. LED control. Bus + `integration/` main loop with stub brain | `brain/` Bonsai client, short prompt, parse `{"actions": [...]}`, validate. `rules/` engine |
+| 1 | Flipper client: open the port from settings, start rx, parse Princeton lines, doorbell detection (hold) and motion merging → `doorbell`/`motion` events | `sim/` CLI that sends any event. `log/` JSONL writer/reader. `modes/` state + passphrase check + `mode_changed`. Alert state (warning/alarm, 60 s window) + `alert_changed` |
+| 2 | Flipper tx with pause rx → send → resume. LED control from `mode_changed` + `alert_changed`. Bus + `integration/` main loop with stub brain | `brain/` Bonsai client, short prompt, parse `{"actions": [...]}`, validate. `rules/` engine |
 | **Join 1** | **Real radio into Dell code.** Real doorbell press and motion wave → events in `logs/events.jsonl` and `modes/` reacts. Target: **Sat 18:00** | |
 | 3 | Mic record + STT client (Argmax on Mac, stand-in on Windows) → `speech_heard`. TTS `speak` + playback | `dashboard/` local page: mode, live log, photos, messages, text box fallback. Big fonts for the projector |
 | 4 | Camera snapshot → `captures/photos/`. Hardware action executor (outlets, speak, take_photo) | `brain.describe_photo` (Bonsai vision). `summarize_log`. `save_message` |
@@ -93,8 +93,8 @@ Add new ones at the bottom. When one is settled, write the answer next to it and
 2. **Vision.** Which Bonsai 2 build accepts images in LM Studio (2B/4B/9B, which quant)? The rules allow no other model, so if none does, we need a plan B (for example, describe only from sensor context).
 3. **Argmax TTS command.** The exact argmax-cli TTS subcommand and flags are not confirmed. The settings example has a guess. Does it write a WAV that we play, or does it play directly?
 4. **Argmax STT server.** The exact `argmax-cli serve` start command and model on the Mac, plus warm-up time before the first request.
-5. **Night LED colour.** The spec only lists green/blue/yellow/red. The settings example uses blue for Night. Agree on a final colour.
-6. **Alarm.** When does red happen (motion in Away? doorbell at Night?), and what clears it (passphrase only, proposed)? Do we need an `alarm_raised` event? Proposed shape: `data: {"level": "warning"|"alarm", "reason": str}`. This needs a FORMATS.md change by agreement.
+5. ~~**Night LED colour.**~~ **Closed 2026-11-14:** purple. Updated in CLAUDE.md and `settings.example.json`.
+6. ~~**Alarm.**~~ **Closed 2026-11-14:** new `alert_changed` event (`source: modes`, `data: {level, previous, reason}`). The first motion in Away or Night sets `warning` (yellow). Motion again within 60 s sets `alarm` (red). Only the passphrase disarm returns to `normal`. Doorbell presses don't change the alert. Details are in FORMATS.md.
 7. **Speech trigger.** Proposal: push-to-talk (a key or a dashboard button) for demo reliability. The alternatives are a "Faraday" wake word or always-on with VAD.
 8. **Passphrase matching.** How tolerant should it be of STT errors? Proposal: lowercase, strip punctuation, exact match. The text is redacted before log and brain. A typed passphrase in the dashboard is the fallback.
 9. **Action results.** Should a failed action (Flipper busy, app open, camera missing) produce an event so the dashboard can show it? A possible new type: `action_failed`.
