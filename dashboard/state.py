@@ -15,7 +15,8 @@ from brain.fallback import CANT_DISARM
 
 Entry = Dict[str, Any]
 
-DEFAULT_LED = {"home": "green", "away": "blue", "night": "purple",
+# The dashboard's own status colours. Not the Flipper LED, which stays off except on alarm.
+STATUS_COLORS = {"home": "green", "away": "blue", "night": "purple",
                "warning": "yellow", "alarm": "red"}
 OUTLET_NAMES = {Outlet.PORCH_LIGHT: "Porch light", Outlet.LIVING_ROOM_LAMP: "Living room lamp",
                 Outlet.SPARE: "Spare outlet"}
@@ -23,12 +24,12 @@ FEED_SIZE = 25
 TALK_SIZE = 8
 
 
-def status(mode: str, alert: str, led: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-    """The colour the Flipper LED shows: an alert beats the mode."""
-    led = {**DEFAULT_LED, **(led or {})}
+def status(mode: str, alert: str, colors: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """The dashboard's status colour: an alert beats the mode."""
+    colors = {**STATUS_COLORS, **(colors or {})}
     if alert in (AlertLevel.WARNING, AlertLevel.ALARM):
-        return {"color": led[alert], "label": alert.upper()}
-    return {"color": led.get(mode, "green"), "label": mode.upper()}
+        return {"color": colors[alert], "label": alert.upper()}
+    return {"color": colors.get(mode, "green"), "label": mode.upper()}
 
 
 DISARMED_FOR_S = 20      # how long the "passphrase accepted" banner stays
@@ -37,7 +38,7 @@ NIGHT_BELL_FOR_S = 120   # how long the quiet night doorbell banner stays
 
 
 def build_state(entries: Iterable[Entry], mode: str, alert: str,
-                rules: Iterable[Dict[str, Any]] = (), led: Optional[Dict[str, str]] = None,
+                rules: Iterable[Dict[str, Any]] = (), colors: Optional[Dict[str, str]] = None,
                 network: Optional[Dict[str, Any]] = None, now: Optional[datetime] = None,
                 newest_photo: Optional[Dict[str, Any]] = None,
                 ) -> Dict[str, Any]:
@@ -112,7 +113,7 @@ def build_state(entries: Iterable[Entry], mode: str, alert: str,
     return {
         "mode": mode,
         "alert": alert,
-        "status": status(mode, alert, led),
+        "status": status(mode, alert, colors),
         "offline": (network or {}).get("offline", True),
         "network": network or {"offline": True, "detail": "not checked"},
         "banner": banner(mode, alert, now or datetime.now().astimezone(),

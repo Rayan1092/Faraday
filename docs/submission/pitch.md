@@ -12,7 +12,6 @@ Lines in quotes are what you say. Lines in *italics* are what you do. Keep it lo
 - LM Studio running the 9B with Parallel above 1. Argmax running. Wi-Fi still on, so you can turn it off in front of them.
 - Practice the timing once. Bonsai takes a few seconds per answer. **[TBD: real timings on the Mac mini]**
 - **Hold the doorbell for 1 to 2 seconds.** A quick tap doesn't register. If it still doesn't fire, press "Ring doorbell" on the dashboard and say so.
-- **If the Flipper LED stays dark,** point at the dashboard instead. Its colour bar shows exactly what the LED should. **[TBD: NV's LED fix]**
 - **If the second wave doesn't turn everything red,** wave again within the minute. If it still doesn't, keep going and say the alarm needs a second trigger. **[TBD: NV's second-wave fix]**
 
 ---
@@ -41,15 +40,15 @@ We wanted the useful parts of a smart home guard without giving our doorstep awa
 
 Matches the demo script in docs/PLAN.md. If time is short, skip beats 3 and 8.
 
-1. **Leaving (step 1).** Speaker: "Faraday, I'm heading out." Faraday says Away mode is on, and the LED turns blue.
+1. **Leaving (step 1).** Speaker: "Faraday, I'm heading out." Faraday says Away mode is on, and the dashboard turns blue.
    "It understood that from plain speech, and it armed the house."
 2. **Doorbell (step 2).** *Driver rings.* Faraday takes a photo, the description shows on the dashboard, and it tells the visitor nobody can come to the door. **[TBD: real camera photo test on the Mac mini. The 4B does see images]**
 3. **Message (step 3).** Driver, as the visitor: "Package for Sam, I left it by the side door." Faraday says "One moment, please", then saves it, and it shows up on the dashboard.
-4. **Night and motion (step 4).** *Click Night on the dashboard (purple). Driver waves at the sensor.* The real porch lamp turns on, and the LED goes yellow.
+4. **Night and motion (step 4).** *Click Night on the dashboard (purple). Driver waves at the sensor.* The real porch lamp turns on, and the dashboard goes amber.
    "The lights don't wait for the AI. That part is plain code, so it always happens."
-5. **Rule by voice (step 5).** Speaker: "When there's motion at night, turn on the living room lamp too." Faraday: "Okay. I'll remember that." The rule appears on the dashboard. *Driver waves again within a minute.* Both lamps come on and everything goes red. Faraday says one line to the "intruder" about what it sees.
+5. **Rule by voice (step 5).** Speaker: "When there's motion at night, turn on the living room lamp too." Faraday: "Okay. I'll remember that." The rule appears on the dashboard. *Driver waves again within a minute.* Both lamps come on, the dashboard goes red, and the Flipper's LED flashes red with three buzzes. Faraday says one line to the "intruder" about what it sees.
 6. **Try to disarm (step 6).** Driver: "Faraday, turn off the alarm." Faraday: "I can't disarm. Only the owner can do that."
-7. **Passphrase (step 7).** Speaker says the passphrase quietly into the mic, or types it in the dashboard's Home box. The LED turns green.
+7. **Passphrase (step 7).** Speaker says the passphrase quietly into the mic, or types it in the dashboard's Home box. The dashboard turns green and the Flipper goes quiet.
    This is the key line, say it slowly: **"AI for understanding, code for safety.** The AI picks from a menu of eight actions, and none of them is disarm. Only the passphrase disarms the house, and that check is plain code. The AI never even sees the passphrase."
 8. **Summary (step 8).** Speaker: "What happened while I was out?" Faraday gives a short spoken summary, and it shows on the dashboard.
 

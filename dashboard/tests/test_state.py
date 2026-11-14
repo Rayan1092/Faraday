@@ -22,8 +22,19 @@ class Status(unittest.TestCase):
         self.assertEqual(status("night", "warning"), {"color": "yellow", "label": "WARNING"})
         self.assertEqual(status("away", "alarm"), {"color": "red", "label": "ALARM"})
 
-    def test_led_colours_from_settings(self):
+    def test_colours_can_be_overridden_but_ignore_led_settings(self):
         self.assertEqual(status("night", "normal", {"night": "blue"})["color"], "blue")
+
+    def test_dashboard_colours_dont_follow_the_flipper_led_setting(self):
+        from dashboard import Dashboard
+        settings = {"flipper": {"led": {"home": "off", "away": "off", "night": "off",
+                                        "warning": "off", "alarm": "red"}},
+                    "dashboard": {"host": "127.0.0.1", "port": 0}}
+        board = Dashboard.from_settings(object(), settings)
+        try:
+            self.assertIsNone(board.colors)
+        finally:
+            board.httpd.server_close()
 
 
 class Feed(unittest.TestCase):

@@ -13,7 +13,7 @@ print(board.url)
 Or from the sim: `python -m sim --dashboard` (add `--offline` to run without LM Studio).
 
 **What it shows** (one screen, no scrolling, readable from the back of a room):
-- **Mode** in huge letters. The status colour matches the Flipper LED, and an alert beats the mode: yellow warning, red alarm.
+- **Mode** in huge letters, with the dashboard's own status colour: green Home, blue Away, purple Night, and an alert beats the mode (amber warning, red alarm). The Flipper's LED is separate: it stays off and only flashes red on an alarm.
 - An **Offline** badge, and a banner for an alarm or a quiet doorbell at night.
 - **Camera:** the latest photo and its description, plus why it was taken.
 - **Heard & said:** speech in, Faraday's speech out. The passphrase shows as `[passphrase]`.

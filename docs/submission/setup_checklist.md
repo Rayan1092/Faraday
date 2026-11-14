@@ -36,7 +36,7 @@ Print this or keep it open on a phone. Do it top to bottom. Anything marked **[T
 
 - [ ] **Hold** the doorbell for 1 to 2 seconds. Taps don't register. The dashboard shows "Doorbell pressed".
 - [ ] Wave at the motion sensor. You should see one motion event (about 17 packets).
-- [ ] Click Away on the dashboard and wave. The porch light turns on and the LED goes yellow.
+- [ ] Click Away on the dashboard and wave. The porch light turns on and the dashboard turns amber. The Flipper's LED stays off, because it only lights up on an alarm.
 - [ ] Say "Faraday, disarm". It refuses.
 - [ ] Type the passphrase in the dashboard's Home box. It goes green.
 - [ ] Clear the rules on the dashboard (✕), so the rule demo starts fresh.
@@ -56,9 +56,8 @@ Keep talking. Say what happened in one sentence, switch, and move on.
 |---|---|---|
 | Doorbell doesn't register | No "Doorbell pressed" banner | Hold it longer and closer to the Flipper. Still nothing: press **Ring doorbell** on the dashboard (bottom row) and say "the sensor's flaky, so here's the same event from the dashboard". The log marks it as coming from the dashboard |
 | Motion sensor | No motion event | Wave closer. Or press **Motion** on the dashboard, same line as above |
-| Flipper unplugged or frozen | No events, LED stuck | Replug it. The driver reconnects by itself in about 8 s. Close any app on the Flipper first. Still dead: switch to the backup demo (last row) |
+| Flipper unplugged or frozen | No events arrive | Replug it. The driver reconnects by itself in about 8 s. Close any app on the Flipper first. Still dead: switch to the backup demo (last row) |
 | Outlet doesn't switch | Dashboard says ON, lamp stays off | Check the lamp's own switch and plug. The dashboard shows what Faraday sent, so point at that |
-| Flipper LED stays dark | No colour on the Flipper | Known bug, NV is fixing it **[TBD]**. The dashboard's colour bar shows the same mode and alert colour, so point at that |
 | Second wave doesn't raise the alarm | Stays yellow after waving twice | Known bug, NV is fixing it **[TBD]**. Wave again within the minute. Otherwise keep going with the warning |
 | Mic or speech-to-text | Nothing heard | Type the sentence in the dashboard's text box. It sends the exact same event |
 | Speaker or text-to-speech | No sound | Turn up the volume or check the output device. Everything Faraday says still shows under "Heard & said" on the dashboard |
