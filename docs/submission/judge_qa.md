@@ -38,6 +38,9 @@ In Away mode we assume whoever is talking is a visitor. They can leave a message
 
 ## Small models
 
+**How do you know it works, not just in one lucky demo?**
+We wrote a benchmark: `python -m brain.bench` runs every demo moment 10 times against the real model, plus reworded versions it never saw. We check what the model picked on its own, what Faraday finally did after our checks, and whether anything unsafe got through. We saved the before and after numbers in `docs/bench/`.
+
 **How do you keep a small model reliable?**
 A few things:
 - **Fewer choices.** Each event only gets the few actions that make sense for it, six at most. Doorbell and motion get none, because code handles them.
@@ -48,7 +51,11 @@ A few things:
 - **Code does the must-happen stuff.** The lights, photos and alarm lines never depend on the model at all.
 
 **Does it actually make mistakes?**
-Yes. In our early tests the 4B picked the right action on its own about 5 out of 7 times. It kept trying to switch to Home mode, and our checks dropped that every time. We expect the 9B to do better, but the code safety net stays either way. **[TBD: how the 9B does on the Mac mini]**
+Yes. We built a benchmark that runs every demo moment 10 times against the model.
+
+Before tuning, the 4B was right on its own 61% of the time. Its worst habit: when you said "I'm heading out" it tried to switch to Home mode, 10 times out of 10. Our checks dropped that every time.
+
+The fix was simple. Instead of an "arm" tool with a mode to fill in, it gets two buttons: "arm away" and "arm night". After that and some sharper descriptions, it was right on its own in 136 of 140 runs (97%). That includes sentences we never tuned on, like "I'm off to work, see you later". Code fixed the rest except one, and zero unsafe actions got through. **[TBD: how the 9B does on the Mac mini]**
 
 ## Bonsai and Argmax
 
@@ -60,7 +67,7 @@ Bonsai 2 runs locally in LM Studio. It does the parts that need understanding:
 - writing a one-line warning that mentions what the camera sees,
 - summarizing what happened while you were out.
 
-**[TBD: whether Bonsai also describes the camera photos. See Open Question 2]**
+It also describes the camera photo. We checked the 4B really looks at the image: given a test picture of a green triangle on black, it said exactly that. Asked the same thing with no image, it made something up. Big photos are slow, so we shrink them to 640 px first. **[TBD: real camera photos on the Mac mini]**
 
 **What does Argmax do?**
 Speech. It turns what you say into text, and turns Faraday's replies into audio, on the Mac itself. **[TBD: confirm both work on the Mac mini]**
@@ -71,7 +78,7 @@ The whole point is that your front door doesn't leave your house. And the hackat
 ## Speed
 
 **How fast is it?**
-The lights, photos and alarm happen right away, because they're plain code. Bonsai answers took about 4 to 14 seconds on the laptop we tested with the 4B. While Faraday waits on Bonsai for a visitor, it says "One moment, please", so there's no awkward silence. The alarm warning line is asked for in the background, so nothing waits for it. **[TBD: timings on the Mac mini with the 9B]**
+The lights, photos and alarm happen right away, because they're plain code. In the benchmark, a Bonsai answer took 2.5 seconds on average and 5.7 seconds at worst on the laptop with the 4B. Our very first tests, before tuning and with thinking still on, were much slower. While Faraday waits on Bonsai for a visitor, it says "One moment, please", so there's no awkward silence. The alarm warning line is asked for in the background, so nothing waits for it. **[TBD: timings on the Mac mini with the 9B]**
 
 **Why is it that slow?**
 It's a model running on a small computer. Even a tiny request took a couple of seconds on the test laptop. That's why anything urgent is plain code.

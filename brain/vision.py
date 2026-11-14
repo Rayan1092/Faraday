@@ -30,6 +30,34 @@ IMAGE_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
 MAX_IMAGE_BYTES = 4_000_000
 
 
+MAX_SIDE = 640  # px. On the NV laptop the 4B took ~3.5 s for 256 px, ~15 s for 1280x720,
+                # and timed out (30 s) on 1920x1080, so photos are shrunk before sending.
+
+
+def shrink(data: bytes, mime: str, max_side: int = MAX_SIDE) -> "tuple[bytes, str]":
+    """Downscale to max_side if OpenCV is installed (it's in requirements.txt for the
+    camera). Without it, or if anything goes wrong, the original is sent."""
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except ImportError:
+        return data, mime
+    try:
+        img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            return data, mime
+        h, w = img.shape[:2]
+        if max(h, w) <= max_side:
+            return data, mime
+        scale = max_side / float(max(h, w))
+        img = cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale))),
+                         interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        return (buf.tobytes(), "image/jpeg") if ok else (data, mime)
+    except Exception:
+        return data, mime
+
+
 def repo_path(path: Union[str, Path]) -> str:
     """captures/photos/x.jpg style: relative to the repo root, forward slashes."""
     p = Path(path)
@@ -74,6 +102,7 @@ class Describer:
         if not data or len(data) > MAX_IMAGE_BYTES:
             self.log(f"[vision] skipped {p.name}: not a .jpg/.png under 4 MB")
             return None
+        data, mime = shrink(data, mime)
         url = f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
         messages = [{"role": "user", "content": [
             {"type": "text", "text": VISION_PROMPT},

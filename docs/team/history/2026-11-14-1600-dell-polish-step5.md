@@ -21,11 +21,13 @@
     - wiring notes for NV in `2026-11-14-1545-dell-seams-for-nv.md`
     - README and submission docs updated with NV's real radio numbers from PR #5
     - questions with defaults in `QUESTIONS.md`
-- How it was tested: `python -m unittest discover` passes 184/184. The benchmark ran live against `ternary-bonsai-2-4b@q2_0` on the NV laptop. Dashboard screenshots taken with headless Edge. The backup demo ran offline end to end.
+- Benchmark (4B q2_0, NV laptop): before tuning, 55/90 right on its own (61%). After tuning, 136/140 (97%) on its own and 139/140 (99%) final, including 5 reworded phrases never used for tuning. 0 unsafe. 2.5 s average, 5.7 s worst.
+- Vision: the 4B q2_0 really looks at images in LM Studio (a generated green triangle, described correctly). It's slow on big images (1080p timed out), so `describe_photo` shrinks to 640 px with OpenCV. OpenCV isn't installed on this laptop (the install was blocked), so that path is only unit-tested.
+- How it was tested: `python -m unittest discover` passes 186/186. The benchmark ran live against `ternary-bonsai-2-4b@q2_0` on the NV laptop. Dashboard screenshots taken with headless Edge. The backup demo ran offline end to end.
 - What's broken or faked:
   - The 9B profile is unmeasured.
-  - Bonsai vision is untested on a real camera photo.
+  - Vision is untested on a real camera photo, and the OpenCV shrink hasn't run live.
   - The doorbell is flaky on real hardware (NV): use the dashboard button.
   - Numbers marked [TBD] in the docs still need the Mac mini.
 - Next step: NV wires Join 1 with the seams note. On the Mac, run `python -m brain.bench --profile mac` and follow `docs/bench/9B-NEXT.md`.
-- Open Questions: see `docs/team/history/QUESTIONS.md` (six, each with the default used).
+- Open Questions: see `docs/team/history/QUESTIONS.md` (nine, each with the default used).

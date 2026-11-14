@@ -41,7 +41,7 @@ Matches the demo script in docs/PLAN.md. If time is short, skip beats 3 and 8.
 
 1. **Leaving (step 1).** Speaker: "Faraday, I'm heading out." Faraday says Away mode is on, and the LED turns blue.
    "It understood that from plain speech, and it armed the house."
-2. **Doorbell (step 2).** *Driver rings.* Faraday takes a photo, the description shows on the dashboard, and it tells the visitor nobody can come to the door. **[TBD: needs working vision, Open Question 2]**
+2. **Doorbell (step 2).** *Driver rings.* Faraday takes a photo, the description shows on the dashboard, and it tells the visitor nobody can come to the door. **[TBD: real camera photo test on the Mac mini. The 4B does see images]**
 3. **Message (step 3).** Driver, as the visitor: "Package for Sam, I left it by the side door." Faraday says "One moment, please", then saves it, and it shows up on the dashboard.
 4. **Night and motion (step 4).** *Click Night on the dashboard (purple). Driver waves at the sensor.* The real porch lamp turns on, and the LED goes yellow.
    "The lights don't wait for the AI. That part is plain code, so it always happens."
@@ -53,7 +53,7 @@ Matches the demo script in docs/PLAN.md. If time is short, skip beats 3 and 8.
 
 ## 3:15 How we used Bonsai and Argmax (25 s)
 
-"Bonsai is small, so we built around that. Every event only gets a few choices. Thinking is off so it answers fast. And code checks every answer: wrong actions get dropped, and if it fails, simple rules take over. We use it where understanding matters: talking to visitors, turning your sentence into a rule, and summarizing the day. Argmax gives us speech in and out, on the same Mac, no cloud."
+"Bonsai is small, so we built around that. Every event only gets a few choices. Thinking is off so it answers fast. And code checks every answer: wrong actions get dropped, and if it fails, simple rules take over. We benchmarked it: it went from 61% right on its own to 97% after tuning, and nothing unsafe ever got through. We use it where understanding matters: talking to visitors, turning your sentence into a rule, and summarizing the day. Argmax gives us speech in and out, on the same Mac, no cloud."
 
 ## 3:40 Close (20 s)
 

@@ -6,7 +6,7 @@ It answers the door, takes messages, turns on lights, learns simple rules when y
 
 We built it for the Cornell Local AI Hackathon.
 
-> Status: the software runs end to end in our simulator, with 184 passing tests. The Flipper radio driver works on real hardware (on a Windows laptop). The full run on the Mac mini is next. Anything marked **[TBD]** hasn't been proven on real hardware yet.
+> Status: the software runs end to end in our simulator, with 186 passing tests. The Flipper radio driver works on real hardware (on a Windows laptop). The full run on the Mac mini is next. Anything marked **[TBD]** hasn't been proven on real hardware yet.
 
 ## Why offline
 
@@ -52,7 +52,7 @@ The lights and photos come from code, not the AI, so they happen even if the mod
 
 **Speech.** Argmax runs speech-to-text and text-to-speech on the Mac. Faraday hears you through the mic and answers through the speaker. **[TBD: confirm the Argmax commands on the Mac]**
 
-**The camera.** When something happens, Faraday takes a photo and gets a one-line description of it. **[TBD: which Bonsai build can describe images, see Open Question 2 in docs/PLAN.md]**
+**The camera.** When something happens, Faraday takes a photo, shows it on the dashboard right away, and asks Bonsai for a one-line description. We checked that the 4B Bonsai in LM Studio really looks at images: it correctly described a test picture of a green triangle. Big photos are slow (a full HD image timed out), so we shrink them to 640 px first. **[TBD: real camera photos on the Mac mini]**
 
 **Safety: AI for understanding, code for safety.**
 - The AI can arm the house but can never disarm it. Disarming only happens when someone says or types the passphrase, and that check is plain code.
@@ -112,8 +112,8 @@ We'd rather be honest about these:
 - **The outlets work the same way.** Someone nearby could replay the "light on" code.
 - **Our cheap doorbell is flaky.** It has to be held for a second or two, because a quick tap never registers. Late in testing, even holds only got through about 1 time in 3, with or without our code. We're swapping in a new doorbell. **[TBD: new doorbell results]** Until then, the dashboard has a "Ring doorbell" button that sends the same event, and the log marks it as coming from the dashboard.
 - **The radio goes deaf for a moment.** It can't hear sensors for about 1.2 seconds while it switches an outlet, and about 2.5 seconds during the alarm buzz.
-- **Small models make mistakes.** The 4B model sometimes picks the wrong action. It kept trying to switch to Home mode, and sometimes forgot to offer a message. Our code catches that: wrong actions get dropped, and missing pieces get added by plain code. The 9B should do better, but code is still the safety net.
-- **It's not instant.** On a laptop running the 4B model, a Bonsai call took about 4 to 14 seconds. So lights and photos never wait for the AI, and Faraday says "One moment, please" to visitors while it thinks. **[TBD: timings on the Mac mini with the 9B]**
+- **Small models make mistakes.** Before tuning, the 4B picked the right action on its own only 61% of the time. It kept trying to switch to Home mode when you said "I'm heading out". We built a benchmark (`python -m brain.bench`) and tuned the tools and prompts with it. After tuning it was right on its own 97% of the time (136 of 140 runs), including reworded sentences we never tuned on. Code fixed most of the rest, for 99% final. Nothing unsafe got through in any run. Full numbers are in [docs/bench/](docs/bench/README.md). It's still a small model, so code stays the safety net.
+- **It's not instant.** On a laptop running the 4B model, a Bonsai call took 2.5 seconds on average and 5.7 seconds at worst in the benchmark. So lights and photos never wait for the AI, and Faraday says "One moment, please" to visitors while it thinks. **[TBD: timings on the Mac mini with the 9B]**
 - **The passphrase is spoken out loud.** Anyone who hears you say it could use it. We also accept a typed passphrase on the dashboard, and wrong guesses get locked out for 30 seconds after 5 tries.
 - **One house, one door, one camera.** It's a demo setup, not a full security system. It doesn't call anyone or send alerts off the box.
 

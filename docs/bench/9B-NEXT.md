@@ -19,5 +19,9 @@ Keep whichever profile scores higher. If it's a tie, keep the faster one. Both r
 4. **Fewer code fix-ups.** Look at the `fixups` in the bench JSON. If the 9B never needs "saved the message Bonsai promised" or "corrected to away", that's a good line for the judges. Keep the fix-ups on for the demo anyway.
 5. **Shorter answers.** Lower `max_tokens` from 200 to 120. Faster, as long as no case starts falling back.
 6. **Parallel.** With LM Studio Parallel at 2, run the demo with `python -m sim --demo --dashboard` and check the alarm confrontation arrives in a few seconds, even while a summary is running.
-7. **Vision.** If any Bonsai build on the Mac accepts images, point `llm.vision_model` at it and try `describe_photo` on a real camera photo (PLAN.md Open Question 2). If it works, add a bench case for it.
+7. **Vision.** The 4B q2_0 already accepts images in LM Studio (PLAN.md Open Question 2). On the Mac:
+   - Run `pip install -r requirements.txt`, so OpenCV is there and `describe_photo` shrinks photos to 640 px.
+   - Try a real camera photo with the 9B and time it.
+   - If the 9B is slow at vision, point `llm.vision_model` at the 4B for photos only.
+   - If it works, add a bench case for it.
 8. **Harder visitor lines.** Add a couple of tricky cases to `brain/bench.py`: a visitor at night asking "is anyone home?", and a visitor giving a phone number. Check the 9B saves the message and never offers to let them in.
