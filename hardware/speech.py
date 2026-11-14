@@ -119,35 +119,44 @@ def _has_pyttsx3() -> bool:
         return False
 
 
+_PYTTSX3_CODE = (
+    "import sys, pyttsx3\n"
+    "e = pyttsx3.init()\n"
+    "if sys.argv[2]: e.setProperty('rate', int(sys.argv[2]))\n"
+    "if len(sys.argv) > 3: e.save_to_file(sys.argv[1], sys.argv[3])\n"
+    "else: e.say(sys.argv[1])\n"
+    "e.runAndWait()\n")
+
+
 class Pyttsx3TTS(TextToSpeech):
-    """Offline Windows stand-in (SAPI5). The engine is created on first use in
-    the calling thread: pyttsx3 must stay on one thread (integration's speech worker)."""
+    """Offline Windows stand-in (SAPI5).
 
-    def __init__(self, gate: Optional[MicGate] = None, rate: Optional[int] = None):
+    Each line runs in its own short Python process: an in-process pyttsx3
+    engine hung in runAndWait() on the second use from a worker thread
+    (seen on the NV laptop), which would silence Faraday. A process per line
+    costs ~0.4 s and a hang is killed by the timeout instead."""
+
+    def __init__(self, gate: Optional[MicGate] = None, rate: Optional[int] = None,
+                 python: Optional[str] = None):
         super().__init__(gate)
-        self.rate = rate
-        self._engine = None
+        import sys
+        self.rate, self.python = rate, python or sys.executable
 
-    def _get(self):
-        if self._engine is None:
-            import pyttsx3
-            self._engine = pyttsx3.init()
-            if self.rate:
-                self._engine.setProperty("rate", int(self.rate))
-        return self._engine
+    def _run(self, text: str, *extra: str) -> bool:
+        timeout = 10 + 0.15 * len(text)        # generous: ~3 words/s speech
+        proc = subprocess.run([self.python, "-c", _PYTTSX3_CODE, text, str(self.rate or ""), *extra],
+                              capture_output=True, text=True, timeout=timeout)
+        if proc.returncode != 0:
+            log.warning("pyttsx3 failed: %s", (proc.stderr or "")[-300:])
+        return proc.returncode == 0
 
     def _speak(self, text: str) -> bool:
         print(f"  SAY: {text}")
-        engine = self._get()
-        engine.say(text)
-        engine.runAndWait()
-        return True
+        return self._run(text)
 
     def render(self, text: str, path: Path) -> Path:
         """Write speech to a wav instead of the speaker (tests)."""
-        engine = self._get()
-        engine.save_to_file(text, str(path))
-        engine.runAndWait()
+        self._run(text, str(path))
         return path
 
 

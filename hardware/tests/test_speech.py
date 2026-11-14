@@ -188,12 +188,23 @@ class TTS(Base):
     @unittest.skipUnless(_has_pyttsx3() and sys.platform.startswith("win"), "pyttsx3 on Windows")
     def test_pyttsx3_renders_offline_to_file(self):
         from hardware.speech import Pyttsx3TTS
-        out = Pyttsx3TTS().render("Someone is at the door.", self.dir / "tts.wav")
-        for _ in range(50):
-            if out.exists() and out.stat().st_size > 1000:
-                break
-            time.sleep(0.1)
-        self.assertGreater(sf.info(str(out)).duration, 0.5)
+        tts = Pyttsx3TTS()
+        outs, errors = [], []
+
+        def worker():   # same as integration's speech worker: several lines, one thread
+            try:
+                for i in range(3):
+                    outs.append(tts.render(f"Line {i}. Someone is at the door.", self.dir / f"tts{i}.wav"))
+            except Exception as e:
+                errors.append(e)
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join(60)
+        self.assertFalse(t.is_alive(), "pyttsx3 hung")      # in-process engine hung on line 2
+        self.assertEqual(errors, [])
+        for out in outs:
+            self.assertGreater(sf.info(str(out)).duration, 0.5)
 
 
 class PushToTalk(Base):
