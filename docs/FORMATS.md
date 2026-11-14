@@ -363,7 +363,11 @@ When a rule fires, `rules/` sends each `then` item as an action with `source: "r
 
 ## What the LLM returns
 
-Keep the prompt short. Bonsai sees the current mode, the new event, and a few recent log lines, and replies with only this:
+Keep the prompt short. Bonsai sees the current mode, the new event, and a few recent log lines.
+
+**Main path: tool calling.** `brain/` offers Bonsai one OpenAI-style tool per allowed action through LM Studio, and reads its tool calls. Arming is shown as two tools with no arguments (`arm_away`, `arm_night`), which `brain/` turns back into `set_mode`. Each tool call becomes one `{"type", "args"}` item, the same as below.
+
+**Also accepted:** the same list written as JSON in the reply text, because small models sometimes do that:
 
 ```json
 {"actions": [{"type": "take_photo", "args": {"reason": "doorbell"}}, {"type": "outlet_on", "args": {"outlet": "porch_light"}}]}
