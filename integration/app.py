@@ -17,13 +17,15 @@ from __future__ import annotations
 import logging
 import queue
 import threading
-from typing import Any, Callable, Dict, List, Optional
+import time
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from shared import Action, ActionType, Event, EventType, Mode
 
 from brain.pipeline import Pipeline
 
 log = logging.getLogger("integration")
+REPEAT_SKIP_S = 60.0   # same outlet, same on/off within this window: not sent again
 
 
 class PrintSpeaker:
@@ -54,6 +56,8 @@ class App:
         self._photos: "queue.Queue[Optional[Action]]" = queue.Queue()
         self._threads: List[threading.Thread] = []
         self._stopping = threading.Event()
+        self._outlet_sent: Dict[str, Tuple[str, float]] = {}   # outlet -> (on/off, when)
+        self._sent_lock = threading.Lock()
         self.flipper.on_event = self.submit
         self.pipeline = pipeline or Pipeline.from_settings(
             settings, use_llm=use_llm, log=event_log, mode=mode, rules=rules,
@@ -105,6 +109,16 @@ class App:
     def _on_action(self, action: Action) -> None:
         self.out(f"  ACTION {action.type:<13} {_brief(action.args)}  [{action.source}]")
         if action.type in (ActionType.OUTLET_ON, ActionType.OUTLET_OFF):
+            outlet = action.args.get("outlet")
+            now = time.monotonic()
+            with self._sent_lock:
+                last = self._outlet_sent.get(outlet)
+                if last and last[0] == action.type and now - last[1] < REPEAT_SKIP_S:
+                    # The baseline re-sends outlet_on on every armed motion; each
+                    # send blinds rx ~1.2 s, so don't repeat what was just done.
+                    self.out(f"  [flipper] skip repeat {action.type} {outlet}")
+                    return
+                self._outlet_sent[outlet] = (action.type, now)
             try:
                 fut = self.flipper.execute(action)
                 fut.add_done_callback(lambda f, a=action: self._check_send(f, a))
@@ -121,6 +135,8 @@ class App:
         except Exception as e:  # cable dropped mid-send
             ok, out = False, [repr(e)]
         if not ok:
+            with self._sent_lock:               # failed: allow the next attempt
+                self._outlet_sent.pop(action.args.get("outlet"), None)
             self.out(f"  [flipper] {action.type} {action.args.get('outlet')} FAILED: {out[-1:]}")
 
     # ---- workers -----------------------------------------------------------------
