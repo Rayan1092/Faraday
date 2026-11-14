@@ -4,6 +4,7 @@ Opens on the doorbell, shows the Wi-Fi going off within the first 10 seconds, th
 
 **Before you shoot**
 - Shoot it on the real hardware. The sim is only a backup.
+- Wait for NV's two fixes (the LED in the full app, and the alarm on a second wave) before shooting the Night and alarm shots. **[TBD]**
 - Use a throwaway passphrase for the shoot, then change it. Or bleep it in the edit. Anyone who watches the video hears it.
 - Cutting out wait time is fine. Don't speed up footage, and don't stage anything Faraday didn't actually do.
 - Two phones: one on the door and the lights, one on the Mac mini and the dashboard. Screen-record the dashboard too.

@@ -14,7 +14,7 @@ The motion sensor sends 17 copies of its code over about 2 seconds every time it
 Cheap remote outlets listen for their own 433 MHz codes. We saved those codes on the Flipper, and it replays the right one. The Flipper can't listen and send at the same time, so we pause listening, send, then start listening again. On the real hardware, listening was back about 1.2 seconds after each send. A motion event arrived 1.3 seconds after an outlet switched, so we don't miss much.
 
 **Does the radio work for real?**
-Yes, on the Flipper plugged into a Windows laptop: doorbell events, motion events, switching outlet 1, the LED colours and the alarm buzz. If the USB cable drops, it reconnects in about 8 seconds. We have 25 tests that replay real radio captures. **[TBD: the same on the Mac mini]**
+Yes, on a Windows laptop. First the driver on its own: doorbell events, motion events, switching outlet 1, the LED colours and the alarm buzz. If the USB cable drops, it reconnects in about 8 seconds. Then the whole app: real sensors through the Flipper into our software, Bonsai deciding, and the real lamps switching. That run found two bugs that are being fixed: the LED stays off while the full app runs, and a second wave doesn't raise the alarm yet. **[TBD: both fixes, and the same on the Mac mini]**
 
 **Why is the doorbell sometimes slow to react?**
 Our cheap doorbell is flaky. It has to be held for a second or two, and late in testing even holds got through only about 1 time in 3. Raw Flipper listening with none of our code was just as bad, so it's the doorbell, not our code. We're swapping it for a new one. **[TBD: new doorbell results]**
@@ -100,7 +100,7 @@ That's a real weakness. Someone could overhear it. You can also type it on the d
 We wrote everything in this repo: the pipeline, the safety checks, the modes and alarm, the rules, the log, the dashboard and the simulator. We used the Flipper's normal firmware, LM Studio, the Bonsai model and Argmax.
 
 **How did you test without hardware?**
-We built a simulator that sends the exact same events the hardware does. We have 269 automated tests that run without any hardware or AI. That's 199 for the core software, plus 70 for the hardware drivers and the app wiring, which replay real radio captures and use fake devices. Then we tested against a real Bonsai model, and then on the real devices. **[TBD: real hardware results]**
+We built a simulator that sends the exact same events the hardware does. We have 269 automated tests that run without any hardware or AI. That's 199 for the core software, plus 70 for the hardware drivers and the app wiring, which replay real radio captures and use fake devices. Then we tested against a real Bonsai model, and then on the real devices. On a Windows laptop the radio, Bonsai and the real lamps worked together. Two bugs from that run are being fixed (the LED in the full app, and the alarm on a second wave). **[TBD: full run on the Mac mini]**
 
 **Why "Faraday"?**
 A Faraday cage keeps signals out. This keeps your data in.

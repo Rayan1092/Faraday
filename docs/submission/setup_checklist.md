@@ -58,6 +58,8 @@ Keep talking. Say what happened in one sentence, switch, and move on.
 | Motion sensor | No motion event | Wave closer. Or press **Motion** on the dashboard, same line as above |
 | Flipper unplugged or frozen | No events, LED stuck | Replug it. The driver reconnects by itself in about 8 s. Close any app on the Flipper first. Still dead: switch to the backup demo (last row) |
 | Outlet doesn't switch | Dashboard says ON, lamp stays off | Check the lamp's own switch and plug. The dashboard shows what Faraday sent, so point at that |
+| Flipper LED stays dark | No colour on the Flipper | Known bug, NV is fixing it **[TBD]**. The dashboard's colour bar shows the same mode and alert colour, so point at that |
+| Second wave doesn't raise the alarm | Stays yellow after waving twice | Known bug, NV is fixing it **[TBD]**. Wave again within the minute. Otherwise keep going with the warning |
 | Mic or speech-to-text | Nothing heard | Type the sentence in the dashboard's text box. It sends the exact same event |
 | Speaker or text-to-speech | No sound | Turn up the volume or check the output device. Everything Faraday says still shows under "Heard & said" on the dashboard |
 | Camera | No photo | The flow keeps going with "No description available". Say so and move on |
