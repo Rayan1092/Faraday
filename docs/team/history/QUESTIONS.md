@@ -13,3 +13,10 @@ Each has the default I used, so work continued. Answer inline and I'll adjust.
 4. **`sensors.motion.merge_window_s` (5) is unused.**
    - The driver merges bursts with `flipper.burst_gap_s` (1.5).
    - Default: left in the file, since removing it wasn't in the PR #5 decisions. Remove it?
+5. **Vision model (PLAN Open Question 2).**
+   - Found: `ternary-bonsai-2-4b@q2_0` accepts images in LM Studio. It described a saved test image correctly ("A brown box labeled PACKAGE…") in 3–7 s.
+   - Default: vision uses the same `llm` profile as the brain, with `llm.vision_timeout_s` (falls back to `timeout_s`).
+   - Please confirm on the Mac that the 9B accepts images too.
+6. **Camera on by default.**
+   - Default: `py -m integration` uses the real webcam plus vision. Use `--standin-camera`, or `"camera": {"enabled": false}`, for a fixed fake description.
+   - If vision fails, the photo is kept and the description is "Photo saved." (`source: "camera"`).
