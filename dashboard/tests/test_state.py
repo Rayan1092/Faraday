@@ -94,6 +94,21 @@ class Feed(unittest.TestCase):
         self.assertEqual(feed[0]["level"], "warn")
         self.assertEqual(feed[-1]["text"], "Mode NIGHT (dashboard)")
 
+    def test_activity_merges_the_photo_pair_and_skips_speech(self):
+        bell = events.doorbell()
+        photo = make_action(ActionType.TAKE_PHOTO, {"reason": "doorbell while away"}, Source.RULES,
+                            caused_by=bell.id)
+        pending = make_action(ActionType.TAKE_PHOTO, {"reason": "motion at night"}, Source.RULES)
+        self.write(bell, photo, events.photo_described(photo.id, "A courier with a box."),
+                   make_action(ActionType.SPEAK, {"text": "Hello."}, Source.BRAIN), pending)
+        s = self.state()
+        texts = [f["text"] for f in s["feed"]]
+        self.assertEqual(texts, ["Photo: motion at night",          # not described yet: kept
+                                 "A courier with a box.",           # the pair, merged
+                                 "Doorbell pressed"])
+        self.assertEqual(s["feed"][1]["detail"], "Photo · doorbell while away")
+        self.assertEqual(s["talk"][-1]["text"], "Hello.")          # speech still in Heard & said
+
     def test_quiet_night_doorbell_notice(self):
         self.write(*self.modes.arm(Mode.NIGHT, ChangedBy.DASHBOARD), events.doorbell())
         s = self.state()

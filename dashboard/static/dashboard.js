@@ -106,6 +106,7 @@
     const toast = $("toast");
     if (!banner) {
       toast.classList.remove("show");
+      document.body.classList.remove("toast-on");
       toastKey = null;
       return;
     }
@@ -116,7 +117,12 @@
     $("toast-text").textContent = banner.text;
     toast.className = "toast " + banner.kind;
     // next frame, so the slide-in plays even when the kind changes
-    requestAnimationFrame(() => toast.classList.add("show"));
+    requestAnimationFrame(() => {
+      toast.classList.add("show");
+      // make room in the activity panel, so no entry sits half-hidden under the toast
+      document.body.style.setProperty("--toast-h", toast.offsetHeight + "px");
+      document.body.classList.add("toast-on");
+    });
   }
 
   function renderPhoto(photo) {
@@ -167,18 +173,27 @@
     }
   }
 
+  let lastTalk = [];
+  const TALK_MAX = 3;
+
   function renderTalk(talk) {
+    lastTalk = talk;
     const list = $("talk");
     list.replaceChildren();
     if (!talk.length) list.append(el("li", "empty", "Nothing yet."));
-    for (const t of talk) {
+    for (const t of talk.slice(-TALK_MAX)) {
       const li = el("li", t.who);
       const who = el("div", "who", t.who === "heard" ? "Heard" : "Faraday");
       who.append(el("time", "", t.time));
       li.append(icon(t.who === "heard" ? "mic" : "speaker"), who, el("div", "line", t.text));
       list.append(li);
     }
+    // Only whole entries: drop the oldest until the rest fit, so nothing is cut in half.
+    while (list.children.length > 1 && list.scrollHeight > list.clientHeight + 1) {
+      list.firstElementChild.remove();
+    }
   }
+  window.addEventListener("resize", () => renderTalk(lastTalk));
 
   const FEED_ICON = {
     doorbell: "door", motion: "motion", speech_heard: "mic", photo_described: "camera",
@@ -195,7 +210,9 @@
       const li = el("li", f.level + " " + f.kind);
       const node = el("span", "node");
       node.append(icon(FEED_ICON[f.type] || "activity"));
-      li.append(node, el("span", "text", f.text), el("time", "", f.time));
+      const text = el("span", "text", f.text);
+      if (f.detail) text.append(el("span", "detail", f.detail));
+      li.append(node, text, el("time", "", f.time));
       list.append(li);
     }
   }

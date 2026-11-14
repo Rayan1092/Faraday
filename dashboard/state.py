@@ -58,6 +58,7 @@ def build_state(entries: Iterable[Entry], mode: str, alert: str,
     last_disarm = last_refusal = last_night_bell = last_bell = None
     bell_mode = Mode.HOME
     described: Dict[str, Dict[str, Any]] = {}  # photo_path -> its photo_described view
+    described_photos = set()  # take_photo ids that already have their photo_described
 
     for e in entries:
         kind, typ = e.get("kind"), e.get("type")
@@ -107,8 +108,15 @@ def build_state(entries: Iterable[Entry], mode: str, alert: str,
         elif typ == ActionType.SUMMARIZE_LOG:
             summary_ids.add(e.get("id"))
 
-        feed.append({"time": clock, "kind": kind, "type": typ, "source": e.get("source"),
-                     "text": describe(e, info), "level": level, "id": e.get("id")})
+        item = {"time": clock, "kind": kind, "type": typ, "source": e.get("source"),
+                "text": describe(e, info), "level": level, "id": e.get("id")}
+        if typ == EventType.PHOTO_DESCRIBED:
+            # One entry per photo: the description, with why it was taken underneath.
+            reason = photo_reason.get(str(e.get("caused_by")), "")
+            item["text"] = str(info.get("description", "")) or "Photo taken."
+            item["detail"] = "Photo" + (f" · {reason}" if reason else "")
+            described_photos.add(str(e.get("caused_by")))
+        feed.append(item)
 
     return {
         "mode": mode,
@@ -118,7 +126,7 @@ def build_state(entries: Iterable[Entry], mode: str, alert: str,
         "network": network or {"offline": True, "detail": "not checked"},
         "banner": banner(mode, alert, now or datetime.now().astimezone(),
                          last_disarm, last_refusal, last_night_bell, last_bell, bell_mode),
-        "feed": list(reversed(feed[-FEED_SIZE:])),  # newest first
+        "feed": list(reversed(_activity(feed, described_photos)[-FEED_SIZE:])),  # newest first
         "talk": talk[-TALK_SIZE:],                    # oldest first, like a chat
         "photo": _photo_view(photo, described, newest_photo),
         "lights": [{"id": k, "name": OUTLET_NAMES[k], "on": v} for k, v in lights.items()],
@@ -128,6 +136,14 @@ def build_state(entries: Iterable[Entry], mode: str, alert: str,
         "rules": [rule_view(r) for r in rules],
         "version": entries[-1].get("id") if entries else None,
     }
+
+
+def _activity(feed: List[Dict[str, Any]], described_photos: set) -> List[Dict[str, Any]]:
+    """The activity timeline: Faraday's own speech lives in "Heard & said", and a
+    take_photo that already has its description is shown as that one entry."""
+    return [f for f in feed
+            if f["type"] != ActionType.SPEAK
+            and not (f["type"] == ActionType.TAKE_PHOTO and str(f.get("id")) in described_photos)]
 
 
 def _when(entry: Entry) -> Optional[datetime]:
