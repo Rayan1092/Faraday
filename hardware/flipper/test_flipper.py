@@ -187,6 +187,13 @@ class DriverLogic(unittest.TestCase):
         with self.assertLogs("hardware.flipper", level="INFO"):
             self.assertEqual(self.feed_packets([(1.0, "0x00DEC708")]), [])
 
+    def test_on_burst_sees_unknown_keys_for_learn_mode(self):
+        seen = []
+        self.fl.on_burst = lambda b, name: seen.append((b.key, name))
+        with self.assertLogs("hardware.flipper", level="INFO"):
+            self.feed_packets([(1.0, "0x00ABCDE1"), (5.0, "0x00C5AFAE")])
+        self.assertEqual(seen, [("0x00ABCDE1", None), ("0x00C5AFAE", "motion")])
+
     def queued(self) -> List[str]:
         cmds = []
         while not self.fl._cmds.empty():
@@ -276,6 +283,28 @@ class DriverLogic(unittest.TestCase):
     def test_ignores_other_events(self):
         self.assertIsNone(self.fl.apply_event(
             Event(EventType.DOORBELL, "flipper", {"key": DOORBELL})))
+
+
+class LearnMode(unittest.TestCase):
+    def test_new_key_prints_exact_config_line(self):
+        from hardware.flipper.bursts import Burst
+        from hardware.flipper.learn import config_line, report
+        b = Burst("Princeton", 24, "0x00ABCDE1", 0.0, 0.5, 3)
+        line = config_line("doorbell", b)
+        self.assertEqual(line, '"doorbell": {"protocol": "Princeton", "bits": 24, "key": "0x00ABCDE1"},')
+        json.loads("{" + line.rstrip(",") + "}")               # pastes as valid JSON
+        self.assertIn(line, report(b, None))
+        self.assertIn("already configured as 'motion'", report(b, "motion"))
+
+    def test_learned_line_works_as_setting(self):
+        from hardware.flipper.bursts import Burst
+        from hardware.flipper.learn import config_line
+        s = settings()
+        s["sensors"].update(json.loads("{" + config_line(
+            "doorbell", Burst("Princeton", 24, "0x00ABCDE1", 0, 0, 1)).rstrip(",") + "}"))
+        fl = Flipper(s)
+        self.assertEqual(fl.sensor_for("0x00ABCDE1"), "doorbell")
+        self.assertIsNone(fl.sensor_for("0x00DEC608"))         # old doorbell forgotten
 
 
 if __name__ == "__main__":

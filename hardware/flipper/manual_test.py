@@ -1,6 +1,7 @@
 """Manual hardware test for the Flipper driver.
 
-    python -m hardware.flipper.manual_test
+    python -m hardware.flipper.manual_test           # normal
+    python -m hardware.flipper.manual_test --learn   # start in learn mode
 
 Prints live events. Keys (no Enter needed):
   1 / 2 / 3   toggle outlet 1 / 2 / 3 (porch light, living room lamp, spare)
@@ -8,10 +9,13 @@ Prints live events. Keys (no Enter needed):
   h / a / n   pretend mode_changed -> home / away / night (LED follows)
   w / x / r   pretend alert_changed -> warning / alarm (+vibrate) / normal
   v           vibrate
+  l           learn mode on/off: shows every key heard, and for a new one the
+              exact line to paste into "sensors" in config/settings.json
   q           quit
 """
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
 import threading
@@ -19,6 +23,7 @@ import time
 
 from shared import Action, ActionType, Event, EventType, Source
 
+from hardware.flipper import learn
 from hardware.flipper.device import Flipper
 
 OUTLET_KEYS = {"1": "porch_light", "2": "living_room_lamp", "3": "spare"}
@@ -53,17 +58,29 @@ def report(label: str, fut, t0: float) -> None:
     fut.add_done_callback(done)
 
 
-def main() -> int:
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="python -m hardware.flipper.manual_test")
+    ap.add_argument("--learn", action="store_true", help="start in learn mode")
+    ap.add_argument("--name", default="doorbell", help="sensor name for the printed line")
+    args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s",
                         datefmt="%H:%M:%S")
+    learning = {"on": args.learn}
 
     def on_event(ev: Event) -> None:
         print(f"\n*** EVENT {ev.type.upper()}  packets={ev.data['packets']} "
               f"duration_ms={ev.data['duration_ms']}\n    {ev.to_json()}")
 
+    def on_burst(burst, known_as) -> None:
+        if learning["on"]:
+            print("\n[learn] " + learn.report(burst, known_as, args.name))
+
     fl = Flipper(on_event=on_event)
+    fl.on_burst = on_burst
     fl.start()
     print(__doc__)
+    if learning["on"]:
+        print(f"[learn] ON: press the new {args.name} (hold it ~2 s) and watch for NEW KEY")
     if not fl.connected.wait(10):
         print("Waiting for the Flipper (plug it in, close apps on it)...")
 
@@ -102,6 +119,9 @@ def main() -> int:
                 report("LED/vibro", fut, t0)
             elif key == "v":
                 report("vibrate", fl.vibrate(), t0)
+            elif key == "l":
+                learning["on"] = not learning["on"]
+                print(f"[learn] {'ON: press the new remote and watch for NEW KEY' if learning['on'] else 'OFF'}")
     except KeyboardInterrupt:
         pass
     finally:

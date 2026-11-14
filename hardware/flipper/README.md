@@ -27,12 +27,20 @@ fl.stop()
 ## Tools
 
 ```
-python -m hardware.flipper.manual_test          # live events; 1/2/3 outlets, c colours, h/a/n modes, w/x/r alerts, v buzz, q quit
+python -m hardware.flipper.manual_test          # live events; 1/2/3 outlets, c colours, h/a/n modes, w/x/r alerts, v buzz, l learn, q quit
+python -m hardware.flipper.manual_test --learn  # learn a new remote: prints the exact "sensors" line to paste
 python -m hardware.flipper.capture NAME          # record raw rx lines to samples/NAME.txt
 python -m unittest hardware.flipper.test_flipper # parser, bursts, driver logic on the real samples
 ```
 
 `samples/` holds real captures from this hardware: `doorbell_hold.txt` has 2 holds, `motion_wave.txt` has 2 waves of 17 packets each, and `help.txt` is the CLI command list.
+
+## New doorbell (learn mode)
+
+Doorbell and motion keys live in `sensors` in `config/settings.json`, and nothing is hardcoded. To switch to a new doorbell:
+1. Run `manual_test --learn` and hold the new button for about 2 s.
+2. Copy the printed `"doorbell": {...},` line over the old entry.
+3. Restart.
 
 ## Known limits
 

@@ -93,6 +93,9 @@ class Flipper:
         self.conn = FlipperSerial(for_os(fs["serial_port"]), fs.get("baud", 230400))
         self.events: "queue.Queue[Event]" = queue.Queue()
         self.on_event = on_event
+        # called with (burst, sensor name or None) for every burst; runs on the
+        # driver thread, so keep it quick (manual_test's learn mode prints)
+        self.on_burst: Optional[Callable[[Burst, Optional[str]], None]] = None
         self.connected = threading.Event()
 
         self._cmds: "queue.Queue[_Command]" = queue.Queue()
@@ -379,6 +382,11 @@ class Flipper:
     def _emit(self, burst: Burst) -> None:
         started = self._burst_wall.pop(self._merger.group(burst.key), None)
         name = self.sensor_for(burst.key)
+        if self.on_burst is not None:       # learn mode: sees every burst, known or not
+            try:
+                self.on_burst(burst, name)
+            except Exception:
+                log.exception("on_burst callback failed")
         if name is None:
             log.info("ignoring unknown key %s (%s %dbit, %d packets)",
                      burst.key, burst.protocol, burst.bits, burst.packets)

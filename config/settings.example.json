@@ -9,6 +9,8 @@
     "baud": 230400,
     "rx_command": "subghz rx 433920000 0",
     "tx_command": "subghz tx_from_file /ext/subghz/{name}.sub 10 0",
+    "burst_gap_s": 1.5,
+    "led_refresh_s": 15,
     "led": {
       "home": "green",
       "away": "blue",
@@ -22,8 +24,7 @@
     "doorbell": {
       "protocol": "Princeton",
       "bits": 24,
-      "key": "0x00DEC608",
-      "min_duration_ms": 800
+      "key": "0x00DEC608"
     },
     "motion": {
       "protocol": "Princeton",
