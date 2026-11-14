@@ -27,7 +27,7 @@ Faraday is an offline AI home guard built for the Cornell Local AI Hackathon. Su
 - Motion: Princeton 24-bit key `0x00C5AFAE`, about 17 packets per trigger, merged into one event.
 - Send: `subghz tx_from_file /ext/subghz/<name>.sub 10 0` with `outlet1_on/off`, `outlet2_on/off`, `outlet3_on/off`. The Flipper can't listen while sending, so pause rx, send, then resume rx.
 - Outlet 1 is the porch light, outlet 2 the living room lamp, outlet 3 spare.
-- Flipper LED: green Home, blue Away, purple Night, yellow warning, red alarm. An alert colour overrides the mode colour.
+- Flipper LED: **off at all times, except at ALARM: red plus three buzzes**, back to off when the passphrase disarms. No mode colours (decided 2026-11-14: the firmware's charge indicator owns the LED's red and green while listening, so mode colours were unreadable). The dashboard is the status display.
 
 ## Ownership
 

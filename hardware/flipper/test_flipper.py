@@ -221,36 +221,42 @@ class DriverLogic(unittest.TestCase):
         return Event(EventType.ALERT_CHANGED, "modes",
                      {"level": level, "previous": prev, "reason": ""})
 
-    def test_led_alert_beats_mode(self):
-        self.assertEqual(self.fl.current_color(), "green")
-        self.fl.apply_event(self.mode("away"))
-        self.assertEqual(self.fl.current_color(), "blue")
-        self.fl.apply_event(self.mode("night", "away"))
-        self.assertEqual(self.fl.current_color(), "purple")
+    RED = ["led r 255", "led g 0", "led b 0"]
+    OFF = ["led r 0", "led g 0", "led b 0"]
+
+    def test_led_off_for_every_mode_and_for_warning(self):
+        """Decided 2026-11-14: no mode colours. Modes and warning send nothing."""
+        self.assertEqual(self.fl.current_color(), "off")
+        for ev in (self.mode("away"), self.mode("night", "away"), self.alert("warning", "normal"),
+                   self.mode("away", "night"), self.mode("home", "away")):
+            self.assertIsNone(self.fl.apply_event(ev))
+            self.assertEqual(self.fl.current_color(), "off")
+        self.assertEqual(self.queued(), [])          # not a single LED command
+
+    def test_alarm_is_red_plus_three_buzzes_then_off(self):
         self.fl.apply_event(self.alert("warning", "normal"))
-        self.assertEqual(self.fl.current_color(), "yellow")
-        self.fl.apply_event(self.mode("away", "night"))      # alert still wins
-        self.assertEqual(self.fl.current_color(), "yellow")
-        self.fl.apply_event(self.alert("alarm", "warning"))
+        self.assertIsNotNone(self.fl.apply_event(self.alert("alarm", "warning")))
         self.assertEqual(self.fl.current_color(), "red")
-        self.fl.apply_event(self.alert("normal", "alarm"))
-        self.assertEqual(self.fl.current_color(), "blue")
+        # red first, then three buzz pulses with red re-sent around every vibro
+        self.assertEqual(self.queued(), self.RED + (["vibro 1"] + self.RED + ["vibro 0"] + self.RED) * 3)
+        self.assertIsNotNone(self.fl.apply_event(self.alert("normal", "alarm")))
+        self.assertEqual(self.fl.current_color(), "off")
+        self.assertEqual(self.queued(), self.OFF)
+        self.assertIsNone(self.fl._refresh_due)      # nothing left to re-send
 
-    def test_led_commands_and_alarm_vibrates(self):
-        self.fl.apply_event(self.mode("night"))
-        self.assertEqual(self.queued(), ["led r 140", "led g 0", "led b 255"])
-        self.fl.apply_event(self.alert("warning", "normal"))
-        # always all three channels, lowering ones first; no vibro on warning
-        self.assertEqual(self.queued(), ["led b 0", "led r 255", "led g 140"])
-        self.fl.apply_event(self.alert("alarm", "warning"))
-        # red first, then three buzz pulses with red re-sent after every vibro
-        red = ["led r 255", "led g 0", "led b 0"]
-        self.assertEqual(self.queued(), ["led g 0", "led r 255", "led b 0"]
-                         + (["vibro 1"] + red + ["vibro 0"] + red) * 3)
-
-    def test_led_refresh_waits_for_quiet_radio(self):
-        self.fl.set_color("green")
+    def test_no_led_refresh_while_off(self):
+        self.fl.set_color("off")
         self.queued()
+        t = self.fl._led_at
+        self.fl._refresh_due = t + 1                  # a settle that would be due...
+        self.fl._maybe_refresh_led(t + 100)           # ...and the periodic one long overdue
+        self.assertEqual(self.queued(), [])
+        self.assertIsNone(self.fl._refresh_due)
+
+    def test_red_refresh_waits_for_quiet_radio(self):
+        self.fl.apply_event(self.alert("alarm", "normal"))
+        self.queued()
+        self.fl._refresh_due = None
         t = self.fl._led_at
         self.fl._maybe_refresh_led(t + 5)                   # too soon
         self.assertEqual(self.queued(), [])
@@ -259,25 +265,32 @@ class DriverLogic(unittest.TestCase):
         self.fl._maybe_refresh_led(t + 20)
         self.assertEqual(self.queued(), [])
         self.fl._merger.flush(t + 30)
-        self.fl._maybe_refresh_led(t + 30)                  # quiet again -> refresh
-        self.assertEqual(self.queued(), ["led r 0", "led g 255", "led b 0"])
+        self.fl._maybe_refresh_led(t + 30)                  # quiet again -> red again
+        self.assertEqual(self.queued(), self.RED)
 
-    def test_alarm_schedules_led_refresh_after_vibro(self):
-        self.fl.apply_event(self.alert("warning", "normal"))
-        self.fl.apply_event(self.alert("alarm", "warning"))
+    def test_alarm_schedules_red_refresh_after_vibro(self):
+        self.fl.apply_event(self.alert("alarm", "normal"))
         self.queued()
         due = self.fl._refresh_due
         self.assertIsNotNone(due)
         self.fl._maybe_refresh_led(due - 0.5)
         self.assertEqual(self.queued(), [])
         self.fl._maybe_refresh_led(due)
-        self.assertEqual(self.queued(), ["led r 255", "led g 0", "led b 0"])
+        self.assertEqual(self.queued(), self.RED)
         self.assertIsNone(self.fl._refresh_due)
 
+    def test_settle_only_scheduled_during_alarm(self):
+        self.fl._settle_led()
+        self.assertIsNone(self.fl._refresh_due)
+        self.fl.apply_event(self.alert("alarm", "normal"))
+        self.fl._refresh_due = None
+        self.fl._settle_led()
+        self.assertIsNotNone(self.fl._refresh_due)
+
     def test_same_colour_is_resent(self):
-        self.fl.set_color("blue")
+        self.fl.set_color("red")
         self.queued()
-        self.fl.set_color("blue")
+        self.fl.set_color("red")
         self.assertEqual(len(self.queued()), 3)
 
     def test_ignores_other_events(self):
