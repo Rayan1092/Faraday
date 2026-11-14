@@ -136,6 +136,42 @@ class Flow(unittest.TestCase):
         self.assertTrue(wait_until(lambda: self.fl.device.rx))
 
 
+class RealCameraPath(unittest.TestCase):
+    """take_photo -> PhotoCamera (saved file + fake LM Studio) -> pipeline -> dashboard photo."""
+
+    def test_photo_reaches_log_and_dashboard(self):
+        from hardware.camera import PhotoCamera
+        from hardware.tests.test_camera import FakeLMStudio, SavedFileCamera, make_scene
+        from hardware.vision import Vision
+        from hardware.settings import REPO_ROOT
+        tmp = Path(tempfile.mkdtemp(prefix="faraday-cam-"))
+        photos = Path(tempfile.mkdtemp(prefix="test-", dir=REPO_ROOT / "captures"))
+        lm = FakeLMStudio("Someone holds a box at the door.")
+        s = json.loads((CONFIG_DIR / "settings.example.json").read_text(encoding="utf-8"))
+        s["flipper"]["burst_gap_s"], s["flipper"]["led_refresh_s"] = 0.3, 0
+        fl = FakeFlipper(s)
+        cam = PhotoCamera(SavedFileCamera(make_scene(photos / "door.jpg")), Vision(lm.url, "bonsai-test"))
+        app = App(s, fl, camera=cam, use_llm=False, mode=Mode.AWAY,
+                  event_log=EventLog(tmp / "events.jsonl", s["security"]["passphrase"]),
+                  rules=RuleStore(tmp / "rules.json"), dashboard=True, port=0, out=lambda *_: None)
+        try:
+            app.start()
+            self.assertTrue(fl.connected.wait(5))
+            fl.device.press_doorbell()
+            self.assertTrue(wait_until(lambda: any(
+                e["type"] == "photo_described" for e in app.pipeline.log.recent(100))))
+            with urllib.request.urlopen(app.board.url + "api/state", timeout=5) as r:
+                photo = json.loads(r.read())["photo"]
+            self.assertEqual(photo["description"], "Someone holds a box at the door.")
+            with urllib.request.urlopen(app.board.url.rstrip("/") + photo["url"], timeout=5) as r:
+                self.assertEqual(r.headers["Content-Type"], "image/jpeg")
+        finally:
+            app.stop()
+            lm.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+            shutil.rmtree(photos, ignore_errors=True)
+
+
 class WithDashboard(Flow):
     dashboard = True
 
