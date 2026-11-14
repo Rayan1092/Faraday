@@ -1,0 +1,20 @@
+0.001	help
+0.006	Available commands:
+0.006	bt                            loader                        crypto                        
+0.006	js                            nfc                           exit                          
+0.006	input                         buzzer                        neofetch                      
+0.006	log                           echo                          onewire                       
+0.006	clear                         device_info                   free_blocks                   
+0.006	top                           factory_reset                 uptime                        
+0.006	src                           ?                             vibro                         
+0.006	storage                       ikey                          !                             
+0.020	start_rpc_session             power                         subshell_demo                 
+0.020	i2c                           subghz                        ir                            
+0.020	update                        reload_ext_cmds               hello_world                   
+0.020	rfid                          sleep                         help                          
+0.020	sysctl                        info                          gpio                          
+0.020	date                          led                           free                          
+0.020	
+0.020	If you added a new external command and can't see it above, run `reload_ext_cmds`
+0.020	Find out more: https://docs.flipper.net/development/cli
+3.355	>: ^C

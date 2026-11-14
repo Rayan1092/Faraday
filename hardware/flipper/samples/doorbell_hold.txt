@@ -1,0 +1,17 @@
+0.003	subghz rx 433920000 0
+0.209	Load_keystore keeloq_mfcodes OK
+0.213	Load_keystore keeloq_mfcodes_user Absent
+0.219	Listening at frequency: 433919830 device: 0. Press CTRL+C to stop
+16.737	Princeton 24bit
+16.737	Key:0x00DEC608
+16.737	Yek:0x0010637B
+16.737	Sn:0xDEC60 Btn:8 (4b)
+16.737	Te:203us  GT:Te*30
+26.190	Princeton 24bit
+26.190	Key:0x00DEC608
+26.190	Yek:0x0010637B
+26.190	Sn:0xDEC60 Btn:8 (4b)
+26.190	Te:203us  GT:Te*30
+120.332	
+120.332	Packets received 2
+120.332	
