@@ -20,3 +20,14 @@ Each has the default I used, so work continued. Answer inline and I'll adjust.
 6. **Camera on by default.**
    - Default: `py -m integration` uses the real webcam plus vision. Use `--standin-camera`, or `"camera": {"enabled": false}`, for a fixed fake description.
    - If vision fails, the photo is kept and the description is "Photo saved." (`source: "camera"`).
+7. **Argmax STT request.**
+   - Default: multipart POST to `stt.<os>.url` with `file`, `language`, `response_format=json`, and `model` only if `stt.<os>.model` is set. The text is read from `{"text": ...}`.
+   - Tested against a fake server only. Confirm on the Mac with `argmax-cli serve`, and tell me whether it needs a `model` field.
+8. **Argmax TTS command (PLAN Open Question 3, still open).**
+   - Default: run `tts.mac.command` from settings (a list; `{text}` and `{out_wav}` are filled in), then play the wav. The command in `settings.example.json` is still the Step 0 guess.
+   - If it fails, the line is printed, with no fallback voice. That keeps the Mac Argmax-only. Should macOS `say` be a fallback?
+9. **Windows TTS.**
+   - Default: pyttsx3 (SAPI5, offline) when `tts.windows.kind` is `standin` and pyttsx3 is installed, otherwise printed.
+   - Added `pyttsx3; sys_platform == "win32"` to `requirements.txt`.
+10. **Mic mute while speaking.**
+    - Default: the mic drops audio while TTS talks, plus 0.4 s after. A recording can't start while Faraday is talking.
