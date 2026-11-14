@@ -72,25 +72,21 @@ class PipelineTests(unittest.TestCase):
 
     # ---- baseline first ----------------------------------------------------
 
-    def test_lights_photo_and_alert_happen_before_bonsai_is_asked(self):
-        p, rec, client = self.pipeline(tool_calls(("speak", {"text": "You are on camera."})),
-                                       Mode.NIGHT)
+    def test_motion_is_plain_code_and_never_waits_for_bonsai(self):
+        p, rec, client = self.pipeline(tool_calls(("speak", {"text": "Hello visitor!"})), Mode.NIGHT)
         result = p.handle(events.motion())
-        before = [(kind, t) for kind, t, _ in client.calls[0]["emitted_before"]]
-        self.assertEqual(before, [("event", "motion"), ("event", "alert_changed"),
-                                  ("action", "outlet_on"), ("action", "take_photo")])
-        self.assertEqual([a.type for a in result.actions],
-                         [ActionType.OUTLET_ON, ActionType.TAKE_PHOTO, ActionType.SPEAK])
+        self.assertEqual(client.calls, [])
+        self.assertEqual([(k, t) for k, t, _ in rec.seen],
+                         [("event", "motion"), ("event", "alert_changed"),
+                          ("action", "outlet_on"), ("action", "take_photo")])
+        self.assertEqual([a.source for a in result.actions], [Source.RULES, Source.RULES])
         self.assertEqual(p.modes.alert, AlertLevel.WARNING)
 
     def test_brain_repeats_are_not_duplicated(self):
-        p, _, _ = self.pipeline(tool_calls(("outlet_on", {"outlet": "porch_light"}),
-                                           ("outlet_on", {"outlet": "living_room_lamp"})), Mode.NIGHT)
-        result = p.handle(events.motion())
-        outlets = [a.args["outlet"] for a in result.actions if a.type == ActionType.OUTLET_ON]
-        self.assertEqual(outlets, ["porch_light", "living_room_lamp"])
-        self.assertEqual([a.source for a in result.actions if a.type == ActionType.OUTLET_ON],
-                         [Source.RULES, Source.BRAIN])
+        p, _, _ = self.pipeline(tool_calls(("speak", {"text": FILLER}),
+                                           ("save_message", {"text": "Package for Sam."})), Mode.AWAY)
+        texts = [a.args.get("text") for a in p.handle(events.speech("Package for Sam.")).actions]
+        self.assertEqual(texts.count(FILLER), 1)
 
     def test_baseline_survives_a_dead_or_crashing_brain(self):
         for reply in (RuntimeError("down"), {"content": "garbage"}):
@@ -125,10 +121,20 @@ class PipelineTests(unittest.TestCase):
         p, _, _ = self.pipeline(tool_calls(("speak", {"text": "Hello!"})), Mode.AWAY)
         bell_photo = next(a for a in p.handle(events.doorbell()).actions if a.type == ActionType.TAKE_PHOTO)
         texts = [a.args.get("text") for a in p.handle(events.photo_described(bell_photo.id)).actions]
-        self.assertEqual(texts, [FILLER, "Hello!"])
+        self.assertEqual(texts, [FILLER, "Hello!", "Would you like to leave a message?"])
         motion_photo = next(a for a in p.handle(events.motion()).actions if a.type == ActionType.TAKE_PHOTO)
         texts = [a.args.get("text") for a in p.handle(events.photo_described(motion_photo.id)).actions]
-        self.assertNotIn(FILLER, texts)
+        self.assertEqual(texts, ["You're on camera. The owner has been alerted."])
+
+    def test_motion_photo_traced_even_after_a_busy_log(self):
+        p, _, client = self.pipeline(tool_calls(("speak", {"text": "Hello visitor!"})), Mode.NIGHT)
+        photo = next(a for a in p.handle(events.motion()).actions if a.type == ActionType.TAKE_PHOTO)
+        for i in range(12):  # push the motion event past the prompt's 10-line window
+            p.log.write(events.speech(f"filler {i}"))
+        calls = len(client.calls)
+        texts = [a.args["text"] for a in p.handle(events.photo_described(photo.id)).actions]
+        self.assertEqual(texts, ["You're on camera. The owner has been alerted."])
+        self.assertEqual(len(client.calls), calls)  # answered in code
 
     def test_no_filler_when_no_model_call(self):
         cases = [(Mode.HOME, events.speech("Turn on the porch light"), True),   # owner at home

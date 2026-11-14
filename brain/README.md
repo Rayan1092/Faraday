@@ -26,7 +26,12 @@ decision.elapsed_s  # Bonsai call time (also printed)
 | `safety.py` | Spots disarm requests so they're answered in code. The passphrase check and mode state are in `modes/`, and the brain never gets them |
 | `settings.py` | Loads settings and picks the `llm.profile` |
 
-Answered in plain code without calling Bonsai: `mode_changed`, disarm requests ("disarm", "turn off the alarm", ...) → "I can't disarm. Say the passphrase.", any speech that contains the passphrase, `alert_changed`, doorbell (the baseline takes the photo; the greeting comes on `photo_described`) and motion at Home. For `photo_described`, the brain is told why the photo was taken (from the `take_photo` reason in the log): doorbell → greeting, motion while armed → "You are on camera."
+Answered in plain code without calling Bonsai: `mode_changed`, disarm requests ("disarm", "turn off the alarm", ...) → "I can't disarm. Only the owner can do that." (it never mentions the passphrase), any speech that contains the passphrase, `alert_changed`, doorbell (the baseline takes the photo; the greeting comes on `photo_described`) and all motion (baseline, alert and the warning after the photo).
+
+`photo_described` is traced back through `caused_by` (`photo_described` → `take_photo` → event, see `photo_cause()`):
+- **Doorbell photo:** Bonsai is asked to greet and offer to take a message. If its reply never mentions a message, code adds the offer. The fallback does the same.
+- **Motion photo while armed:** "You're on camera. The owner has been alerted.", in plain code, never the model.
+- **Motion photo at Home:** nothing.
 
 Tests (no LM Studio needed): `python -m unittest discover` from the repo root.
 

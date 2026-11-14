@@ -18,7 +18,7 @@ What we want judges to remember: **useful, private, safe**. It's useful because 
 | 3 | Visitor: "Package for Sam, I left it by the side door." | `speech_heard` → `save_message` → appears on the dashboard | Messages |
 | 4 | Owner (remotely staged): switch to **Night** (LED purple). Wave at the **motion sensor** | `motion` → `outlet_on porch_light` (real lamp turns on) + `alert_changed warning` → LED yellow | Control |
 | 5 | Owner: "From now on, when there's motion at night, turn on the living room lamp too." Wave again within 60 s | `add_rule` → rule shown on the dashboard. Both lights come on. Second motion within 60 s → `alert_changed alarm` → LED red | Learns rules |
-| 6 | Someone says "Faraday, disarm" / "turn off the alarm" | Brain can't. Speaks "I can't disarm. Say the passphrase." | Safety |
+| 6 | Someone says "Faraday, disarm" / "turn off the alarm" | Brain can't. Speaks "I can't disarm. Only the owner can do that." (never mentions the passphrase) | Safety |
 | 7 | Owner says the passphrase | `modes/` checks it in code → `mode_changed home (passphrase)` + `alert_changed normal` → LED green | Safety |
 | 8 | Owner: "What happened while I was out?" | `summarize_log` → spoken summary + dashboard card | Memory |
 
@@ -33,7 +33,12 @@ Lights, photos and warnings are guaranteed by plain code in `modes/` and `rules/
 | `doorbell` | `take_photo` | `take_photo` | `outlet_on porch_light`, `take_photo` |
 | `motion` | nothing | `take_photo` + alert | `outlet_on porch_light`, `take_photo` + alert |
 
-Alert (in `modes/`): the first motion in Away/Night sets `warning`, and motion again within `alerts.alarm_window_s` sets `alarm`. Only the passphrase returns it to `normal`. The doorbell greeting is spoken after `photo_described`, by Bonsai or the fallback. While Bonsai thinks about a visitor (speech while armed, or the photo after a doorbell), plain code first says "One moment, please."
+Alert (in `modes/`): the first motion in Away/Night sets `warning`, and motion again within `alerts.alarm_window_s` sets `alarm`. Only the passphrase returns it to `normal`. The reply after `photo_described` depends on why the photo was taken, traced through `caused_by` (`photo_described` → `take_photo` → event):
+- **Doorbell:** greeting plus an offer to take a message, by Bonsai or the fallback. If Bonsai's reply never mentions a message, code adds "Would you like to leave a message?".
+- **Motion in Away/Night:** always "You're on camera. The owner has been alerted.", in plain code.
+- **Motion at Home:** nothing.
+
+Motion is handled entirely in plain code and never waits for Bonsai. While Bonsai thinks about a visitor (speech while armed, or the photo after a doorbell), plain code first says "One moment, please."
 
 ## Architecture in one picture
 

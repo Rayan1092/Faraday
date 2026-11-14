@@ -32,6 +32,7 @@ from .settings import load_settings, passphrase
 
 FILLER = "One moment, please."
 MAX_DEPTH = 4  # event -> action -> follow-up event chains, so nothing can loop
+TRACE_WINDOW = 50  # log entries searched when tracing caused_by
 
 
 @dataclass
@@ -115,8 +116,9 @@ class Pipeline:
                 self._emit(make_action(ActionType.SPEAK, {"text": FILLER}, Source.BRAIN,
                                        caused_by=ev.id), result, done)
 
-        recent = [e for e in self.log.recent(self.brain.recent_lines + 1)
-                  if e.get("id") != event.id][-self.brain.recent_lines:]
+        # A wide window so caused_by chains (photo -> take_photo -> doorbell) can be
+        # traced; the prompt itself only shows the last brain.recent_lines entries.
+        recent = [e for e in self.log.recent(TRACE_WINDOW) if e.get("id") != event.id]
         try:
             decision = self.brain.decide(event, mode, recent, before_model=filler)
         except Exception as e:  # the baseline already ran; never stall on a brain bug

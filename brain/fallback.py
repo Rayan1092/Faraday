@@ -13,10 +13,11 @@ from shared import ActionType, Event, EventType, Mode
 RawItem = Dict[str, Any]
 
 GREETING_ARMED = "Hello. Nobody can come to the door right now. Would you like to leave a message?"
-GREETING_HOME = "Hello. Someone will be with you shortly."
-CANT_DISARM = "I can't disarm. Say the passphrase."
-ON_CAMERA = "This is Faraday. You are on camera."
+GREETING_HOME = "Hello. Someone will be with you shortly. Would you like to leave a message?"
+CANT_DISARM = "I can't disarm. Only the owner can do that."
+ON_CAMERA = "You're on camera. The owner has been alerted."
 MESSAGE_SAVED = "Thank you. I saved your message."
+OFFER_MESSAGE = "Would you like to leave a message?"
 
 
 def _speak(text: str) -> RawItem:
@@ -35,20 +36,19 @@ _LIGHT = re.compile(r"\bturn (on|off) (the )?(porch( light)?|living room( lamp)?
                     r"|\b(porch( light)?|living room( lamp)?|lamp|lights?) (on|off)\b", re.I)
 
 
-def fallback(event: Event, mode: str, photo_reason: str = "") -> List[RawItem]:
+def fallback(event: Event, mode: str, photo_cause: str = "") -> List[RawItem]:
     """Doorbell/motion photos and lights are guaranteed by rules/baseline.py, not here.
 
-    photo_reason: for photo_described, why the photo was taken ("doorbell while away").
+    photo_cause: for photo_described, the event type that led to the photo ("doorbell",
+    "motion"), traced through caused_by. Motion photos are answered in core.py.
     """
     armed = mode in Mode.ARMED
-    if event.type == EventType.MOTION and mode == Mode.NIGHT:
-        return [_outlet(True, "porch_light")]  # repeats the baseline; merge() drops it
     if event.type in (EventType.DOORBELL, EventType.MOTION):
         return []
     if event.type == EventType.PHOTO_DESCRIBED:
-        if "doorbell" in photo_reason or not photo_reason:
-            return [_speak(GREETING_ARMED if armed else GREETING_HOME)]
-        return [_speak(ON_CAMERA)] if armed else []
+        if photo_cause == EventType.MOTION:
+            return [_speak(ON_CAMERA)] if armed else []
+        return [_speak(GREETING_ARMED if armed else GREETING_HOME)]
     if event.type == EventType.SPEECH_HEARD:
         return _speech(str(event.data.get("text", "")), mode)
     return []

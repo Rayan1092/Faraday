@@ -84,7 +84,9 @@ class NoDisarmThroughBrain(unittest.TestCase):
             self.assertEqual(client.calls, [], text)
             self.assertEqual(decision.via, "code")
             self.assertEqual([a.type for a in decision.actions], [ActionType.SPEAK], text)
-            self.assertIn("passphrase", decision.actions[0].args["text"])
+            reply = decision.actions[0].args["text"]
+            self.assertEqual(reply, "I can't disarm. Only the owner can do that.")
+            self.assertNotIn("passphrase", reply.lower())  # never hint how to disarm
 
     def test_passphrase_never_reaches_the_model(self):
         client = FakeClient(tool_calls(("speak", {"text": "hi"})))

@@ -71,7 +71,7 @@ class Brain:
             mode = Mode.AWAY  # unknown mode: behave as armed, the safe side
         allowed = allowed_actions(event.type, mode)
         recent = list(recent)
-        photo_why = photo_reason(event, recent)
+        cause = photo_cause(event, recent)
 
         if event.type == EventType.SPEECH_HEARD:
             text, matched = redact(str(event.data.get("text", "")), self.passphrase)
@@ -82,11 +82,15 @@ class Brain:
                 return self._code(event, mode, allowed, [fb._speak(reply)])
         if event.type == EventType.MODE_CHANGED:
             return self._code(event, mode, allowed, _mode_reply(event))
+        if event.type == EventType.PHOTO_DESCRIBED and cause == EventType.MOTION:
+            # Motion photo: a fixed warning while armed, nothing at home. Never the model.
+            items = [fb._speak(fb.ON_CAMERA)] if mode in Mode.ARMED else []
+            return self._code(event, mode, allowed, items)
 
         if not allowed:
             return Decision([], "code")  # nothing to choose from, e.g. motion at home
         if self.client is None:
-            return self._fallback(event, mode, allowed, None, "no model configured", why=photo_why)
+            return self._fallback(event, mode, allowed, None, "no model configured", cause=cause)
         messages = [{"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": self.prompt(event, mode, recent)}]
         if before_model is not None:
@@ -102,11 +106,11 @@ class Brain:
         except (BonsaiError, GarbageReply) as e:
             elapsed = time.perf_counter() - started
             self.log(f"[brain] Bonsai call failed after {elapsed:.2f}s: {e}")
-            return self._fallback(event, mode, allowed, elapsed, str(e), why=photo_why)
+            return self._fallback(event, mode, allowed, elapsed, str(e), cause=cause)
         except Exception as e:  # never let the demo stall on a surprise
             elapsed = time.perf_counter() - started
             self.log(f"[brain] Bonsai call crashed after {elapsed:.2f}s: {e!r}")
-            return self._fallback(event, mode, allowed, elapsed, repr(e), why=photo_why)
+            return self._fallback(event, mode, allowed, elapsed, repr(e), cause=cause)
 
         actions, dropped = filter_actions(items, event, mode, allowed)
         self.log(f"[brain] Bonsai call took {elapsed:.2f}s: {len(items)} proposed, "
@@ -115,9 +119,14 @@ class Brain:
             self.log(f"[brain]   dropped {_short(item)}: {why}")
         if not actions:
             return self._fallback(event, mode, allowed, elapsed,
-                                  "no usable actions from Bonsai", dropped, photo_why)
-        return Decision(self._confirm_mode(actions, event, mode, allowed),
-                        "bonsai", elapsed, dropped)
+                                  "no usable actions from Bonsai", dropped, cause)
+        actions = self._confirm_mode(actions, event, mode, allowed)
+        if cause == EventType.DOORBELL and not any(
+                a.type == ActionType.SPEAK and "message" in a.args["text"].lower() for a in actions):
+            # A doorbell visitor must always be offered to leave a message.
+            extra, _ = filter_actions([fb._speak(fb.OFFER_MESSAGE)], event, mode, allowed)
+            actions = actions + extra
+        return Decision(actions, "bonsai", elapsed, dropped)
 
     # ---- prompt ------------------------------------------------------------
 
@@ -128,7 +137,7 @@ class Brain:
         if history:
             lines.append("Recent:")
             lines += [f"- {line}" for line in history]
-        lines.append(f"New: {describe_event(event, photo_reason(event, recent))}")
+        lines.append(f"New: {describe_event(event, photo_cause(event, recent))}")
         return "\n".join(lines)
 
     # ---- helpers -----------------------------------------------------------
@@ -141,8 +150,8 @@ class Brain:
     def _fallback(self, event: Event, mode: str, allowed: List[str],
                   elapsed: Optional[float], error: str,
                   model_dropped: Optional[List[Tuple[Any, str]]] = None,
-                  why: str = "") -> Decision:
-        actions, dropped = filter_actions(fb.fallback(event, mode, why), event, mode, allowed)
+                  cause: str = "") -> Decision:
+        actions, dropped = filter_actions(fb.fallback(event, mode, cause), event, mode, allowed)
         actions = self._confirm_mode(actions, event, mode, allowed)
         self.log(f"[brain] using rule-based fallback ({error})")
         return Decision(actions, "fallback", elapsed, (model_dropped or []) + dropped, error)
@@ -176,19 +185,36 @@ def _mode_reply(event: Event) -> List[RawItem]:
     return [fb._speak(text)] if text else []
 
 
-def photo_reason(event: Event, recent: Iterable[Any]) -> str:
-    """For photo_described: the reason of the take_photo that asked for it, from the log."""
+def photo_cause(event: Event, recent: Iterable[Any]) -> str:
+    """Why a photo was taken, traced through caused_by in the log:
+    photo_described -> take_photo action -> the event that caused it.
+
+    Returns "doorbell", "motion", another event type, or "" if it can't be traced.
+    If the event that caused it has scrolled out of the log, the take_photo
+    reason ("motion at night") is used instead.
+    """
     if event.type != EventType.PHOTO_DESCRIBED or not event.caused_by:
         return ""
+    by_id = {}
     for entry in recent:
         if hasattr(entry, "to_dict"):
             entry = entry.to_dict()
-        if isinstance(entry, dict) and entry.get("id") == event.caused_by:
-            return str((entry.get("args") or {}).get("reason", ""))
+        if isinstance(entry, dict) and entry.get("id"):
+            by_id[entry["id"]] = entry
+    photo = by_id.get(event.caused_by)
+    if not photo or photo.get("type") != ActionType.TAKE_PHOTO:
+        return ""
+    origin = by_id.get(photo.get("caused_by") or "")
+    if origin and origin.get("kind") == "event":
+        return str(origin.get("type", ""))
+    reason = str((photo.get("args") or {}).get("reason", "")).lower()
+    for kind in (EventType.DOORBELL, EventType.MOTION):
+        if kind in reason:
+            return kind
     return ""
 
 
-def describe_event(event: Event, why: str = "") -> str:
+def describe_event(event: Event, cause: str = "") -> str:
     d = event.data
     if event.type == EventType.DOORBELL:
         return "Doorbell pressed."
@@ -197,8 +223,10 @@ def describe_event(event: Event, why: str = "") -> str:
     if event.type == EventType.SPEECH_HEARD:
         return f'Heard: "{d.get("text", "")}"'
     if event.type == EventType.PHOTO_DESCRIBED:
-        after = f" (photo taken for: {why})" if why else ""
-        return f"Camera at the door sees: {d.get('description', '')}{after}"
+        if cause == EventType.DOORBELL:
+            return (f"A visitor rang the doorbell. Camera sees: {d.get('description', '')} "
+                    "Greet them and offer to take a message.")
+        return f"Camera at the door sees: {d.get('description', '')}"
     if event.type == EventType.MODE_CHANGED:
         return f"Mode changed to {d.get('mode')}."
     return event.type
