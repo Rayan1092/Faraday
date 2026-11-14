@@ -5,9 +5,9 @@
 
 Prints live events. Keys (no Enter needed):
   1 / 2 / 3   toggle outlet 1 / 2 / 3 (porch light, living room lamp, spare)
-  c           cycle LED colours (green, blue, purple, yellow, red)
-  h / a / n   pretend mode_changed -> home / away / night (LED follows)
-  w / x / r   pretend alert_changed -> warning / alarm (+vibrate) / normal
+  c           toggle the LED red / off (raw, no alarm state)
+  h / a / n   pretend mode_changed -> home / away / night (LED stays off)
+  w / x / r   pretend alert_changed -> warning (LED off) / alarm (red + 3 buzzes) / normal (off)
   v           vibrate
   l           learn mode on/off: shows every key heard, and for a new one the
               exact line to paste into "sensors" in config/settings.json
@@ -27,7 +27,7 @@ from hardware.flipper import learn
 from hardware.flipper.device import Flipper
 
 OUTLET_KEYS = {"1": "porch_light", "2": "living_room_lamp", "3": "spare"}
-CYCLE = ["green", "blue", "purple", "yellow", "red"]
+CYCLE = ["red", "off"]
 
 
 def getch() -> str:
@@ -108,15 +108,19 @@ def main(argv=None) -> int:
                 ev = Event(EventType.MODE_CHANGED, Source.MODES,
                            {"mode": mode, "previous": prev, "changed_by": "dashboard", "reason": "test"})
                 fut = fl.apply_event(ev)
-                print(f"> mode {mode} (alert {alert}) -> LED {fl.current_color()}")
-                report("LED", fut, t0)
+                print(f"> mode {mode} (alert {alert}) -> LED {fl.current_color()} (modes never light it)")
+                if fut is not None:
+                    report("LED", fut, t0)
             elif key in "wxr":
                 prev, alert = alert, {"w": "warning", "x": "alarm", "r": "normal"}[key]
                 ev = Event(EventType.ALERT_CHANGED, Source.MODES,
                            {"level": alert, "previous": prev, "reason": "test"})
                 fut = fl.apply_event(ev)
                 print(f"> alert {alert} (mode {mode}) -> LED {fl.current_color()}")
-                report("LED/vibro", fut, t0)
+                if fut is not None:
+                    report("LED/vibro", fut, t0)
+                else:
+                    print("  -> nothing to send (LED already in that state)")
             elif key == "v":
                 report("vibrate", fl.vibrate(), t0)
             elif key == "l":

@@ -4,7 +4,7 @@
     Pipeline on_action  --> outlet_on/off  -> Flipper.execute()        (non-blocking)
                         --> speak          -> speech worker -> speaker (one at a time)
                         --> take_photo     -> camera worker -> photo_described -> queue
-    Pipeline on_event   --> mode_changed / alert_changed -> Flipper LED (alert beats mode)
+    Pipeline on_event   --> alert_changed -> Flipper LED red + buzz at alarm, else off
     Dashboard           --> calls the pipeline directly (it takes its own lock)
 
 on_action can be called from several threads (dashboard buttons, the alarm

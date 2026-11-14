@@ -24,7 +24,8 @@ from integration.standins import StandInCamera
 from log import EventLog
 from rules import RuleStore
 
-GREEN, BLUE, PURPLE, YELLOW, RED = [0, 255, 0], [0, 0, 255], [140, 0, 255], [255, 140, 0], [255, 0, 0]
+RED, OFF = [255, 0, 0], [0, 0, 0]
+LEFTOVER = [0, 0, 255]      # a colour an earlier run left on the LED
 
 
 def wait_until(cond, timeout=8.0, step=0.05):
@@ -52,6 +53,7 @@ class Flow(unittest.TestCase):
         # after every long rx pause (startup, outlet send, buzz).
         self.fl = FakeFlipper(s, charge_poll_s=0.2, tx_time_s=0.5)
         self.fl.device.charge_min_off_s = 0.3
+        self.fl.device.rgb = list(LEFTOVER)
         self.app = App(s, self.fl, camera=StandInCamera(), use_llm=False, mode=Mode.HOME,
                        event_log=EventLog(self.tmp / "events.jsonl", s["security"]["passphrase"]),
                        rules=RuleStore(self.tmp / "rules.json"),
@@ -80,43 +82,51 @@ class Flow(unittest.TestCase):
         self.assertTrue(wait_until(self.listening))
         self.fl.device.wave(packets=4, gap_s=0.05)
 
-    def test_startup_shows_home_green(self):
-        self.assertTrue(wait_until(lambda: self.fl.device.rgb == GREEN))
+    def led_cmds(self):
+        return [c for c in self.fl.device.commands if c.startswith("led ")]
+
+    def test_startup_turns_leftover_colour_off(self):
+        self.assertTrue(wait_until(lambda: self.fl.device.rgb == OFF))
         self.assertEqual(self.entries("mode_changed")[0]["data"]["changed_by"], "startup")
 
-    def test_led_holds_despite_charge_indicator(self):
-        """Join 1 bug 1: the Flipper's charge indicator rewrites red/green about a
-        second after listening restarts, so the LED was dark for most of the run."""
-        time.sleep(1.5)                                   # startup: firmware rewrite, then settle
-        self.assertGreaterEqual(self.fl.device.charge_writes, 1)   # the firmware did interfere
-        self.assertEqual(self.fl.device.rgb, GREEN)
-        self.app.pipeline.owner_set_mode(Mode.NIGHT)
-        self.wave()                                       # warning + outlet send (long pause)
+    def test_modes_and_warning_send_no_led_commands(self):
+        """Decided 2026-11-14: the LED is off in every mode and at warning. The
+        firmware's charge indicator owns red/green while listening, so mode
+        colours were unreadable; the dashboard shows the mode instead."""
+        self.assertTrue(wait_until(lambda: self.fl.device.rgb == OFF))
+        self.assertTrue(wait_until(self.listening))
+        sent = len(self.led_cmds())
+        for mode in (Mode.AWAY, Mode.NIGHT):
+            self.app.pipeline.owner_set_mode(mode)
+        self.wave()                                       # Night warning + outlet send
+        self.assertTrue(wait_until(lambda: self.app.pipeline.modes.alert == "warning"))
         self.assertTrue(wait_until(lambda: "outlet1_on" in self.fl.device.tx))
-        writes = self.fl.device.charge_writes
-        time.sleep(2.5)
-        self.assertGreater(self.fl.device.charge_writes, writes)   # rewritten after the send
-        self.assertEqual(self.fl.device.rgb, YELLOW)               # and put back
+        time.sleep(2.5)                                   # long pause passed, firmware rewrote
+        self.assertGreaterEqual(self.fl.device.charge_writes, 1)
+        self.assertEqual(len(self.led_cmds()), sent)      # not one LED command for all that
+        self.assertEqual(self.fl.device.rgb, OFF)
         self.assertTrue(self.fl.device.rx)
 
     def test_night_motion_warning_then_alarm_then_disarm(self):
+        self.assertTrue(wait_until(lambda: self.fl.device.rgb == OFF))
         self.app.pipeline.owner_set_mode(Mode.NIGHT)
-        self.assertTrue(wait_until(lambda: self.fl.device.rgb == PURPLE))
 
         self.wave()                               # first motion -> warning
         self.assertTrue(wait_until(lambda: self.entries("motion")))
         m = self.entries("motion")[0]
         self.assertEqual((m["source"], m["data"]["packets"]), ("sim", 4))
         self.assertTrue(wait_until(lambda: "outlet1_on" in self.fl.device.tx))
-        self.assertTrue(wait_until(lambda: self.fl.device.rgb == YELLOW))
         self.assertTrue(wait_until(lambda: self.entries("photo_described")))   # stand-in camera
+        self.assertEqual(self.fl.device.rgb, OFF)                 # warning: still off
 
         self.wave()                               # second motion within 60 s -> alarm
         self.assertTrue(wait_until(lambda: self.app.pipeline.modes.alert == "alarm"))
         self.assertTrue(wait_until(lambda: "outlet2_on" in self.fl.device.tx))
         self.assertTrue(wait_until(lambda: self.fl.device.rgb == RED and self.fl.device.vibro_count >= 3))
+        writes = self.fl.device.charge_writes
         self.assertTrue(wait_until(self.listening))   # listening again after all that
-        self.assertEqual(self.fl.device.rgb, RED)     # still red after the firmware's rewrite
+        self.assertGreater(self.fl.device.charge_writes, writes)   # the firmware did rewrite...
+        self.assertEqual(self.fl.device.rgb, RED)                  # ...and red was put back
         # the baseline asked for porch light twice; it was only transmitted once
         self.assertEqual(self.fl.device.tx.count("outlet1_on"), 1)
         self.assertTrue(any("porch_light already on, not resent" in s for s in self.said))
@@ -124,7 +134,8 @@ class Flow(unittest.TestCase):
 
         self.assertIsNotNone(self.app.pipeline.owner_passphrase(
             self.settings["security"]["passphrase"]))
-        self.assertTrue(wait_until(lambda: self.fl.device.rgb == GREEN))
+        self.assertTrue(wait_until(lambda: self.fl.device.rgb == OFF))     # alarm over: off
+        self.assertEqual(self.app.flipper.current_color(), "off")
 
     def test_second_wave_after_61s_keeps_porch_light_on(self):
         """Join 1 bug: wave 2 came 61.7 s after wave 1 (no alarm, correct), the
@@ -174,7 +185,7 @@ class Flow(unittest.TestCase):
 
     def test_away_doorbell_takes_photo(self):
         self.app.pipeline.owner_set_mode(Mode.AWAY)
-        self.assertTrue(wait_until(lambda: self.fl.device.rgb == BLUE))
+        self.assertTrue(wait_until(lambda: self.app.pipeline.modes.mode == Mode.AWAY))
         self.fl.device.press_doorbell()
         self.assertTrue(wait_until(lambda: self.entries("doorbell")))
         self.assertTrue(wait_until(lambda: self.entries("take_photo")))
@@ -191,16 +202,32 @@ class Flow(unittest.TestCase):
         self.assertEqual(self.app.pipeline.modes.alert, "normal")
 
     def test_cable_drop_reconnects_and_keeps_working(self):
+        self.assertTrue(wait_until(lambda: self.fl.device.rgb == OFF))
         self.app.pipeline.owner_set_mode(Mode.NIGHT)
-        self.assertTrue(wait_until(lambda: self.fl.device.rgb == PURPLE))
         self.fl.device.unplug()
         self.assertTrue(wait_until(lambda: not self.fl.connected.is_set()))
-        self.fl.device.rgb = [0, 0, 0]            # a real Flipper loses the LED on replug
+        self.fl.device.rgb = list(LEFTOVER)       # a replugged Flipper may show anything
         self.fl.device.plug()
         self.assertTrue(wait_until(lambda: self.fl.connected.is_set()))
-        self.assertTrue(wait_until(lambda: self.fl.device.rgb == PURPLE))
+        self.assertTrue(wait_until(lambda: self.fl.device.rgb == OFF))
         self.wave()
         self.assertTrue(wait_until(lambda: "outlet1_on" in self.fl.device.tx))
+
+    def test_reconnect_during_alarm_restores_red(self):
+        self.app.pipeline.owner_set_mode(Mode.NIGHT)
+        self.wave()
+        self.assertTrue(wait_until(lambda: self.app.pipeline.modes.alert == "warning"))
+        self.wave()                                   # a second burst, not a longer first one
+        self.assertTrue(wait_until(lambda: self.fl.device.rgb == RED and self.fl.device.vibro_count >= 3))
+        self.assertTrue(wait_until(self.listening))
+        self.fl.device.unplug()
+        self.assertTrue(wait_until(lambda: not self.fl.connected.is_set()))
+        self.fl.device.rgb = list(OFF)
+        self.fl.device.plug()
+        self.assertTrue(wait_until(lambda: self.fl.connected.is_set()))
+        self.assertTrue(wait_until(lambda: self.fl.device.rgb == RED))
+        time.sleep(2.5)                               # firmware rewrite after the (re)connect
+        self.assertEqual(self.fl.device.rgb, RED)     # and red put back again
 
     def test_unknown_outlet_failure_is_reported_not_fatal(self):
         self.fl.device.files.discard("outlet1_on")   # file missing on the SD card
@@ -211,10 +238,11 @@ class Flow(unittest.TestCase):
 
 
 class WithoutLedSettle(unittest.TestCase):
-    """The same firmware behaviour with the fix switched off: shows what the bug
-    looked like, and that the fake really models it."""
+    """The firmware's charge indicator with the red re-send switched off: shows
+    why it is still needed for the alarm, and that the fake really models it."""
 
-    def test_home_green_is_wiped_at_startup(self):
+    def test_alarm_red_is_wiped_without_the_resend(self):
+        from shared import Event
         s = json.loads((CONFIG_DIR / "settings.example.json").read_text(encoding="utf-8"))
         s["flipper"].update(burst_gap_s=0.3, led_refresh_s=0, led_settle_s=0)
         fl = FakeFlipper(s, charge_poll_s=0.2)
@@ -222,9 +250,12 @@ class WithoutLedSettle(unittest.TestCase):
         fl.start()
         try:
             self.assertTrue(fl.connected.wait(5))
-            self.assertTrue(wait_until(lambda: fl.device.charge_writes >= 1))
-            time.sleep(1.0)
-            self.assertEqual(fl.device.rgb, [0, 0, 0])    # Home green wiped: LED dark
+            fl.apply_event(Event("alert_changed", "modes",
+                                 {"level": "alarm", "previous": "warning", "reason": ""}))
+            self.assertTrue(wait_until(lambda: fl.device.vibro_count >= 3 and fl.device.rx))
+            writes = fl.device.charge_writes
+            self.assertTrue(wait_until(lambda: fl.device.charge_writes > writes, timeout=3))
+            self.assertEqual(fl.device.rgb[0], 0)         # red wiped by the firmware
         finally:
             fl.stop()
 

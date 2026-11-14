@@ -1,4 +1,4 @@
-"""Flipper driver: real radio -> shared events, shared actions -> radio + LED.
+"""Flipper driver: real radio -> shared events, shared actions -> radio + alarm LED.
 
 One background thread owns the serial port. It keeps `subghz rx` running,
 parses packets, merges bursts and emits shared Events (source "flipper").
@@ -7,11 +7,16 @@ it in batches: stop rx (Ctrl+C) -> wait for prompt -> run commands -> restart
 rx. So two sends never overlap and listening resumes right after.
 The CLI is busy while rx runs, so LED changes need the same pause.
 
+LED rule (decided 2026-11-14 after real-hardware tests): the LED is OFF in every
+mode and at the warning level. Only an ALARM shows red, with three buzz pulses,
+and the LED goes off again when the alarm ends (passphrase disarm). The
+dashboard is the status display for modes.
+
 Interface for integration/:
     fl = Flipper(on_event=callback)      # or read fl.events (queue.Queue)
     fl.start()
     fl.execute(action)                   # outlet_on / outlet_off -> Future
-    fl.apply_event(event)                # mode_changed / alert_changed -> LED
+    fl.apply_event(event)                # alert_changed -> LED/buzz; others ignored
     fl.stop()
 """
 from __future__ import annotations
@@ -27,7 +32,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from shared import (Action, ActionType, AlertLevel, DoorbellData, Event, EventType,
-                    Mode, MotionData, Source, make_event)
+                    MotionData, Source, make_event)
 
 from hardware.settings import for_os, load_settings
 from .bursts import DEFAULT_GAP_S, Burst, BurstMerger
@@ -36,30 +41,26 @@ from .parser import RxParser, normalise_key
 
 log = logging.getLogger("hardware.flipper")
 
-# RGB for the colour names used in settings flipper.led. Purple and yellow
-# were picked by eye on the real Flipper LED (r255 b255 looked pink).
+# The only two LED states. settings flipper.led is for the dashboard's on-screen
+# colours; the driver ignores it (the alarm colour is always red).
 COLORS: Dict[str, Tuple[int, int, int]] = {
-    "green": (0, 255, 0),
-    "blue": (0, 0, 255),
-    "purple": (140, 0, 255),
-    "yellow": (255, 140, 0),
     "red": (255, 0, 0),
-    "white": (255, 255, 255),
     "off": (0, 0, 0),
 }
 DATA_FOR_TYPE = {EventType.DOORBELL: DoorbellData, EventType.MOTION: MotionData}
 ERROR_WORDS = ("error", "failed", "fail ", "can't", "cannot", "not found", "close it")
 TX_TIMEOUT_S = 15.0
 ALARM_PULSES, PULSE_ON_S, PULSE_OFF_S = 3, 0.4, 0.25   # buzz-buzz-buzz, ~2 s
-# The Flipper's own charge indicator shares the LED's red and green channels
-# (green = charged, red = charging, both off = not charging). `subghz rx` pauses
-# charging (measured: 0 mA while listening, 339 mA right after), so every time
-# listening restarts after a pause the firmware can rewrite red and green about
-# a second later. Blue is never touched. It can't be turned off from the CLI, so:
-# - the colour is re-sent LED_SETTLE_S after rx restarts following a long pause
-#   (connect, outlet send, buzz), once the firmware has done its rewrite;
-# - and re-sent every led_refresh_s as a safety net (a short LED-only pause is
-#   noticed by the firmware only some of the time).
+# Why the LED is off except at alarm: the Flipper's own charge indicator shares
+# the LED's red and green channels (green = charged, red = charging, both off =
+# not charging). `subghz rx` pauses charging (measured: 0 mA while listening,
+# 339 mA right after), so about a second after listening restarts following a
+# pause the firmware rewrites red and green. Blue is never touched, and this
+# can't be turned off from the stock CLI. Mode colours were unreadable, so:
+# - "off" is self-healing: while listening the firmware itself keeps red and
+#   green at 0, so no LED traffic at all while the target is off;
+# - red (alarm) is not: it's re-sent LED_SETTLE_S after rx restarts following a
+#   long pause (connect, outlet send, the buzz) and every led_refresh_s.
 # Each re-send pauses rx ~0.35 s; it never runs while a burst is in progress.
 DEFAULT_LED_REFRESH_S = 15.0
 DEFAULT_LED_SETTLE_S = 2.0
@@ -85,7 +86,6 @@ class Flipper:
         fs = settings["flipper"]
         self.rx_command: str = fs["rx_command"]
         self.tx_template: str = fs["tx_command"]
-        self.led_colors: Dict[str, str] = fs["led"]
         self.gap_s: float = float(fs.get("burst_gap_s", DEFAULT_GAP_S))
         self.led_refresh_s: float = float(fs.get("led_refresh_s", DEFAULT_LED_REFRESH_S))
         self.led_settle_s: float = float(fs.get("led_settle_s", DEFAULT_LED_SETTLE_S))
@@ -120,8 +120,7 @@ class Flipper:
         self._merger = BurstMerger(self.gap_s, group=lambda k: self.sensor_for(k) or k)
         self._burst_wall: Dict[str, datetime] = {}
         self._lock = threading.Lock()
-        self._mode = Mode.HOME
-        self._alert = AlertLevel.NORMAL
+        self._alarm = False                                 # red while True, else off
         self._was_connected = False
         self._rgb: Optional[Tuple[int, int, int]] = None   # last LED sent; None = unknown
         self._led_at = 0.0                                  # monotonic time LED last queued
@@ -136,7 +135,7 @@ class Flipper:
                                                   name="flipper-events", daemon=True))
         for t in self._threads:
             t.start()
-        self._queue_led()   # show the current mode colour once connected
+        self._queue_led()   # LED off once connected (clears a colour left by an earlier run)
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop.set()
@@ -160,20 +159,21 @@ class Flipper:
         return self._enqueue([("cmd", cmd, TX_TIMEOUT_S)])
 
     def apply_event(self, event: Event) -> Optional[Future]:
-        """Feed mode_changed / alert_changed; updates the LED (and vibrates on alarm).
-        Other event types are ignored. Returns a Future or None."""
-        vibrate = False
+        """Feed pipeline events. Only alert_changed does anything: alarm -> red
+        LED + three buzzes, any other level -> LED off. mode_changed and the rest
+        are ignored (the LED stays off). Returns a Future, or None if nothing
+        was sent."""
+        if event.type != EventType.ALERT_CHANGED:
+            return None
+        alarm = event.data["level"] == AlertLevel.ALARM
         with self._lock:
-            if event.type == EventType.MODE_CHANGED:
-                self._mode = event.data["mode"]
-            elif event.type == EventType.ALERT_CHANGED:
-                vibrate = (event.data["level"] == AlertLevel.ALARM
-                           and self._alert != AlertLevel.ALARM)
-                self._alert = event.data["level"]
-            else:
-                return None
+            changed, self._alarm = alarm != self._alarm, alarm
+        if not changed:
+            return None              # e.g. normal -> warning: still off, no LED traffic
+        if not alarm:
+            self._refresh_due = None  # alarm over: drop any pending red re-send
         fut = self._queue_led()
-        if vibrate:     # vibrate() re-sends the (new) colour around every buzz
+        if alarm:       # vibrate() re-sends red around every buzz
             fut = self.vibrate()
         return fut
 
@@ -187,9 +187,9 @@ class Flipper:
         return name
 
     def current_color(self) -> str:
+        """"red" during an alarm, otherwise "off"."""
         with self._lock:
-            key = self._alert if self._alert != AlertLevel.NORMAL else self._mode
-        return self.led_colors.get(key, "white")
+            return "red" if self._alarm else "off"
 
     def set_color(self, color: str, quiet: bool = False) -> Future:
         """Low level: set the LED to a colour name from COLORS.
@@ -244,6 +244,12 @@ class Flipper:
         return self.set_color(self.current_color(), quiet)
 
     def _maybe_refresh_led(self, now: float) -> None:
+        """Re-send red while an alarm is on. Off needs no re-sends (see top)."""
+        with self._lock:
+            alarm = self._alarm
+        if not alarm:
+            self._refresh_due = None
+            return
         due = self._refresh_due is not None and now >= self._refresh_due
         periodic = (self.led_refresh_s > 0
                     and now - self._led_at >= self.led_refresh_s + self._jitter)
@@ -310,14 +316,18 @@ class Flipper:
         if self._was_connected:
             with self._lock:
                 self._rgb = None    # Flipper may have rebooted: resend all channels
-            self._queue_led()   # re-apply LED after a reconnect
+            self._queue_led()   # re-apply after a reconnect (red if alarming, else off)
         self._was_connected = True
         self._settle_led()      # rx just started: the firmware is about to rewrite red/green
         self.connected.set()
         return True
 
     def _settle_led(self) -> None:
-        if self.led_settle_s > 0:
+        """After a long rx pause the firmware rewrites red/green ~1 s later: if an
+        alarm is on, put red back once that has happened."""
+        with self._lock:
+            alarm = self._alarm
+        if alarm and self.led_settle_s > 0:
             self._refresh_due = time.monotonic() + self.led_settle_s
 
     def _on_disconnect(self, err: Exception) -> None:

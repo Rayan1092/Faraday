@@ -15,11 +15,8 @@
     "tx_command": "subghz tx_from_file /ext/subghz/{name}.sub 10 0",
     "burst_gap_s": 1.5,
     "led_refresh_s": 15,
+    "_led_note": "The Flipper LED is off except at ALARM (red + 3 buzzes). The firmware's charge indicator owns red/green while listening, so mode colours were dropped (2026-11-14). The dashboard shows mode colours on screen with its own defaults.",
     "led": {
-      "home": "green",
-      "away": "blue",
-      "night": "purple",
-      "warning": "yellow",
       "alarm": "red"
     }
   },

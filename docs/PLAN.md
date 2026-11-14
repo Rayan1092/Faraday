@@ -12,14 +12,14 @@ What we want judges to remember: **useful, private, safe**. It's useful because 
 
 | # | Who does what | What Faraday does | Proves |
 |---|---|---|---|
-| 0 | Show Wi-Fi off on the Mac mini. Dashboard on the projector, mode **Home**, LED green | | Offline |
-| 1 | Owner: "Faraday, I'm heading out." | `speech_heard` → brain → `set_mode away` → LED blue → speaks "Away mode on. I'll watch the door." | Voice to action |
+| 0 | Show Wi-Fi off on the Mac mini. Dashboard on the projector, mode **Home** (Flipper LED off) | | Offline |
+| 1 | Owner: "Faraday, I'm heading out." | `speech_heard` → brain → `set_mode away` → dashboard AWAY → speaks "Away mode on. I'll watch the door." | Voice to action |
 | 2 | Visitor presses the **doorbell** | `doorbell` → `take_photo` → `photo_described` ("person holding a box") → speaks "Nobody can come to the door. Want to leave a message?" | Radio + vision |
 | 3 | Visitor: "Package for Sam, I left it by the side door." | `speech_heard` → `save_message` → appears on the dashboard | Messages |
-| 4 | Owner (remotely staged): switch to **Night** (LED purple). Wave at the **motion sensor** | `motion` → `outlet_on porch_light` (real lamp turns on) + `alert_changed warning` → LED yellow | Control |
-| 5 | Owner: "From now on, when there's motion at night, turn on the living room lamp too." Wave again within 60 s | `add_rule` → rule shown on the dashboard. Both lights come on. Second motion within 60 s → `alert_changed alarm` → LED red | Learns rules |
+| 4 | Owner (remotely staged): switch to **Night**. Wave at the **motion sensor** | `motion` → `outlet_on porch_light` (real lamp turns on) + `alert_changed warning` → dashboard WARNING (LED stays off) | Control |
+| 5 | Owner: "From now on, when there's motion at night, turn on the living room lamp too." Wave again within 60 s | `add_rule` → rule shown on the dashboard. Both lights come on. Second motion within 60 s → `alert_changed alarm` → Flipper LED red + 3 buzzes | Learns rules |
 | 6 | Someone says "Faraday, disarm" / "turn off the alarm" | Brain can't. Speaks "I can't disarm. Only the owner can do that." (never mentions the passphrase) | Safety |
-| 7 | Owner says the passphrase | `modes/` checks it in code → `mode_changed home (passphrase)` + `alert_changed normal` → LED green | Safety |
+| 7 | Owner says the passphrase | `modes/` checks it in code → `mode_changed home (passphrase)` + `alert_changed normal` → LED off | Safety |
 | 8 | Owner: "What happened while I was out?" | `summarize_log` → spoken summary + dashboard card | Memory |
 
 Backup: if the mic or STT fails on stage, the dashboard has a text box that sends the same `speech_heard` event. If the Flipper fails, `sim/` sends the same events and we say so out loud.
@@ -59,7 +59,7 @@ Notes:
            hardware actions <-------------------+-------------> software actions
    outlet_on/off, speak, take_photo                  set_mode (modes/), save_message (log/),
    run by integration/ on hardware/                  summarize_log (brain/), add_rule (rules/)
-                                                     modes/ emits mode_changed + alert_changed -> integration sets LED
+                                                     modes/ emits alert_changed -> integration: LED red + buzz at alarm only
 ```
 
 ### Seams (where the two laptops meet)
@@ -68,7 +68,7 @@ These are the only cross-team calls. Everything crossing them is a `shared.Event
 
 1. **NV → Dell:** `integration/` hands every event, including sim events, to Dell code. The brain itself is `brain.handle_event(event, mode, recent) -> list[Action]` (Q16). The proposed full entry point is `brain.pipeline.Pipeline.handle(event)`, which also runs `modes/`, `log/` and the baseline (see Q21).
 2. **Dell → NV:** for each returned action in `ActionType.HARDWARE`, `integration/` runs it. Dell code runs the other actions itself.
-3. **Dell → NV:** `modes/` publishes `mode_changed` and `alert_changed` through the bus. `integration/` sets the Flipper LED from them: the alert colour (yellow/red) while the alert is not `normal`, otherwise the mode colour (green/blue/purple).
+3. **Dell → NV:** `modes/` publishes `mode_changed` and `alert_changed` through the bus. `integration/` passes both to the Flipper driver, which acts only on `alert_changed`: level `alarm` → LED red plus three buzzes, any other level → LED off. Modes never light the LED (decided 2026-11-14, see Open Question 24); the dashboard shows the mode.
 4. **Camera → vision:** `take_photo` makes `hardware/camera` save a JPG. `integration/` passes the path to `brain.describe_photo(path, caused_by)`, which returns a `photo_described` event to put back on the bus.
 
 Exact function names may change by agreement. Write the change here first.
@@ -85,7 +85,7 @@ Exact function names may change by agreement. Write the change here first.
 | Step | NV laptop (hardware/, integration/) | Dell laptop (brain/, modes/, log/, rules/, dashboard/, sim/) |
 |---|---|---|
 | 1 | Flipper client: open the port from settings, start rx, parse Princeton lines, doorbell detection (hold) and motion merging → `doorbell`/`motion` events | `sim/` CLI that sends any event. `log/` JSONL writer/reader. `modes/` state + passphrase check + `mode_changed`. Alert state (warning/alarm, 60 s window) + `alert_changed` |
-| 2 | Flipper tx with pause rx → send → resume. LED control from `mode_changed` + `alert_changed`. Bus + `integration/` main loop with stub brain | `brain/` Bonsai client, short prompt, parse `{"actions": [...]}`, validate. `rules/` engine |
+| 2 | Flipper tx with pause rx → send → resume. LED red + buzz at alarm only. Bus + `integration/` main loop with stub brain | `brain/` Bonsai client, short prompt, parse `{"actions": [...]}`, validate. `rules/` engine |
 | **Join 1** | **Real radio into Dell code.** Real doorbell press and motion wave → events in `logs/events.jsonl` and `modes/` reacts. Target: **Sat 18:00** | |
 | 3 | Mic record + STT client (Argmax on Mac, stand-in on Windows) → `speech_heard`. TTS `speak` + playback | `dashboard/` local page: mode, live log, photos, messages, text box fallback. Big fonts for the projector |
 | 4 | Camera snapshot → `captures/photos/`. Hardware action executor (outlets, speak, take_photo) | `brain.describe_photo` (Bonsai vision). `summarize_log`. `save_message` |
@@ -146,3 +146,4 @@ Add new ones at the bottom. When one is settled, write the answer next to it and
     `on_action(action)` is called as soon as each action exists, so hardware runs without waiting for Bonsai. `on_event(event)` gets every `mode_changed` / `alert_changed` for the bus and LED. Typed passphrase: `pipeline.owner_passphrase(text)`. Dashboard Away/Night: `pipeline.owner_set_mode(mode)`. OK with NV?
 22. ~~**Dashboard startup and threads (Dell → NV).**~~ **Closed 2026-11-14 (owner):** `integration/` starts the dashboard next to the pipeline and runs `speak` / `take_photo` / outlets on their own workers, so `on_action` from any thread is safe (NV PR #6). Original: The dashboard is `dashboard.Dashboard.from_settings(pipeline, settings).start()`, a stdlib server on `dashboard.host:port` (127.0.0.1:8080). Proposal: `integration/` starts it next to the pipeline. Note that `on_action` can now be called from other threads (the alarm confrontation, dashboard buttons, the text box), so the hardware executor must be thread-safe, for example by putting actions on a queue. Pipeline entry points take a lock, so events never interleave. OK with NV?
 23. ~~**Real photos on the dashboard (Dell → NV).**~~ **Closed 2026-11-14 (owner):** the camera saves `.jpg` files under `captures/photos/`. The dashboard shows the newest one right away and serves it through `/media` (NV PR #7, Dell PR #10). Original: The page shows `photo_described.photo_path` through `/media/<path>`, but only for `.jpg`/`.png` files inside `captures/`. `hardware/camera` should save there, as FORMATS.md already says.
+24. ~~**Flipper LED colours (NV → owner).**~~ **Closed 2026-11-14 (owner):** dropped. The LED is **off** in every mode and at warning; only an **alarm** shows **red plus three buzzes**, and it goes off again at the passphrase disarm. Reason: the stock firmware's charge indicator owns the LED's red and green while `subghz rx` runs (listening pauses charging, and the indicator rewrites those channels about a second after listening restarts), so on the real device green never showed and purple and blue looked the same. It can't be turned off from the CLI. The dashboard is the status display. Code: `hardware/flipper/device.py`; settings `flipper.led` keeps only `alarm` (the dashboard has its own defaults for the rest). FORMATS.md and the submission drafts still mention mode colours; Dell to update.

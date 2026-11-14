@@ -12,7 +12,7 @@ py -m integration --fake --offline --no-browser --log tmp.jsonl   # quick try, n
 |---|---|
 | Flipper events → `Pipeline.handle()` | thread-safe queue, one worker |
 | `outlet_on` / `outlet_off` → Flipper | `Flipper.execute()`, queued inside the driver (rx pause, send, resume) |
-| `mode_changed` / `alert_changed` → LED | `Flipper.apply_event()`, alert beats mode |
+| `alert_changed` → Flipper | `Flipper.apply_event()`: alarm = red LED + 3 buzzes, anything else = LED off. `mode_changed` is passed too but lights nothing |
 | `speak` | speech worker, one line at a time |
 | `take_photo` | camera worker → `photo_described` back onto the queue |
 | Dashboard | `Dashboard.from_settings(pipeline, settings)`, started with the app |
