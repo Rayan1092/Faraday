@@ -92,11 +92,58 @@ class Flow(unittest.TestCase):
         self.assertTrue(self.fl.device.rx)        # listening again after all that
         # the baseline asked for porch light twice; it was only transmitted once
         self.assertEqual(self.fl.device.tx.count("outlet1_on"), 1)
-        self.assertTrue(any("skip repeat outlet_on porch_light" in s for s in self.said))
+        self.assertTrue(any("porch_light already on, not resent" in s for s in self.said))
+        self.assertTrue(self.fl.device.outlet_lit[1] and self.fl.device.outlet_lit[2])
 
         self.assertIsNotNone(self.app.pipeline.owner_passphrase(
             self.settings["security"]["passphrase"]))
         self.assertTrue(wait_until(lambda: self.fl.device.rgb == GREEN))
+
+    def test_second_wave_after_61s_keeps_porch_light_on(self):
+        """Join 1 bug: wave 2 came 61.7 s after wave 1 (no alarm, correct), the
+        baseline asked for outlet_on porch_light again, the code was resent, and
+        the toggling outlet turned the porch light OFF."""
+        self.app.pipeline.owner_set_mode(Mode.NIGHT)
+        self.wave()
+        self.assertTrue(wait_until(lambda: self.fl.device.outlet_lit[1]))
+        self.assertTrue(wait_until(lambda: self.app.pipeline.modes.alert == "warning"))
+        self.app.pipeline.modes._last_motion -= 61.7          # replay the real timing...
+        import integration.app as app_module                   # ...for the app's clock too
+
+        class Later:                                            # monotonic() 61.7 s ahead
+            def __getattr__(self, name):
+                return getattr(time, name)
+
+            @staticmethod
+            def monotonic():
+                return time.monotonic() + 61.7
+
+        if hasattr(app_module, "time"):                        # old code timed its repeat skip
+            self.addCleanup(setattr, app_module, "time", app_module.time)
+            app_module.time = Later()
+        self.wave()
+        self.assertTrue(wait_until(lambda: len(self.entries("motion")) == 2))
+        self.assertTrue(wait_until(lambda: len(self.entries("outlet_on")) == 2))
+        time.sleep(0.5)
+        self.assertEqual(self.app.pipeline.modes.alert, "warning")   # outside 60 s: no alarm
+        self.assertEqual(self.fl.device.tx, ["outlet1_on"])          # not resent
+        self.assertTrue(self.fl.device.outlet_lit[1])                # porch light still ON
+
+    def test_outlet_off_then_on_is_sent_again(self):
+        from shared import Action
+        for kind in ("outlet_on", "outlet_off", "outlet_on"):
+            self.app._on_action(Action(kind, "dashboard", {"outlet": "spare"}))
+        self.assertTrue(wait_until(lambda: len(self.fl.device.tx) == 3))
+        self.assertEqual(self.fl.device.tx, ["outlet3_on", "outlet3_off", "outlet3_on"])
+
+    def test_failed_send_is_retried_next_time(self):
+        from shared import Action
+        self.fl.device.files.discard("outlet3_on")
+        self.app._on_action(Action("outlet_on", "dashboard", {"outlet": "spare"}))
+        self.assertTrue(wait_until(lambda: any("FAILED" in s for s in self.said)))
+        self.fl.device.files.add("outlet3_on")
+        self.app._on_action(Action("outlet_on", "dashboard", {"outlet": "spare"}))
+        self.assertTrue(wait_until(lambda: self.fl.device.tx == ["outlet3_on"]))
 
     def test_away_doorbell_takes_photo(self):
         self.app.pipeline.owner_set_mode(Mode.AWAY)

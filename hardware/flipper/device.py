@@ -363,7 +363,8 @@ class Flipper:
             ok, out = self.conn.run(text, timeout)
             failed = cmd.check_errors and any(w in ln.lower() for ln in out for w in ERROR_WORDS)
             ok = ok and not failed
-            level = logging.DEBUG if cmd.quiet and ok else logging.INFO
+            # failures always show (WARNING); successes are INFO (-v), refreshes DEBUG
+            level = logging.WARNING if not ok else (logging.DEBUG if cmd.quiet else logging.INFO)
             log.log(level, "ran '%s' in %.2fs: %s %s", text, time.monotonic() - t0,
                     "ok" if ok else "FAILED", out[-2:] if out else "")
             ok_all &= ok

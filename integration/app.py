@@ -17,15 +17,13 @@ from __future__ import annotations
 import logging
 import queue
 import threading
-import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 from shared import Action, ActionType, Event, EventType, Mode
 
 from brain.pipeline import Pipeline
 
 log = logging.getLogger("integration")
-REPEAT_SKIP_S = 60.0   # same outlet, same on/off within this window: not sent again
 
 
 class PrintSpeaker:
@@ -56,7 +54,7 @@ class App:
         self._photos: "queue.Queue[Optional[Action]]" = queue.Queue()
         self._threads: List[threading.Thread] = []
         self._stopping = threading.Event()
-        self._outlet_sent: Dict[str, Tuple[str, float]] = {}   # outlet -> (on/off, when)
+        self._outlet_state: Dict[str, str] = {}   # outlet -> last command sent OK (on/off)
         self._sent_lock = threading.Lock()
         self.flipper.on_event = self.submit
         self.pipeline = pipeline or Pipeline.from_settings(
@@ -104,21 +102,22 @@ class App:
     def _on_pipeline_event(self, event: Event) -> None:
         self.out(f"EVENT  {event.type:<15} {_brief(event.data)}  [{event.source}]")
         if event.type in (EventType.MODE_CHANGED, EventType.ALERT_CHANGED):
-            self.flipper.apply_event(event)
+            fut = self.flipper.apply_event(event)
+            if fut is not None:
+                fut.add_done_callback(lambda f, t=event.type: self._check_led(f, t))
 
     def _on_action(self, action: Action) -> None:
         self.out(f"  ACTION {action.type:<13} {_brief(action.args)}  [{action.source}]")
         if action.type in (ActionType.OUTLET_ON, ActionType.OUTLET_OFF):
             outlet = action.args.get("outlet")
-            now = time.monotonic()
             with self._sent_lock:
-                last = self._outlet_sent.get(outlet)
-                if last and last[0] == action.type and now - last[1] < REPEAT_SKIP_S:
-                    # The baseline re-sends outlet_on on every armed motion; each
-                    # send blinds rx ~1.2 s, so don't repeat what was just done.
-                    self.out(f"  [flipper] skip repeat {action.type} {outlet}")
+                if self._outlet_state.get(outlet) == action.type:
+                    # Never send the same command twice in a row: the real outlets
+                    # TOGGLE on a repeated code (a second outlet1_on turned the porch
+                    # light off in Join 1), and each send blinds rx ~1.2 s anyway.
+                    self.out(f"  [flipper] {outlet} already {action.type[7:]}, not resent")
                     return
-                self._outlet_sent[outlet] = (action.type, now)
+                self._outlet_state[outlet] = action.type
             try:
                 fut = self.flipper.execute(action)
                 fut.add_done_callback(lambda f, a=action: self._check_send(f, a))
@@ -135,9 +134,17 @@ class App:
         except Exception as e:  # cable dropped mid-send
             ok, out = False, [repr(e)]
         if not ok:
-            with self._sent_lock:               # failed: allow the next attempt
-                self._outlet_sent.pop(action.args.get("outlet"), None)
+            with self._sent_lock:               # state unknown now: allow the next attempt
+                self._outlet_state.pop(action.args.get("outlet"), None)
             self.out(f"  [flipper] {action.type} {action.args.get('outlet')} FAILED: {out[-1:]}")
+
+    def _check_led(self, fut, what: str) -> None:
+        try:
+            ok, out = fut.result()
+        except Exception as e:
+            ok, out = False, [repr(e)]
+        if not ok:
+            self.out(f"  [flipper] LED for {what} FAILED: {out[-2:]}")
 
     # ---- workers -----------------------------------------------------------------
     def _event_worker(self) -> None:
