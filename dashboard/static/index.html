@@ -8,84 +8,124 @@
   <link rel="stylesheet" href="/static/dashboard.css">
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
 </head>
-<body data-status="green">
-  <header class="top">
-    <div class="mode-block">
-      <div id="mode" class="mode" aria-label="Mode">—</div>
-      <div id="alert" class="alert-line"></div>
-    </div>
-    <div class="badges">
-      <div id="net" class="badge offline" title="Checked every few seconds without sending anything">● OFFLINE</div>
-      <div id="link" class="badge link">connecting…</div>
-    </div>
-    <nav class="buttons">
-      <button id="btn-talk" class="btn talk" type="button" hidden>Talk</button>
-      <button id="btn-away" class="btn away" type="button">Away</button>
-      <button id="btn-night" class="btn night" type="button">Night</button>
-      <button id="btn-home" class="btn home" type="button">Home</button>
-    </nav>
-  </header>
+<body data-status="green" data-alert="normal">
+  <div id="backdrop" class="backdrop" aria-hidden="true"></div>
+  <div class="status-line" aria-hidden="true"></div>
+  <div class="edge-glow" aria-hidden="true"></div>
 
-  <div id="banner" class="banner" hidden>
-    <span id="banner-title" class="banner-title"></span>
-    <span id="banner-text" class="banner-text"></span>
+  <div id="toast" class="toast" role="status" aria-live="polite">
+    <span class="toast-dot" aria-hidden="true"></span>
+    <div class="toast-body">
+      <div id="toast-title" class="toast-title"></div>
+      <div id="toast-text" class="toast-text"></div>
+    </div>
   </div>
 
-  <main class="grid">
-    <section class="panel camera">
-      <h2>Camera</h2>
-      <div class="photo-frame">
-        <img id="photo" alt="Latest photo" src="/static/no-photo.svg">
+  <main class="app">
+    <!-- Left: status, messages, rules -->
+    <section class="col col-left">
+      <div class="glass status-card">
+        <div class="ring-wrap">
+          <svg class="ring" viewBox="0 0 120 120" aria-hidden="true">
+            <circle class="ring-track" cx="60" cy="60" r="52"></circle>
+            <circle class="ring-arc" cx="60" cy="60" r="52"></circle>
+          </svg>
+          <span id="ring-icon" class="ring-icon" data-icon="lock"></span>
+        </div>
+        <div class="status-text">
+          <div class="eyebrow">Faraday</div>
+          <h1 id="mode" class="mode">Home</h1>
+          <div class="alert-row"><span class="dot" aria-hidden="true"></span><span id="alert">All clear</span></div>
+        </div>
+        <div class="badges">
+          <span id="net" class="pill net" title="Checked every few seconds without sending anything"><span class="dot" aria-hidden="true"></span><span id="net-text">OFFLINE</span></span>
+          <span id="link" class="link">connecting…</span>
+        </div>
       </div>
-      <p id="photo-text" class="photo-text">No photo yet.</p>
-      <p id="photo-meta" class="meta"></p>
+
+      <div class="glass list-card notes">
+        <div class="card-head"><span data-icon="message"></span><h2 id="notes-title">Messages</h2></div>
+        <div id="summary" class="summary" hidden></div>
+        <ul id="messages" class="messages"></ul>
+      </div>
+
+      <div class="glass list-card rules">
+        <div class="card-head"><span data-icon="rule"></span><h2>Rules</h2></div>
+        <ul id="rules" class="rule-list"></ul>
+      </div>
     </section>
 
-    <section class="panel talk">
-      <h2>Heard &amp; said</h2>
-      <ol id="talk" class="talk-list"></ol>
+    <!-- Center: latest photo and the conversation -->
+    <section class="col col-center">
+      <figure class="glass photo-card">
+        <div class="photo-frame">
+          <img id="photo" alt="Latest photo" hidden>
+          <div id="photo-empty" class="photo-empty"><span data-icon="camera"></span><span>No photo yet</span></div>
+        </div>
+        <figcaption class="caption">
+          <p id="photo-text" class="caption-text">The camera hasn't taken a photo yet.</p>
+          <p class="caption-meta"><span data-icon="camera"></span><span id="photo-meta"></span></p>
+        </figcaption>
+      </figure>
+
+      <div class="glass talk-card">
+        <div class="card-head"><span data-icon="mic"></span><h2>Heard &amp; said</h2></div>
+        <ol id="talk" class="talk-list"></ol>
+      </div>
     </section>
 
-    <section class="panel feed">
-      <h2>Live events</h2>
-      <ol id="feed" class="feed-list"></ol>
+    <!-- Right: live activity -->
+    <section class="col col-right">
+      <div class="glass timeline-card">
+        <div class="card-head"><span data-icon="activity"></span><h2>Activity</h2></div>
+        <ol id="feed" class="timeline"></ol>
+      </div>
     </section>
+
+    <!-- Bottom dock: lights, modes, talk, backup -->
+    <nav class="glass dock" aria-label="Controls">
+      <div id="lights" class="lights"></div>
+
+      <div class="segmented" role="group" aria-label="Mode">
+        <button id="btn-away" class="seg" type="button" data-mode="away"><span class="seg-dot"></span>Away</button>
+        <button id="btn-night" class="seg" type="button" data-mode="night"><span class="seg-dot"></span>Night</button>
+        <button id="btn-home" class="seg" type="button" data-mode="home"><span class="seg-dot"></span>Home</button>
+      </div>
+
+      <div class="dock-actions">
+        <button id="btn-talk" class="pill-btn talk" type="button" hidden><span data-icon="mic"></span>Talk</button>
+        <button id="btn-backup" class="icon-btn" type="button" aria-expanded="false" aria-controls="backup" title="Stage backup"><span data-icon="more"></span></button>
+      </div>
+    </nav>
   </main>
 
-  <footer class="bottom">
-    <section class="panel lights">
-      <h2>Lights</h2>
-      <div id="lights" class="light-list"></div>
-    </section>
-    <section class="panel rules">
-      <h2>Rules</h2>
-      <ul id="rules" class="rule-list"></ul>
-    </section>
-    <section class="panel notes">
-      <h2 id="notes-title">Messages</h2>
-      <div id="summary" class="summary" hidden></div>
-      <ul id="messages" class="message-list"></ul>
-    </section>
-  </footer>
+  <!-- Stage backup: tucked away until needed -->
+  <div id="backup" class="glass popover" hidden>
+    <div class="popover-title">Stage backup</div>
+    <div class="popover-row">
+      <button id="btn-ring" class="pill-btn" type="button" title="Sends the same doorbell event the Flipper would"><span data-icon="door"></span>Ring doorbell</button>
+      <button id="btn-motion" class="pill-btn" type="button" title="Sends the same motion event the Flipper would"><span data-icon="motion"></span>Motion</button>
+    </div>
+    <form id="say-form" class="say" autocomplete="off">
+      <label for="say-text">Type what someone said (backup for the mic)</label>
+      <div class="say-row">
+        <input id="say-text" type="text" maxlength="500" placeholder="Faraday, I'm heading out.">
+        <button class="pill-btn" type="submit">Send</button>
+      </div>
+    </form>
+  </div>
 
-  <form id="say-form" class="say" autocomplete="off">
-    <label for="say-text">Type what someone said (backup for the mic):</label>
-    <input id="say-text" type="text" maxlength="500" placeholder="Faraday, I'm heading out.">
-    <button class="btn small" type="submit">Send</button>
-    <span class="backup-label">Stage backup:</span>
-    <button id="btn-ring" class="btn small" type="button" title="Sends the same doorbell event the Flipper would">Ring doorbell</button>
-    <button id="btn-motion" class="btn small" type="button" title="Sends the same motion event the Flipper would">Motion</button>
-  </form>
-
-  <div id="home-dialog" class="overlay" hidden>
-    <form id="home-form" class="dialog" autocomplete="off">
+  <!-- Passphrase sheet -->
+  <div id="home-dialog" class="sheet-backdrop" hidden>
+    <form id="home-form" class="glass sheet" autocomplete="off">
+      <span class="sheet-icon" data-icon="lock"></span>
       <h2>Disarm</h2>
       <p>Only the owner can disarm. Enter the passphrase.</p>
       <input id="home-pass" type="password" autocomplete="off" aria-label="Passphrase">
       <p id="home-error" class="error" role="alert"></p>
-      <div class="dialog-buttons">
-        <button class="btn home" type="submit">Disarm</button>
-        <button id="home-cancel" class="btn small" type="button">Cancel</button>
+      <div class="sheet-buttons">
+        <button id="home-cancel" class="pill-btn ghost" type="button">Cancel</button>
+        <button class="pill-btn primary" type="submit">Disarm</button>
       </div>
     </form>
   </div>
