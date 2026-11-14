@@ -20,6 +20,7 @@ py -m integration --fake --offline --no-browser --log tmp.jsonl   # quick try, n
 Nothing slow runs inside the pipeline callbacks: `on_action` can come from dashboard and confrontation threads (PLAN Q22). The pipeline logs every event and action itself (Q21).
 
 **Console:**
+- `r`: push-to-talk. Enter stops it and sends the recording to STT
 - `t <text>`: typed speech
 - `1` / `2` / `3`: Home (passphrase) / Away / Night
 - `d` / `m`: fake doorbell / wave (fake only)
