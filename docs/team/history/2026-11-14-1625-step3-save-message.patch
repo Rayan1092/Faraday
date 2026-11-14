@@ -1,0 +1,149 @@
+diff --git a/brain/core.py b/brain/core.py
+index 798633f..2ff0b7c 100644
+--- a/brain/core.py
++++ b/brain/core.py
+@@ -142,7 +142,7 @@ class Brain:
+         # benchmark can tell "Bonsai got it right" from "code fixed it".
+         fixups: List[str] = []
+         before = len(actions)
+-        actions = self._keep_promised_message(actions, event, mode, allowed)
++        actions = self._keep_promised_message(actions, event, mode, allowed, recent)
+         if len(actions) != before:
+             fixups.append("saved the message Bonsai promised")
+         actions, fixed = self._match_arm_words(actions, event, mode, allowed)
+@@ -236,19 +236,31 @@ class Brain:
+                               f"corrected to {want} from the owner's words")
+ 
+     def _keep_promised_message(self, actions: List[Action], event: Event, mode: str,
+-                               allowed: List[str]) -> List[Action]:
+-        """Bonsai sometimes says "I'll take that message" but never saves it (3/10 in
+-        the benchmark). If it promised, save the visitor's words in plain code."""
++                               allowed: List[str], recent: Iterable[Any] = ()) -> List[Action]:
++        """Save the visitor's words in plain code when Bonsai didn't:
++        - Bonsai said "I'll take that message" but never saved it (3/10 in the benchmark).
++        - Faraday had just asked "Would you like to leave a message?" and Bonsai answered
++          the visitor's reply with another greeting (NV live run, demo step 3). Then the
++          reply *is* the message, unless the visitor declined."""
+         if (event.type != EventType.SPEECH_HEARD or ActionType.SAVE_MESSAGE not in allowed
+                 or any(a.type == ActionType.SAVE_MESSAGE for a in actions)):
+             return actions
+-        if not any(a.type == ActionType.SPEAK and "message" in a.args["text"].lower()
+-                   for a in actions):
+-            return actions
+         text = str(event.data.get("text", ""))[:500]
+-        extra, _ = filter_actions([{"type": ActionType.SAVE_MESSAGE,
+-                                    "args": {"text": text, "sender": "visitor"}}],
+-                                  event, mode, allowed)
++        promised = any(a.type == ActionType.SPEAK and "message" in a.args["text"].lower()
++                       for a in actions)
++        last = _last_said(recent).strip()
++        # an offer is a question about a message ("Would you like to leave a message?"),
++        # not a confirmation ("Thank you. I saved your message.")
++        offered = ("message" in last.lower() and last.endswith("?")
++                   and not _DECLINE.match(text))
++        if not (promised or offered):
++            return actions
++        items = [{"type": ActionType.SAVE_MESSAGE, "args": {"text": text, "sender": "visitor"}}]
++        if not promised:
++            # Bonsai's own line ignored the message (e.g. a second greeting): replace it.
++            actions = [a for a in actions if a.type != ActionType.SPEAK]
++            items.append(fb._speak(fb.MESSAGE_SAVED))
++        extra, _ = filter_actions(items, event, mode, allowed)
+         return extra + actions
+ 
+     def _confirm_mode(self, actions: List[Action], event: Event, mode: str,
+@@ -297,6 +309,18 @@ def _mode_reply(event: Event) -> List[RawItem]:
+     return [fb._speak(text)] if text else []
+ 
+ 
++_DECLINE = re.compile(r"^\s*(no|nope|nah|not now|no thanks?|no thank you)\b[\s,.!]*(thanks?|thank you)?[\s.!]*$", re.I)
++
++
++def _last_said(recent: Iterable[Any]) -> str:
++    """The last thing Faraday said, from the recent log entries."""
++    for entry in reversed(list(recent)):
++        if (isinstance(entry, dict) and entry.get("kind") == "action"
++                and entry.get("type") == ActionType.SPEAK):
++            return str((entry.get("args") or {}).get("text", ""))
++    return ""
++
++
+ def photo_cause(event: Event, recent: Iterable[Any]) -> str:
+     """Why a photo was taken, traced through caused_by in the log:
+     photo_described -> take_photo action -> the event that caused it.
+diff --git a/brain/tests/test_offered_message.py b/brain/tests/test_offered_message.py
+new file mode 100644
+index 0000000..581ad69
+--- /dev/null
++++ b/brain/tests/test_offered_message.py
+@@ -0,0 +1,70 @@
++"""Demo step 3: after Faraday offers to take a message, the visitor's reply is
++saved even when Bonsai answers it with another greeting (NV live run, 4B)."""
++from __future__ import annotations
++
++import unittest
++
++from shared import ActionType, EventType, Mode, Source, make_action, make_event
++
++from brain import fallback as fb
++from brain.tests.helpers import make_brain, tool_calls
++
++OFFER = "Would you like to leave a message?"
++VISITOR = "Package for Sam, I left it by the side door."
++GREETING = tool_calls(("speak", {"text": "Hello, I'm Faraday. What can I do for you?"}))
++
++
++def said(text):
++    return make_action(ActionType.SPEAK, {"text": text}, Source.BRAIN).to_dict()
++
++
++def heard(text):
++    return make_event(EventType.SPEECH_HEARD, {"text": text}, Source.SPEECH)
++
++
++def kinds(decision):
++    return [(a.type, a.args.get("text")) for a in decision.actions]
++
++
++class OfferedMessage(unittest.TestCase):
++    def test_reply_after_offer_is_saved_and_greeting_replaced(self):
++        d = make_brain(GREETING).decide(heard(VISITOR), Mode.AWAY, [said(OFFER)])
++        self.assertEqual(kinds(d), [(ActionType.SAVE_MESSAGE, VISITOR),
++                                    (ActionType.SPEAK, fb.MESSAGE_SAVED)])
++        self.assertEqual(d.actions[0].args["sender"], "visitor")
++
++    def test_declining_is_not_saved(self):
++        for no in ("No thanks", "Nope.", "Not now, thanks"):
++            with self.subTest(no=no):
++                d = make_brain(GREETING).decide(heard(no), Mode.AWAY, [said(OFFER)])
++                self.assertNotIn(ActionType.SAVE_MESSAGE, [a.type for a in d.actions])
++
++    def test_message_starting_with_no_is_still_saved(self):
++        text = "No, tell Sam the package is by the side door."
++        d = make_brain(GREETING).decide(heard(text), Mode.AWAY, [said(OFFER)])
++        self.assertEqual(d.actions[0].type, ActionType.SAVE_MESSAGE)
++
++    def test_without_offer_nothing_changes(self):
++        d = make_brain(GREETING).decide(heard(VISITOR), Mode.AWAY,
++                                        [said("Away mode on. I'll watch the door.")])
++        self.assertEqual([a.type for a in d.actions], [ActionType.SPEAK])
++
++    def test_only_the_last_line_counts(self):
++        recent = [said(OFFER), said("Thank you. I saved your message.")]
++        d = make_brain(GREETING).decide(heard("Bye!"), Mode.AWAY, recent)
++        self.assertEqual([a.type for a in d.actions], [ActionType.SPEAK])
++
++    def test_bonsai_saving_itself_is_left_alone(self):
++        reply = tool_calls(("save_message", {"text": VISITOR, "sender": "visitor"}),
++                           ("speak", {"text": "Thanks, I'll pass it on."}))
++        d = make_brain(reply).decide(heard(VISITOR), Mode.AWAY, [said(OFFER)])
++        self.assertEqual(kinds(d), [(ActionType.SAVE_MESSAGE, VISITOR),
++                                    (ActionType.SPEAK, "Thanks, I'll pass it on.")])
++
++    def test_home_mode_is_not_a_visitor(self):
++        d = make_brain(GREETING).decide(heard(VISITOR), Mode.HOME, [said(OFFER)])
++        self.assertNotIn(ActionType.SAVE_MESSAGE, [a.type for a in d.actions])
++
++
++if __name__ == "__main__":
++    unittest.main()
