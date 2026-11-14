@@ -45,7 +45,7 @@ def llm_config(settings: Dict[str, Any]) -> Dict[str, Any]:
         "temperature": float(llm.get("temperature", 0.2)),
         "timeout_s": float(llm.get("timeout_s", 30)),
         "recent_log_lines": int(llm.get("recent_log_lines", 10)),
-        # Optional, not in settings.example.json yet (see PLAN.md Open Questions).
+        # "none" turns Bonsai thinking off (PLAN.md Q17).
         "reasoning_effort": llm.get("reasoning_effort", "none"),
     }
 

@@ -15,6 +15,8 @@ RawItem = Dict[str, Any]
 GREETING_ARMED = "Hello. Nobody can come to the door right now. Would you like to leave a message?"
 GREETING_HOME = "Hello. Someone will be with you shortly."
 CANT_DISARM = "I can't disarm. Say the passphrase."
+ON_CAMERA = "This is Faraday. You are on camera."
+MESSAGE_SAVED = "Thank you. I saved your message."
 
 
 def _speak(text: str) -> RawItem:
@@ -33,19 +35,20 @@ _LIGHT = re.compile(r"\bturn (on|off) (the )?(porch( light)?|living room( lamp)?
                     r"|\b(porch( light)?|living room( lamp)?|lamp|lights?) (on|off)\b", re.I)
 
 
-def fallback(event: Event, mode: str) -> List[RawItem]:
+def fallback(event: Event, mode: str, photo_reason: str = "") -> List[RawItem]:
+    """Doorbell/motion photos and lights are guaranteed by rules/baseline.py, not here.
+
+    photo_reason: for photo_described, why the photo was taken ("doorbell while away").
+    """
     armed = mode in Mode.ARMED
-    if event.type == EventType.DOORBELL:
-        return [{"type": ActionType.TAKE_PHOTO, "args": {"reason": "doorbell"}}]
-    if event.type == EventType.MOTION:
-        if mode == Mode.NIGHT:
-            return [_outlet(True, "porch_light"),
-                    {"type": ActionType.TAKE_PHOTO, "args": {"reason": "motion at night"}}]
-        if mode == Mode.AWAY:
-            return [{"type": ActionType.TAKE_PHOTO, "args": {"reason": "motion while away"}}]
+    if event.type == EventType.MOTION and mode == Mode.NIGHT:
+        return [_outlet(True, "porch_light")]  # repeats the baseline; merge() drops it
+    if event.type in (EventType.DOORBELL, EventType.MOTION):
         return []
     if event.type == EventType.PHOTO_DESCRIBED:
-        return [_speak(GREETING_ARMED if armed else GREETING_HOME)]
+        if "doorbell" in photo_reason or not photo_reason:
+            return [_speak(GREETING_ARMED if armed else GREETING_HOME)]
+        return [_speak(ON_CAMERA)] if armed else []
     if event.type == EventType.SPEECH_HEARD:
         return _speech(str(event.data.get("text", "")), mode)
     return []
@@ -70,5 +73,5 @@ def _speech(text: str, mode: str) -> List[RawItem]:
         return [_outlet(on, outlet)]
     if armed:
         return [{"type": ActionType.SAVE_MESSAGE, "args": {"text": text[:500], "sender": "visitor"}},
-                _speak("Thank you. I saved your message.")]
+                _speak(MESSAGE_SAVED)]
     return [_speak("Sorry, I can't help with that.")]

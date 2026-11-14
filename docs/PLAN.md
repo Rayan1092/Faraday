@@ -24,6 +24,17 @@ What we want judges to remember: **useful, private, safe**. It's useful because 
 
 Backup: if the mic or STT fails on stage, the dashboard has a text box that sends the same `speech_heard` event. If the Flipper fails, `sim/` sends the same events and we say so out loud.
 
+## Mode table (baseline, plain code)
+
+Lights, photos and warnings are guaranteed by plain code in `modes/` and `rules/baseline.py`, so they happen even if Bonsai is slow, wrong or down. Bonsai adds speech, judgment and descriptions on top, and anything it repeats is dropped (decided in Open Question 20).
+
+| Event | Home | Away | Night |
+|---|---|---|---|
+| `doorbell` | `take_photo` | `take_photo` | `outlet_on porch_light`, `take_photo` |
+| `motion` | nothing | `take_photo` + alert | `outlet_on porch_light`, `take_photo` + alert |
+
+Alert (in `modes/`): the first motion in Away/Night sets `warning`, and motion again within `alerts.alarm_window_s` sets `alarm`. Only the passphrase returns it to `normal`. The doorbell greeting is spoken after `photo_described`, by Bonsai or the fallback. While Bonsai thinks about a visitor (speech while armed, or the photo after a doorbell), plain code first says "One moment, please."
+
 ## Architecture in one picture
 
 ```
@@ -44,7 +55,7 @@ Backup: if the mic or STT fails on stage, the dashboard has a text box that send
 
 These are the only cross-team calls. Everything crossing them is a `shared.Event` or `shared.Action`.
 
-1. **NV → Dell:** `integration/` calls `brain.handle_event(event) -> list[Action]` for every event, including sim events. It also hands every event and action to `log/`.
+1. **NV → Dell:** `integration/` hands every event, including sim events, to Dell code. The brain itself is `brain.handle_event(event, mode, recent) -> list[Action]` (Q16). The proposed full entry point is `brain.pipeline.Pipeline.handle(event)`, which also runs `modes/`, `log/` and the baseline (see Q21).
 2. **Dell → NV:** for each returned action in `ActionType.HARDWARE`, `integration/` runs it. Dell code runs the other actions itself.
 3. **Dell → NV:** `modes/` publishes `mode_changed` and `alert_changed` through the bus. `integration/` sets the Flipper LED from them: the alert colour (yellow/red) while the alert is not `normal`, otherwise the mode colour (green/blue/purple).
 4. **Camera → vision:** `take_photo` makes `hardware/camera` save a JPG. `integration/` passes the path to `brain.describe_photo(path, caused_by)`, which returns a `photo_described` event to put back on the bus.
@@ -96,7 +107,7 @@ Add new ones at the bottom. When one is settled, write the answer next to it and
 5. ~~**Night LED colour.**~~ **Closed 2026-11-14:** purple. Updated in CLAUDE.md and `settings.example.json`.
 6. ~~**Alarm.**~~ **Closed 2026-11-14:** new `alert_changed` event (`source: modes`, `data: {level, previous, reason}`). The first motion in Away or Night sets `warning` (yellow). Motion again within 60 s sets `alarm` (red). Only the passphrase disarm returns to `normal`. Doorbell presses don't change the alert. Details are in FORMATS.md.
 7. **Speech trigger.** Proposal: push-to-talk (a key or a dashboard button) for demo reliability. The alternatives are a "Faraday" wake word or always-on with VAD.
-8. **Passphrase matching.** How tolerant should it be of STT errors? Proposal: lowercase, strip punctuation, exact match. The text is redacted before log and brain. A typed passphrase in the dashboard is the fallback.
+8. ~~**Passphrase matching.**~~ **Closed 2026-11-14:** ignore case and punctuation, split hyphens, and treat digits as number words ("17" = "seventeen"). The passphrase words must appear in order. The example passphrase is plain words with no numbers. The text is redacted before the log, the brain and any display. A typed passphrase is the fallback. Code: `modes/passphrase.py`.
 9. **Action results.** Should a failed action (Flipper busy, app open, camera missing) produce an event so the dashboard can show it? A possible new type: `action_failed`.
 10. **Doorbell debounce.** We fire after `min_duration_ms` of packets (800 ms proposed). How long do we ignore repeat presses afterwards?
 11. **Motion merge window.** 5 s is proposed. Tune it on real hardware.
@@ -104,8 +115,17 @@ Add new ones at the bottom. When one is settled, write the answer next to it and
 13. **Dashboard tech.** Proposal: stdlib `http.server`, with a page that polls a JSON endpoint every second. No extra dependencies.
 14. **save_message.** Text only, or also keep the visitor's audio clip path?
 15. **Python version on the Mac mini.** `shared/` targets 3.9+. Check `python3 --version`.
-16. **Brain seam signature (Dell).** The brain needs the current mode and recent log, so the call is `brain.handle_event(event, mode, recent) -> list[Action]`, where `recent` is the last ~10 log entries as dicts. `integration/` should pass both. OK with NV?
-17. **`llm.reasoning_effort` setting (Dell).** Bonsai 2 is a thinking model. With thinking on, it spends all 200 `max_tokens` reasoning and returns no tool call (`finish_reason: length`). `brain/` sends `reasoning_effort: "none"` by default and reads an optional `llm.reasoning_effort`. Proposal: add `"reasoning_effort": "none"` to `settings.example.json`.
+16. ~~**Brain seam signature (Dell).**~~ **Closed 2026-11-14:** yes, `brain.handle_event(event, mode, recent) -> list[Action]`, where `recent` is the last ~10 log entries as dicts.
+17. ~~**`llm.reasoning_effort` setting (Dell).**~~ **Closed 2026-11-14:** yes. `"reasoning_effort": "none"` is in `settings.example.json`. With thinking on, Bonsai 2 spends all of `max_tokens` reasoning and returns no tool call.
 18. **FORMATS "What the LLM returns" (Dell).** `brain/` uses OpenAI tool calling (one tool per action), and also accepts `{"actions": [...]}` or tool-call JSON written in the text. Proposal: reword that FORMATS section to say tool calls are the main path. The action envelope doesn't change.
-19. **Mode switching between armed modes (Dell).** The AI and rules can arm from Home, but can't switch Away↔Night (that counts as "leaving Away/Night"). Only an owner path (dashboard/sim key) can switch between armed modes. Also, `add_rule` can't contain `set_mode` at all. OK?
-20. **Night motion → porch light (Dell).** The 4B q2_0 model often picks `take_photo` instead of the porch light. Proposal: `rules/` starts with a built-in rule "motion at night → `outlet_on porch_light`", so demo step 4 doesn't depend on the model.
+19. ~~**Mode switching between armed modes (Dell).**~~ **Closed 2026-11-14:** yes, strict. The AI and rules can arm from Home but never switch Away↔Night. Only an owner path (dashboard/sim key) can. `add_rule` can't contain `set_mode`.
+20. ~~**Night motion → porch light (Dell).**~~ **Closed 2026-11-14, widened:** all the mode table responses (lights, photos, warnings) are guaranteed by plain code in `modes/` and `rules/`. The AI adds speech, judgment and descriptions on top. See "Mode table" above.
+21. **Pipeline entry point (Dell → NV).** Proposal: `integration/` calls `Pipeline.from_settings(on_event=..., on_action=...)` once, then `pipeline.handle(event)` for every event. In order, the pipeline:
+    - screens speech for the passphrase,
+    - writes the event and every action to `logs/events.jsonl` (so `integration/` doesn't log them again),
+    - updates the alert,
+    - emits the baseline actions at once,
+    - says "One moment" for visitors,
+    - adds Bonsai's actions.
+
+    `on_action(action)` is called as soon as each action exists, so hardware runs without waiting for Bonsai. `on_event(event)` gets every `mode_changed` / `alert_changed` for the bus and LED. Typed passphrase: `pipeline.owner_passphrase(text)`. Dashboard Away/Night: `pipeline.owner_set_mode(mode)`. OK with NV?

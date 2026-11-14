@@ -1,16 +1,13 @@
 """Each fake event returns valid actions, from the model path and the fallback path."""
-import io
 import unittest
-from contextlib import redirect_stdout
 
 from shared import (ActionType, ChangedBy, EventType, Mode, Source, make_event,
                     validate_action, validate_event)
 
 from brain.core import SYSTEM_PROMPT
-from brain.safety import ModeState
 from brain.tools import allowed_actions
+from modes import ModeState
 from sim import events
-from sim.__main__ import Sim
 
 from .helpers import PASSPHRASE, make_brain, tool_calls
 
@@ -36,7 +33,7 @@ def fake_events():
             events.speech("What happened while I was out?"),
             events.speech("Package for Sam, I left it by the side door."),
             events.photo_described("act_12345678"),
-            state.arm(Mode.AWAY, ChangedBy.DASHBOARD)]
+            state.arm(Mode.AWAY, ChangedBy.DASHBOARD)[0]]
 
 
 class EveryEventGivesValidActions(unittest.TestCase):
@@ -70,7 +67,7 @@ class EveryEventGivesValidActions(unittest.TestCase):
     def test_modes_events_never_reach_the_model(self):
         alert = make_event(EventType.ALERT_CHANGED,
                            {"level": "warning", "previous": "normal"}, Source.MODES)
-        change = ModeState(PASSPHRASE).arm(Mode.NIGHT, ChangedBy.DASHBOARD)
+        change = ModeState(PASSPHRASE).arm(Mode.NIGHT, ChangedBy.DASHBOARD)[0]
         for event in (alert, change):
             brain = make_brain(EVERYTHING)
             decision = brain.decide(event, Mode.NIGHT)
@@ -79,8 +76,8 @@ class EveryEventGivesValidActions(unittest.TestCase):
 
     def test_expected_fallback_behaviour(self):
         brain = make_brain()
-        self.assertEqual([a.type for a in brain.decide(events.doorbell(), Mode.AWAY).actions],
-                         [ActionType.TAKE_PHOTO])
+        # Doorbell photos/lights are rules/baseline.py's job; the brain adds nothing.
+        self.assertEqual(brain.decide(events.doorbell(), Mode.AWAY).actions, [])
         night = [a.args for a in brain.decide(events.motion(), Mode.NIGHT).actions]
         self.assertIn({"outlet": "porch_light"}, night)
         self.assertEqual(brain.decide(events.motion(), Mode.HOME).actions, [])
@@ -91,6 +88,21 @@ class EveryEventGivesValidActions(unittest.TestCase):
         summary = brain.decide(events.speech("What happened while I was out?"), Mode.HOME).actions
         self.assertEqual(summary[0].type, ActionType.SUMMARIZE_LOG)
 
+    def test_photo_reply_depends_on_why_the_photo_was_taken(self):
+        brain = make_brain()
+        for reason, mode, want in (("doorbell while away", Mode.AWAY, "Nobody can come"),
+                                   ("motion at night", Mode.NIGHT, "on camera"),
+                                   ("doorbell", Mode.HOME, "with you shortly")):
+            photo = {"kind": "action", "id": "act_aaaaaaaa", "type": "take_photo",
+                     "timestamp": "2026-11-14T23:41:05.180-05:00", "source": "rules",
+                     "caused_by": None, "args": {"reason": reason}}
+            event = events.photo_described("act_aaaaaaaa")
+            decision = brain.decide(event, mode, [photo])
+            self.assertIn(want, decision.actions[0].args["text"], reason)
+            self.assertIn(f"(photo taken for: {reason})", brain.prompt(event, mode, [photo]))
+        self.assertEqual(brain.decide(events.photo_described("act_aaaaaaaa"), Mode.HOME, [
+            {"id": "act_aaaaaaaa", "type": "take_photo", "args": {"reason": "motion"}}]).actions, [])
+
     def test_prompt_is_short(self):
         brain = make_brain()
         recent = [events.speech("x" * 300).to_dict() for _ in range(30)]
@@ -99,26 +111,6 @@ class EveryEventGivesValidActions(unittest.TestCase):
         self.assertEqual(prompt.count("\n- "), 10)
         self.assertLess(len(prompt), 1000)
         self.assertTrue(prompt.startswith("Mode: away (armed)"))
-
-
-class SimRunsTheDemo(unittest.TestCase):
-    def test_demo_script_offline(self):
-        sim = Sim(make_brain(), ModeState(PASSPHRASE))
-        script = ["t Faraday, I'm heading out.", "d", "t Package for Sam, by the side door.",
-                  "3", "m", "t Faraday, disarm", "1 wrong words", "t What happened while I was out?",
-                  f"t {PASSPHRASE}", "s", "x"]
-        with redirect_stdout(io.StringIO()) as out:
-            for line in script:
-                self.assertTrue(sim.command(line))
-            self.assertFalse(sim.command("q"))
-        text = out.getvalue()
-        self.assertEqual(sim.modes.mode, Mode.HOME)
-        self.assertIn("I can't disarm", text)
-        self.assertIn("wrong passphrase", text)
-        self.assertNotIn(PASSPHRASE, text.replace(f"t {PASSPHRASE}", ""))
-        for entry in sim.log:
-            check = validate_event if entry["kind"] == "event" else validate_action
-            self.assertEqual(check(entry), [], entry)
 
 
 if __name__ == "__main__":

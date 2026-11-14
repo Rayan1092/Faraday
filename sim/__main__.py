@@ -1,16 +1,16 @@
 """Keyboard simulator: python -m sim
 
-Sends fake events to the brain and prints every action it returns.
-Hardware actions are print-only. take_photo is answered with a fake
-photo_described event, and set_mode goes through the same ModeState the
-passphrase uses, so the whole chain runs without any hardware.
+Sends fake events through the real pipeline (modes/ -> log/ -> rules/ baseline
+-> brain) and prints every event and action. Hardware actions are print-only.
+take_photo is answered with a fake photo_described event. Everything is written
+to logs/events.jsonl like a real run.
 
 Keys (then Enter):
   d            doorbell
   m            motion (one merged event)
   t [text]     speech, as if STT heard it (asks for text if none given)
   1 / 2 / 3    Home / Away / Night. Home from an armed mode asks for the passphrase
-  s            status (mode and recent log)
+  s            status (mode, alert and recent log)
   h            help
   q            quit
 """
@@ -20,31 +20,33 @@ import argparse
 import getpass
 import json
 import sys
-from collections import deque
 from pathlib import Path
-from typing import Deque, Dict, List, Optional
+from typing import Dict, List, Optional
 
 if __package__ in (None, ""):  # allow `python sim/__main__.py` as well as `python -m sim`
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from shared import Action, ActionType, ChangedBy, Event, EventType, Mode  # noqa: E402
+from shared import Action, ActionType, Event, Mode  # noqa: E402
 
-from brain import Brain  # noqa: E402
-from brain.safety import ModeState, redact  # noqa: E402
-from brain.settings import llm_config, load_settings, passphrase, settings_path  # noqa: E402
+from brain.pipeline import Pipeline  # noqa: E402
+from brain.settings import llm_config, load_settings, settings_path  # noqa: E402
+from log import EventLog  # noqa: E402
 from sim import events  # noqa: E402
-
-MAX_CHAIN = 4  # event -> action -> follow-up event depth, so nothing can loop
 
 
 class Sim:
-    def __init__(self, brain: Brain, modes: ModeState, verbose: bool = False,
+    def __init__(self, pipeline: Pipeline, verbose: bool = False,
                  photo_text: str = events.FAKE_DESCRIPTION):
-        self.brain = brain
-        self.modes = modes
+        self.pipeline = pipeline
         self.verbose = verbose
         self.photo_text = photo_text
-        self.log: Deque[Dict] = deque(maxlen=50)
+        self._pending: List[Event] = []  # fake camera replies, sent after the current event
+        pipeline.on_event = self.show_event
+        pipeline.on_action = self.show_action
+
+    @property
+    def modes(self):
+        return self.pipeline.modes
 
     # ---- inputs ------------------------------------------------------------
 
@@ -66,33 +68,21 @@ class Sim:
         elif key == "m":
             self.send(events.motion())
         elif key == "t":
-            self.say(rest or input("  heard> "))
+            text = (rest or input("  heard> ")).strip()
+            if text:
+                self.send(events.speech(text))
+            else:
+                print("  (nothing heard)")
         elif key == "1":
             self.go_home(rest)
         elif key in ("2", "3"):
             target = Mode.AWAY if key == "2" else Mode.NIGHT
-            change = self.modes.arm(target, ChangedBy.DASHBOARD, "Set from the sim keyboard.")
-            if change:
-                self.send(change)
-            else:
+            if self.pipeline.owner_set_mode(target) is None:
                 print(f"  already {self.modes.mode}")
+            self._drain()
         else:
             print(f"  unknown key {key!r}, h for help")
         return True
-
-    def say(self, text: str) -> None:
-        text = text.strip()
-        if not text:
-            print("  (nothing heard)")
-            return
-        # Passphrase check happens before anything is logged or sent to the brain.
-        clean, matched = redact(text, self.brain.passphrase)
-        heard = events.speech(clean)
-        self.send(heard)
-        if matched:
-            change = self.modes.disarm_with_passphrase(text, caused_by=heard.id)
-            if change:
-                self.send(change)
 
     def go_home(self, typed: str) -> None:
         if not self.modes.armed:
@@ -100,47 +90,36 @@ class Sim:
             return
         attempt = typed or (getpass.getpass("  passphrase: ") if sys.stdin.isatty()
                             else input("  passphrase: "))
-        change = self.modes.disarm_with_passphrase(attempt)
-        if change:
-            self.send(change)
-        else:
+        if self.pipeline.owner_passphrase(attempt) is None:
             print(f"  wrong passphrase, still {self.modes.mode}")
+        self._drain()
 
-    # ---- event -> brain -> actions -----------------------------------------
+    def send(self, event: Event) -> None:
+        self.pipeline.handle(event)
+        self._drain()
 
-    def send(self, event: Event, depth: int = 0) -> None:
+    def _drain(self) -> None:
+        while self._pending:
+            self.pipeline.handle(self._pending.pop(0))
+
+    # ---- outputs -----------------------------------------------------------
+
+    def show_event(self, event: Event) -> None:
         print(f"\nEVENT  {event.type:<15} {_brief(event.data)}  [{event.id}, source {event.source}]")
         if self.verbose:
             print("       " + event.to_json())
-        recent = list(self.log)
-        self.log.append(event.to_dict())
-        decision = self.brain.decide(event, self.modes.mode, recent)
-        took = f", Bonsai {decision.elapsed_s:.2f}s" if decision.elapsed_s is not None else ""
-        print(f"  brain -> {len(decision.actions)} action(s) via {decision.via}{took}")
-        for action in decision.actions:
-            print(f"  ACTION {action.type:<13} {json.dumps(action.args, ensure_ascii=False)}"
-                  f"  [{action.id} <- {action.caused_by}]")
-            if self.verbose:
-                print("       " + action.to_json())
-            self.log.append(action.to_dict())
-        for action in decision.actions:
-            self.run(action, depth)
 
-    def run(self, action: Action, depth: int) -> None:
-        """Stand-in executor: software actions update state, hardware is print-only."""
-        if depth >= MAX_CHAIN:
-            return
-        if action.type == ActionType.SET_MODE:
-            change = self.modes.arm(action.args["mode"], ChangedBy.BRAIN,
-                                    "Brain chose set_mode.", caused_by=action.id)
-            if change:
-                self.send(change, depth + 1)
-        elif action.type == ActionType.TAKE_PHOTO:
-            self.send(events.photo_described(action.id, self.photo_text), depth + 1)
+    def show_action(self, action: Action) -> None:
+        print(f"  ACTION {action.type:<13} {json.dumps(action.args, ensure_ascii=False)}"
+              f"  [{action.source}, {action.id} <- {action.caused_by}]")
+        if self.verbose:
+            print("       " + action.to_json())
+        if action.type == ActionType.TAKE_PHOTO:  # stand-in camera + vision
+            self._pending.append(events.photo_described(action.id, self.photo_text))
 
     def status(self) -> None:
-        print(f"  mode: {self.modes.mode}")
-        for entry in list(self.log)[-10:]:
+        print(f"  mode: {self.modes.mode}, alert: {self.modes.alert}, log: {self.pipeline.log.path}")
+        for entry in self.pipeline.log.recent(10):
             body = entry.get("data") or entry.get("args")
             print(f"  {entry['timestamp'][11:19]} {entry['kind']:<6} {entry['type']:<15} {_brief(body)}")
 
@@ -162,25 +141,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--offline", action="store_true", help="skip Bonsai, rule-based fallback only")
     parser.add_argument("--mode", choices=sorted(Mode.ALL), default=Mode.HOME, help="starting mode")
     parser.add_argument("--photo", default=events.FAKE_DESCRIPTION, help="fake camera description")
+    parser.add_argument("--log", help="log file (default: logs/events.jsonl from settings)")
     parser.add_argument("-v", "--verbose", action="store_true", help="print full JSON messages")
     args = parser.parse_args(argv)
 
     settings = load_settings()
     cfg = llm_config(settings)
-    secret = passphrase(settings)
-    brain = Brain.from_settings(settings, use_llm=not args.offline)
-    sim = Sim(brain, ModeState(secret, args.mode), args.verbose, args.photo)
+    log = EventLog(args.log, settings["security"]["passphrase"]) if args.log else None
+    pipeline = Pipeline.from_settings(settings, use_llm=not args.offline, log=log, mode=args.mode)
+    sim = Sim(pipeline, args.verbose, args.photo)
 
-    print(f"Faraday sim. Settings: {settings_path().name}. Mode: {args.mode}.")
+    print(f"Faraday sim. Settings: {settings_path().name}. Log: {pipeline.log.path}")
     print("Bonsai: off (rules only)" if args.offline
           else f"Bonsai: {cfg['model']} at {cfg['base_url']} (timeout {cfg['timeout_s']:.0f}s)")
-    if not secret or secret == "CHANGE_ME_NOT_IN_GIT":
-        print("Warning: passphrase is not set in config/settings.json.")
+    if settings_path().name == "settings.example.json":
+        print("Note: using settings.example.json, so the passphrase is the public example.")
     print("Keys: d doorbell, m motion, t <text> speech, 1/2/3 home/away/night, s status, h help, q quit")
+    pipeline.start()
 
     while True:
         try:
-            line = input(f"\n[{sim.modes.mode}]> ")
+            line = input(f"\n[{sim.modes.mode}/{sim.modes.alert}]> ")
         except (EOFError, KeyboardInterrupt):
             print()
             break

@@ -8,6 +8,7 @@ Fake hardware for development. It sends any FORMATS.md event with `source: "sim"
 python -m sim              # uses Bonsai from config/settings.json
 python -m sim --offline    # rule-based fallback only, no LM Studio needed
 python -m sim -v           # also print full JSON for every event and action
+python -m sim --log x.jsonl  # write somewhere other than logs/events.jsonl
 ```
 
 Type a key, then Enter:
@@ -18,7 +19,7 @@ Type a key, then Enter:
 | `m` | motion (one merged event) |
 | `t <text>` | speech, as if STT heard it. Speech that contains the passphrase disarms (it is redacted first) |
 | `1` / `2` / `3` | Home / Away / Night. Home from an armed mode asks for the passphrase |
-| `s` | status: mode and the last 10 log entries |
+| `s` | status: mode, alert and the last 10 log entries |
 | `q` | quit |
 
-It prints every event, every action the brain returns, and how long each Bonsai call took. Hardware actions only print. `take_photo` gets a fake `photo_described` reply, and `set_mode` goes through the same `ModeState` as the passphrase. Keys can be piped in too: `printf "d\nm\nq\n" | python -m sim --offline`.
+Every event goes through the real `brain/pipeline.py`: `modes/` (passphrase, alerts), `log/` (written to `logs/events.jsonl`), the `rules/` baseline, then Bonsai. It prints every event and action with its source (`rules` or `brain`), and how long each Bonsai call took. Hardware actions only print. `take_photo` gets a fake `photo_described` reply. The prompt shows `[mode/alert]`. Keys can be piped in too: `printf "d\nm\nq\n" | python -m sim --offline`.
