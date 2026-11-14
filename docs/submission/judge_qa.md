@@ -5,13 +5,19 @@ Short answers you can say in your own words. If you don't know something, say so
 ## The radio
 
 **How does the radio part work?**
-Cheap 433 MHz sensors send a short code when something happens. Each sensor has its own code. Our doorbell button sends one code and our motion sensor sends another. The Flipper Zero is plugged into the Mac by USB and runs its normal firmware. We put it in listen mode, it tells us every code it hears, and we match the code to the sensor.
+Cheap 433 MHz sensors send a short code when something happens. Each sensor has its own code. The Flipper Zero is plugged in by USB and runs its normal firmware. We keep it in listen mode, our driver reads every code it reports, and we match the code to the sensor. We match on the sensor's serial number and ignore the button bits, because our doorbell sometimes sent a slightly different code for the same button.
 
 **Why merge the motion packets?**
-The motion sensor sends about 17 copies of its code every time it triggers. We merge copies that arrive within a few seconds into one motion event, so one wave is one event.
+The motion sensor sends 17 copies of its code over about 2 seconds every time it triggers. We merge copies that arrive close together into one motion event, so one wave is one event. On the real hardware, every wave came through as exactly one event.
 
 **How do the lights turn on?**
-Cheap remote outlets listen for their own 433 MHz codes. We saved those codes on the Flipper, and it replays the right one. The Flipper can't listen and send at the same time, so we pause listening, send, then start listening again.
+Cheap remote outlets listen for their own 433 MHz codes. We saved those codes on the Flipper, and it replays the right one. The Flipper can't listen and send at the same time, so we pause listening, send, then start listening again. On the real hardware, listening was back about 1.2 seconds after each send. A motion event arrived 1.3 seconds after an outlet switched, so we don't miss much.
+
+**Does the radio work for real?**
+Yes, on the Flipper plugged into a Windows laptop: doorbell events, motion events, switching outlet 1, the LED colours and the alarm buzz. If the USB cable drops, it reconnects in about 8 seconds. We have 25 tests that replay real radio captures. **[TBD: the same on the Mac mini]**
+
+**Why is the doorbell sometimes slow to react?**
+Our cheap doorbell is flaky. It has to be held for a second or two, and late in testing even holds got through only about 1 time in 3. Raw Flipper listening with none of our code was just as bad, so it's the doorbell, not our code. We're swapping it for a new one. **[TBD: new doorbell results]**
 
 **Can someone fake your sensors?**
 Yes. These sensors send the same fixed code every time, so anyone with a radio could record it and replay it. That could fake a doorbell or set off the alarm. It can't disarm the house, because disarming needs the passphrase. A real product should use rolling-code sensors. We used fixed-code ones because they're cheap and easy to read for a weekend build.

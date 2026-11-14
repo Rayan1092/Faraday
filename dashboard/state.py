@@ -6,9 +6,12 @@ anything the log doesn't hold. The page polls it about once a second.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
-from shared import ActionType, AlertLevel, EventType, Mode, Outlet
+from shared import ActionType, AlertLevel, ChangedBy, EventType, Mode, Outlet
+
+from brain.fallback import CANT_DISARM
 
 Entry = Dict[str, Any]
 
@@ -28,9 +31,18 @@ def status(mode: str, alert: str, led: Optional[Dict[str, str]] = None) -> Dict[
     return {"color": led.get(mode, "green"), "label": mode.upper()}
 
 
+DISARMED_FOR_S = 20      # how long the "passphrase accepted" banner stays
+REFUSED_FOR_S = 60       # how long "the AI can't disarm" stays while still armed
+NIGHT_BELL_FOR_S = 120   # how long the quiet night doorbell banner stays
+
+
 def build_state(entries: Iterable[Entry], mode: str, alert: str,
                 rules: Iterable[Dict[str, Any]] = (), led: Optional[Dict[str, str]] = None,
+                network: Optional[Dict[str, Any]] = None, now: Optional[datetime] = None,
+                newest_photo: Optional[Dict[str, Any]] = None,
                 ) -> Dict[str, Any]:
+    """newest_photo: {"path", "taken"} of the newest file in captures/photos/, shown
+    right away, before its description arrives."""
     entries = [e for e in entries if isinstance(e, dict)]
     lights = {name: False for name in OUTLET_NAMES}
     feed: List[Dict[str, Any]] = []
@@ -42,6 +54,9 @@ def build_state(entries: Iterable[Entry], mode: str, alert: str,
     photo_reason: Dict[str, str] = {}
     summary_ids = set()
     mode_then = Mode.HOME  # the mode at each point in the log, for "quiet" doorbells
+    last_disarm = last_refusal = last_night_bell = last_bell = None
+    bell_mode = Mode.HOME
+    described: Dict[str, Dict[str, Any]] = {}  # photo_path -> its photo_described view
 
     for e in entries:
         kind, typ = e.get("kind"), e.get("type")
@@ -54,15 +69,23 @@ def build_state(entries: Iterable[Entry], mode: str, alert: str,
         if typ == EventType.MODE_CHANGED:
             mode_then = info.get("mode", mode_then)
             level = "ok" if mode_then == Mode.HOME else "info"
+            if info.get("changed_by") == ChangedBy.PASSPHRASE:
+                last_disarm = _when(e)
         elif typ == EventType.ALERT_CHANGED:
             level = {"warning": "warn", "alarm": "alarm"}.get(info.get("level"), "ok")
-        elif typ == EventType.DOORBELL and mode_then == Mode.NIGHT:
+        elif typ == EventType.DOORBELL:
             level = "warn"
-            notice = {"time": clock, "text": "Doorbell at night"}
+            last_bell, bell_mode = _when(e), mode_then
+            if mode_then == Mode.NIGHT:
+                notice = {"time": clock, "text": "Doorbell at night"}
+                last_night_bell = last_bell
         elif typ == EventType.SPEECH_HEARD:
             talk.append({"time": clock, "who": "heard", "text": str(info.get("text", ""))})
         elif typ == ActionType.SPEAK:
             talk.append({"time": clock, "who": "said", "text": str(info.get("text", ""))})
+            if info.get("text") == CANT_DISARM:
+                last_refusal = _when(e)
+                level = "safety"
             if e.get("caused_by") in summary_ids:
                 summary = {"time": clock, "text": str(info.get("text", ""))}
         elif typ in (ActionType.OUTLET_ON, ActionType.OUTLET_OFF):
@@ -74,7 +97,9 @@ def build_state(entries: Iterable[Entry], mode: str, alert: str,
             path = str(info.get("photo_path", ""))
             photo = {"time": clock, "description": str(info.get("description", "")),
                      "url": "/media/" + path if path else None,
-                     "reason": photo_reason.get(str(e.get("caused_by")), "")}
+                     "reason": photo_reason.get(str(e.get("caused_by")), ""), "path": path,
+                     "taken": _when(e)}
+            described[path] = photo
         elif typ == ActionType.SAVE_MESSAGE:
             messages.append({"time": clock, "text": str(info.get("text", "")),
                              "sender": str(info.get("sender", "visitor"))})
@@ -88,10 +113,13 @@ def build_state(entries: Iterable[Entry], mode: str, alert: str,
         "mode": mode,
         "alert": alert,
         "status": status(mode, alert, led),
-        "offline": True,
+        "offline": (network or {}).get("offline", True),
+        "network": network or {"offline": True, "detail": "not checked"},
+        "banner": banner(mode, alert, now or datetime.now().astimezone(),
+                         last_disarm, last_refusal, last_night_bell, last_bell, bell_mode),
         "feed": list(reversed(feed[-FEED_SIZE:])),  # newest first
         "talk": talk[-TALK_SIZE:],                    # oldest first, like a chat
-        "photo": photo,
+        "photo": _photo_view(photo, described, newest_photo),
         "lights": [{"id": k, "name": OUTLET_NAMES[k], "on": v} for k, v in lights.items()],
         "messages": list(reversed(messages[-5:])),
         "summary": summary,
@@ -99,6 +127,76 @@ def build_state(entries: Iterable[Entry], mode: str, alert: str,
         "rules": [rule_view(r) for r in rules],
         "version": entries[-1].get("id") if entries else None,
     }
+
+
+def _when(entry: Entry) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(str(entry.get("timestamp", "")))
+    except ValueError:
+        return None
+
+
+def _within(t: Optional[datetime], now: datetime, seconds: float) -> bool:
+    if t is None:
+        return False
+    try:
+        return 0 <= (now - t).total_seconds() <= seconds
+    except TypeError:  # naive vs aware timestamps: treat as old
+        return False
+
+
+DOORBELL_FOR_S = 15     # how long "DOORBELL PRESSED" stays
+
+
+def _photo_view(described_last: Optional[Dict[str, Any]], described: Dict[str, Dict[str, Any]],
+                newest: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Show the newest file on disk as soon as it exists, with its description
+    if one has arrived, else "Looking at the photo..."."""
+    def clean(view: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        return None if view is None else {k: v for k, v in view.items() if k not in ("path", "taken")}
+
+    if not newest:
+        return clean(described_last)
+    path = str(newest["path"])
+    if path in described:
+        return clean(described[path])
+    last_time = described_last.get("taken") if described_last else None
+    try:
+        older = last_time is not None and newest["taken"] <= last_time
+    except TypeError:
+        older = False
+    if older:  # the newest file is older than the last description (e.g. a sim photo)
+        return clean(described_last)
+    return {"time": newest["taken"].strftime("%H:%M:%S"), "description": "Looking at the photo...",
+            "url": "/media/" + path, "reason": ""}
+
+
+def banner(mode: str, alert: str, now: datetime, last_disarm: Optional[datetime],
+           last_refusal: Optional[datetime], last_night_bell: Optional[datetime],
+           last_bell: Optional[datetime] = None, bell_mode: str = Mode.HOME,
+           ) -> Optional[Dict[str, str]]:
+    """The one big message for the audience, most important first."""
+    if alert == AlertLevel.ALARM:
+        return {"kind": "alarm", "title": "ALARM",
+                "text": "Motion again within a minute. Both lights on. Owner alerted."}
+    if mode == Mode.HOME and _within(last_disarm, now, DISARMED_FOR_S):
+        return {"kind": "ok", "title": "DISARMED BY PASSPHRASE",
+                "text": "Checked in plain code. The AI can't do this."}
+    if (mode in Mode.ARMED and _within(last_refusal, now, REFUSED_FOR_S)
+            and (last_disarm is None or last_refusal is None or last_disarm < last_refusal)):
+        return {"kind": "safety", "title": "THE AI CAN'T DISARM",
+                "text": "Only the owner's passphrase can."}
+    if _within(last_bell, now, DOORBELL_FOR_S):
+        text = {Mode.HOME: "Someone is at the door.",
+                Mode.AWAY: "Taking a photo. Faraday will answer the visitor.",
+                Mode.NIGHT: "Porch light on, photo taken, no sound."}.get(bell_mode, "")
+        return {"kind": "bell", "title": "DOORBELL PRESSED", "text": text}
+    if alert == AlertLevel.WARNING:
+        return {"kind": "warn", "title": "WARNING", "text": "Motion while armed. Porch light on."}
+    if mode == Mode.NIGHT and _within(last_night_bell, now, NIGHT_BELL_FOR_S):
+        return {"kind": "warn", "title": "DOORBELL AT NIGHT",
+                "text": "Porch light on, photo taken, no sound."}
+    return None
 
 
 def describe(e: Entry, info: Dict[str, Any]) -> str:

@@ -8,6 +8,7 @@
   const $ = (id) => document.getElementById(id);
   let lastVersion = undefined;
   let lastPhotoUrl = null;
+  let lastPhotoTime = null;
 
   function el(tag, cls, text) {
     const node = document.createElement(tag);
@@ -34,18 +35,22 @@
       $("btn-" + m).classList.toggle("active", s.mode === m);
     }
 
-    const notice = $("notice");
-    if (s.alert === "alarm") {
-      notice.textContent = "ALARM: motion again within a minute";
-      notice.className = "notice alarm";
-      notice.hidden = false;
-    } else if (s.notice) {
-      notice.textContent = s.notice.text + " (" + s.notice.time + ")";
-      notice.className = "notice";
-      notice.hidden = false;
+    const banner = $("banner");
+    if (s.banner) {
+      $("banner-title").textContent = s.banner.title;
+      $("banner-text").textContent = s.banner.text;
+      banner.className = "banner " + s.banner.kind;
+      banner.hidden = false;
     } else {
-      notice.hidden = true;
+      banner.hidden = true;
     }
+
+    // A real check from the server (no packets sent): red if any network is up.
+    const net = $("net");
+    const online = s.network && s.network.offline === false;
+    net.textContent = online ? "● ONLINE: turn Wi-Fi off" : "● OFFLINE";
+    net.classList.toggle("online", online);
+    net.title = (s.network && s.network.detail) || "";
 
     renderPhoto(s.photo);
     renderLights(s.lights);
@@ -59,7 +64,8 @@
 
   function renderPhoto(photo) {
     if (!photo) return;
-    if (photo.url !== lastPhotoUrl) {
+    if (photo.url !== lastPhotoUrl || photo.time !== lastPhotoTime) {
+      lastPhotoTime = photo.time;
       lastPhotoUrl = photo.url;
       const img = $("photo");
       img.onerror = () => { img.onerror = null; img.src = "/static/no-photo.svg"; };
@@ -170,6 +176,9 @@
       else { $("home-error").textContent = data.error || "Wrong passphrase."; pass.focus(); }
     });
   };
+
+  $("btn-ring").onclick = () => post("/api/sensor", { type: "doorbell" }).then(poll);
+  $("btn-motion").onclick = () => post("/api/sensor", { type: "motion" }).then(poll);
 
   $("say-form").onsubmit = (e) => {
     e.preventDefault();

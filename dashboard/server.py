@@ -26,6 +26,8 @@ from urllib.parse import unquote, urlparse
 
 from shared import EventType, Mode, Source, make_event
 
+from .netcheck import NetCheck
+from .photos import PhotoWatcher
 from .state import build_state
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +70,9 @@ class Dashboard:
         self.pipeline = pipeline
         self.led = led
         self.limiter = PassphraseLimiter()
+        self.netcheck = NetCheck()
+        self.photos = PhotoWatcher(MEDIA_DIR / "photos", REPO_ROOT)
+        self.sensor_keys = {"doorbell": "0x00DEC608", "motion": "0x00C5AFAE"}
         self.httpd = ThreadingHTTPServer((host, port), _make_handler(self))
         self.httpd.daemon_threads = True
         self._thread: Optional[threading.Thread] = None
@@ -77,8 +82,13 @@ class Dashboard:
                       port: Optional[int] = None) -> "Dashboard":
         cfg = settings.get("dashboard", {})
         led = settings.get("flipper", {}).get("led")
-        return cls(pipeline, cfg.get("host", "127.0.0.1"),
-                   cfg.get("port", 8080) if port is None else port, led)
+        board = cls(pipeline, cfg.get("host", "127.0.0.1"),
+                    cfg.get("port", 8080) if port is None else port, led)
+        for name in board.sensor_keys:
+            key = settings.get("sensors", {}).get(name, {}).get("key")
+            if key:
+                board.sensor_keys[name] = key
+        return board
 
     @property
     def url(self) -> str:
@@ -100,7 +110,8 @@ class Dashboard:
     def state(self) -> Dict[str, Any]:
         p = self.pipeline
         rules = p.rules.all() if getattr(p, "rules", None) is not None else []
-        return build_state(p.log.recent(500), p.modes.mode, p.modes.alert, rules, self.led)
+        return build_state(p.log.recent(500), p.modes.mode, p.modes.alert, rules, self.led,
+                           network=self.netcheck.status(), newest_photo=self.photos.newest())
 
     def set_mode(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
         mode = body.get("mode")
@@ -130,6 +141,19 @@ class Dashboard:
         threading.Thread(target=self.pipeline.handle, args=(event,), daemon=True).start()
         return 202, {"ok": True}
 
+    def sensor(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+        """Stage backup: the same doorbell/motion event the Flipper would send, marked
+        source "dashboard" in the log so nobody is fooled."""
+        kind = body.get("type")
+        if kind not in self.sensor_keys:
+            return 400, {"ok": False, "error": "type must be doorbell or motion"}
+        data = {"key": self.sensor_keys[kind]}
+        if kind == "motion":
+            data.update(packets=17, duration_ms=1960)
+        event = make_event(kind, data, Source.DASHBOARD)
+        threading.Thread(target=self.pipeline.handle, args=(event,), daemon=True).start()
+        return 202, {"ok": True}
+
     def delete_rule(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
         rules = getattr(self.pipeline, "rules", None)
         ok = rules is not None and rules.remove(str(body.get("id", "")))
@@ -138,7 +162,8 @@ class Dashboard:
 
 def _make_handler(app: Dashboard):
     posts = {"/api/mode": app.set_mode, "/api/home": app.go_home,
-             "/api/say": app.say, "/api/rules/delete": app.delete_rule}
+             "/api/say": app.say, "/api/rules/delete": app.delete_rule,
+             "/api/sensor": app.sensor}
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "Faraday"

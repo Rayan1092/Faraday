@@ -155,11 +155,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--dashboard", action="store_true", help="serve the dashboard and open it")
     parser.add_argument("--port", type=int, help="dashboard port (default: dashboard.port in settings)")
     parser.add_argument("--no-browser", action="store_true", help="with --dashboard: don't open a browser")
+    parser.add_argument("--demo", action="store_true",
+                        help="play the PLAN.md demo script by itself (backup if hardware fails)")
+    parser.add_argument("--manual", action="store_true", help="with --demo: press Enter before each step")
+    parser.add_argument("--speed", type=float, default=1.0, help="with --demo: 2 = twice as fast")
     args = parser.parse_args(argv)
 
     settings = load_settings()
     cfg = llm_config(settings)
     log, rules = None, None
+    if args.demo and not args.log:
+        # A fresh, separate log and rules file every time, so the demo always starts clean
+        # and never mixes with the real logs/events.jsonl.
+        args.log = str(Path(settings.get("paths", {}).get("logs", "logs")) / "demo-events.jsonl")
+        demo_log = Path(args.log) if Path(args.log).is_absolute() else Path(__file__).resolve().parents[1] / args.log
+        for stale in (demo_log, demo_log.with_name("demo-events-rules.json")):
+            if stale.exists():
+                stale.unlink()
+        args.log = str(demo_log)
     if args.log:  # keep the rules next to a custom log, so test runs don't touch logs/
         log = EventLog(args.log, settings["security"]["passphrase"])
         rules = RuleStore(Path(args.log).with_name(Path(args.log).stem + "-rules.json"))
@@ -181,6 +194,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not args.no_browser:
             webbrowser.open(board.url)
     pipeline.start()
+
+    if args.demo:
+        from sim.demo import DemoRunner, play
+        play(DemoRunner(sim, settings["security"]["passphrase"], args.speed, args.manual))
+        print("\nThe dashboard is still running. Keys work as usual, q to quit.")
 
     while True:
         try:

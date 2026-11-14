@@ -1,0 +1,31 @@
+# Demo-proofing (Dell Step 5, plus the away-list items 2 to 4)
+- Laptop / branch / PR: Dell / `dell/polish` / PR "polish: bench, backup demo, dashboard, checklist"
+- What changed:
+  - **Benchmark:** `python -m brain.bench` (`--profile mac` for the 9B). Results are in `docs/bench/`: a baseline before tuning and the tuned run with reworded variants. See `docs/bench/README.md`.
+  - **Tuning:**
+    - `set_mode` is shown to Bonsai as `arm_away` / `arm_night` (this fixed "heading out" giving home).
+    - Sharper `save_message` and `add_rule` descriptions.
+    - Better confrontation and summary prompts.
+    - Code fix-ups, all recorded in `Decision.fixups`: save a promised message, and go with the owner's words when Bonsai picks the wrong arm mode.
+  - **Prompt profiles** (`brain/prompts.py`): `small` and `9b`, picked from the model id. To-try list in `docs/bench/9B-NEXT.md`.
+  - **Backup demo:** `python -m sim --demo --dashboard [--manual] [--speed N]` plays all 8 PLAN.md steps through the real pipeline and dashboard.
+  - **Dashboard:**
+    - Real offline check (route lookup, no packets).
+    - Big banners: alarm, disarmed by passphrase, the AI can't disarm, doorbell pressed, warning, night doorbell.
+    - Newest real photo from `captures/photos/` shown at once.
+    - "Ring doorbell" and "Motion" stage-backup buttons.
+    - Checked at 1280×720 and 1920×1080.
+  - **`brain/vision.py`:** `describe_photo` + `Describer` (PLAN.md seam 4) for NV's Join 2.
+  - **Docs:**
+    - `docs/submission/setup_checklist.md`
+    - wiring notes for NV in `2026-11-14-1545-dell-seams-for-nv.md`
+    - README and submission docs updated with NV's real radio numbers from PR #5
+    - questions with defaults in `QUESTIONS.md`
+- How it was tested: `python -m unittest discover` passes 184/184. The benchmark ran live against `ternary-bonsai-2-4b@q2_0` on the NV laptop. Dashboard screenshots taken with headless Edge. The backup demo ran offline end to end.
+- What's broken or faked:
+  - The 9B profile is unmeasured.
+  - Bonsai vision is untested on a real camera photo.
+  - The doorbell is flaky on real hardware (NV): use the dashboard button.
+  - Numbers marked [TBD] in the docs still need the Mac mini.
+- Next step: NV wires Join 1 with the seams note. On the Mac, run `python -m brain.bench --profile mac` and follow `docs/bench/9B-NEXT.md`.
+- Open Questions: see `docs/team/history/QUESTIONS.md` (six, each with the default used).

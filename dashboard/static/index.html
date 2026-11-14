@@ -15,7 +15,7 @@
       <div id="alert" class="alert-line"></div>
     </div>
     <div class="badges">
-      <div class="badge offline" title="Nothing leaves this machine">● OFFLINE</div>
+      <div id="net" class="badge offline" title="Checked every few seconds without sending anything">● OFFLINE</div>
       <div id="link" class="badge link">connecting…</div>
     </div>
     <nav class="buttons">
@@ -25,7 +25,10 @@
     </nav>
   </header>
 
-  <div id="notice" class="notice" hidden></div>
+  <div id="banner" class="banner" hidden>
+    <span id="banner-title" class="banner-title"></span>
+    <span id="banner-text" class="banner-text"></span>
+  </div>
 
   <main class="grid">
     <section class="panel camera">
@@ -68,6 +71,9 @@
     <label for="say-text">Type what someone said (backup for the mic):</label>
     <input id="say-text" type="text" maxlength="500" placeholder="Faraday, I'm heading out.">
     <button class="btn small" type="submit">Send</button>
+    <span class="backup-label">Stage backup:</span>
+    <button id="btn-ring" class="btn small" type="button" title="Sends the same doorbell event the Flipper would">Ring doorbell</button>
+    <button id="btn-motion" class="btn small" type="button" title="Sends the same motion event the Flipper would">Motion</button>
   </form>
 
   <div id="home-dialog" class="overlay" hidden>
