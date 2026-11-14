@@ -59,7 +59,8 @@
     "max_tokens": 200,
     "temperature": 0.2,
     "timeout_s": 30,
-    "recent_log_lines": 8
+    "recent_log_lines": 8,
+    "reasoning_effort": "none"
   },
 
   "stt": {
@@ -97,7 +98,8 @@
   },
 
   "security": {
-    "passphrase": "CHANGE_ME_NOT_IN_GIT"
+    "_note": "Plain words, no digits. Matching ignores case and punctuation and accepts number words written as digits. Change it in your settings.json.",
+    "passphrase": "silver otter lantern"
   },
 
   "dashboard": {

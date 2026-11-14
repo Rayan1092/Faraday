@@ -1,0 +1,25 @@
+# Dashboard, summary, rules by voice (Dell Step 3)
+- Laptop / branch / PR: Dell / `dell/dashboard` / PR "dashboard, summary, rules by voice"
+- What changed:
+  - **Mode table corrected:** lights escalate with the alert level (`rules/baseline.py`, PLAN.md).
+  - **Alarm in Away:** after the photo description, Bonsai gives one confrontation line in a background thread. It's dropped if the owner disarmed meanwhile.
+  - **`dashboard/`:** offline stdlib server and page. `build_state()` feeds it from the log.
+  - **`summarize_log`:** `brain/summary.py` gathers facts, Bonsai speaks them, and a plain-code list is the fallback.
+  - **Rules by voice:** `rules/store.py`, with persistence and guard rails. `brain/fallback.py` has `parse_rule()`.
+  - **Visitor limits:** in Away, speech gets only messages and talk.
+  - **Sim:** `--dashboard`.
+  - **PLAN.md:** Q21 closed, Q22 and Q23 added.
+- How it was tested: sim + stand-ins only, which doesn't sign anything off.
+  - `python -m unittest discover` passes 151/151 on Windows with Python 3.13.
+  - Live against `ternary-bonsai-2-4b@q2_0`: the rule by voice was stored by Bonsai, the confrontation came back in 4–15 s, and the summary took 4–16 s.
+  - Dashboard checked with headless Edge screenshots at 1920×1080 (warning and alarm states).
+- What works: the demo steps 1–8 on fake events. Both lights at alarm, the demo rule fires at Night, and the summary is spoken.
+- What's broken or faked:
+  - No real photos: the sim's `captures/photos/sim.jpg` doesn't exist, so the page shows a placeholder.
+  - The 4B summary sometimes adds detail even with the stricter prompt.
+  - Night alarm has no confrontation; the table lists it only for Away. Confirm.
+  - LM Studio serves one request at a time, so a confrontation can wait behind another call.
+- Next step:
+  - NV: Q22 (start the dashboard, make `on_action` thread-safe) and Q23 (camera saves to `captures/`).
+  - Dell: prompt tuning on the 9B, then `docs/submission/`.
+- Open Questions added to PLAN.md: 22 (dashboard startup and threads), 23 (real photos).
