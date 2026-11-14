@@ -3,7 +3,8 @@ import io
 import unittest
 from contextlib import redirect_stdout
 
-from shared import ActionType, ChangedBy, EventType, Mode, Source, validate_action, validate_event
+from shared import (ActionType, ChangedBy, EventType, Mode, Source, make_event,
+                    validate_action, validate_event)
 
 from brain.core import SYSTEM_PROMPT
 from brain.safety import ModeState
@@ -65,6 +66,16 @@ class EveryEventGivesValidActions(unittest.TestCase):
                 self.check(decision, event, mode)
                 if event.type != EventType.MODE_CHANGED and decision.via == "bonsai":
                     self.assertTrue(decision.actions)
+
+    def test_modes_events_never_reach_the_model(self):
+        alert = make_event(EventType.ALERT_CHANGED,
+                           {"level": "warning", "previous": "normal"}, Source.MODES)
+        change = ModeState(PASSPHRASE).arm(Mode.NIGHT, ChangedBy.DASHBOARD)
+        for event in (alert, change):
+            brain = make_brain(EVERYTHING)
+            decision = brain.decide(event, Mode.NIGHT)
+            self.assertEqual(decision.via, "code")
+            self.assertEqual(brain.client.calls, [])
 
     def test_expected_fallback_behaviour(self):
         brain = make_brain()

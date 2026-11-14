@@ -12,6 +12,9 @@ from shared import ActionType, EventType, Mode, Outlet
 
 _OUTLETS = sorted(Outlet.ALL)
 _RULE_STEPS = sorted(ActionType.ALL - {ActionType.ADD_RULE})
+# Rules the model may offer: the sensor/speech events only, not the modes/ events.
+_RULE_EVENTS = sorted({EventType.DOORBELL, EventType.MOTION,
+                       EventType.SPEECH_HEARD, EventType.PHOTO_DESCRIBED})
 
 
 def _tool(name: str, description: str, props: Dict[str, Any], required: List[str]) -> Dict[str, Any]:
@@ -46,7 +49,7 @@ TOOLS: Dict[str, Dict[str, Any]] = {
     ActionType.ADD_RULE: _tool(
         "add_rule", "The owner says 'from now on' or 'whenever': store the rule.",
         {"when": {"type": "object", "properties": {
-            "event": {"type": "string", "enum": sorted(EventType.ALL - {EventType.MODE_CHANGED})},
+            "event": {"type": "string", "enum": _RULE_EVENTS},
             "modes": {"type": "array", "items": {"type": "string", "enum": sorted(Mode.ALL)}}},
             "required": ["event"]},
          "then": {"type": "array", "items": {"type": "object", "properties": {
