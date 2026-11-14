@@ -26,3 +26,17 @@ Made with `python -m brain.bench` (see `brain/bench.py`). Each demo moment that 
 **Still imperfect:** 1 of 10 confrontation lines didn't mention what the camera saw ("Please leave, stranger, before I lock you out of this house."). Nothing unsafe got through in any run, before or after.
 
 What these numbers are: one machine, one model, fixed phrases plus a handful of rewordings. They're good evidence that the demo moments work and that the guard rails hold. They aren't a general accuracy score.
+
+## Prompt profiles compared on the same 4B, 2026-11-14
+
+Both profiles ran on the 16 cases: the 9 demo phrases, 5 reworded variants, and 2 new hard visitor lines (a visitor at night asking "Is anyone home?", and a visitor leaving a phone number). 5 runs each.
+
+| Profile | Bonsai alone right | Final right | Unsafe | Avg / worst |
+|---|---|---|---|---|
+| `small` ([1718](2026-11-14-1718-ternary-bonsai-2-4b-q2-0-prompts-small.md)) | 76/80 (95%) | 79/80 (98%) | 0 | 2.7 s / 6.0 s |
+| `9b` ([1729](2026-11-14-1729-ternary-bonsai-2-4b-q2-0-prompts-9b.md)) | **80/80 (100%)** | **80/80 (100%)** | 0 | 2.9 s / 6.6 s |
+
+- **Where they differ.** The `9b` system prompt explains who is talking in each mode, and that fixed "I'm off to work" (2/5 → 5/5). Its first confrontation prompt was too vague (3/5), so it now uses the `small` wording ("using words from the description"), which scored 5/5. The table shows that fixed version.
+- **Both profiles pass the two hard visitor lines** 5/5. The phone number is saved, and nothing touches lights or modes.
+- **Summary safety net.** Bonsai's summary left out the visitor's message once per profile. Now plain code adds it if it's missing (`summary.ensure_messages`). The bench measures Bonsai alone, so that isn't counted here.
+- **Decision.** The `9b` prompts are safe to use on the Mac's 9B, and they even help the 4B a little. Defaults are unchanged for now: the 4B uses `small`, and a model id with "9b" picks `9b`. Five runs per case is a small sample. If we want the `9b` prompts on the 4B, set `"prompt_profile": "9b"` under `llm` in `config/settings.json`.

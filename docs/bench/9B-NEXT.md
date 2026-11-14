@@ -1,6 +1,6 @@
 # Once the 9B runs on the Mac mini
 
-The `9b` prompt profile is in `brain/prompts.py`. It turns on by itself when the model id contains "9b". Nothing has been measured on the 9B yet.
+The `9b` prompt profile is in `brain/prompts.py`. It turns on by itself when the model id contains "9b". Nothing has been measured on the 9B yet. On the 4B it scored 80/80 against 76/80 for `small` (see [README.md](README.md)), so it's at least safe.
 
 ## First, measure (10 minutes)
 

@@ -205,6 +205,8 @@ class Pipeline:
             self._emit(make_action(ActionType.SPEAK, {"text": CHECKING}, Source.BRAIN,
                                    caused_by=action.id), result, done)
             text = self.brain.summarize(summary.facts(happened))
+            if text:
+                text = summary.ensure_messages(text, happened)
         text = text or summary.spoken_list(happened)
         self._emit(make_action(ActionType.SPEAK, {"text": text}, Source.BRAIN,
                                caused_by=action.id), result, done)

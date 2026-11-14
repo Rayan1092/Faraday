@@ -100,7 +100,7 @@ That's a real weakness. Someone could overhear it. You can also type it on the d
 We wrote everything in this repo: the pipeline, the safety checks, the modes and alarm, the rules, the log, the dashboard and the simulator. We used the Flipper's normal firmware, LM Studio, the Bonsai model and Argmax.
 
 **How did you test without hardware?**
-We built a simulator that sends the exact same events the hardware does. We have 187 automated tests for the software that run without any hardware or AI, plus 28 for the radio driver that replay real radio captures. Then we tested against a real Bonsai model, and then on the real devices. **[TBD: real hardware results]**
+We built a simulator that sends the exact same events the hardware does. We have 269 automated tests that run without any hardware or AI. That's 199 for the core software, plus 70 for the hardware drivers and the app wiring, which replay real radio captures and use fake devices. Then we tested against a real Bonsai model, and then on the real devices. **[TBD: real hardware results]**
 
 **Why "Faraday"?**
 A Faraday cage keeps signals out. This keeps your data in.

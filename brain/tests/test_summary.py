@@ -74,6 +74,19 @@ class SummaryTests(unittest.TestCase):
         many = [make_action(ActionType.SAVE_MESSAGE, {"text": "x" * 400}, Source.BRAIN).to_dict()]
         self.assertLessEqual(len(summary.spoken_list(summary.collect(many))), 240)
 
+    def test_missing_message_is_added_by_code(self):
+        h = summary.collect(summary.window(self.log, 1440, self.now))
+        bonsai = "An alarm triggered at 15:09 after motion was detected twice at the door."
+        fixed = summary.ensure_messages(bonsai, h)
+        self.assertTrue(fixed.startswith(bonsai))
+        self.assertIn("Visitor message: Package for Sam", fixed)
+        mentioned = "A courier left a package for Sam and the alarm went off."
+        self.assertEqual(summary.ensure_messages(mentioned, h), mentioned)   # already there
+        self.assertEqual(summary.ensure_messages("Quiet day.", summary.collect([])), "Quiet day.")
+        long = "x" * 230
+        self.assertLessEqual(len(summary.ensure_messages(long, h)), 240)
+        self.assertIn("Package", summary.ensure_messages(long, h))
+
     def test_bonsai_summary_and_failures(self):
         brain = make_brain({"role": "assistant", "content": "  Two visitors came. One left a message.  "})
         self.assertEqual(brain.summarize(["fact"]), "Two visitors came. One left a message.")

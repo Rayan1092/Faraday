@@ -28,7 +28,7 @@ Print this or keep it open on a phone. Do it top to bottom. Anything marked **[T
 
 1. **LM Studio.** Load the Bonsai 9B **[TBD: exact model id, Open Question 1]**. Set **Parallel to 2 or more**. Start the local server. Check it: `curl http://localhost:1234/v1/models` should list the model.
 2. **Argmax speech-to-text.** Start `argmax-cli serve` **[TBD: exact command, Open Question 4]**. Say one test sentence, because the first one is slow (warm-up).
-3. **Faraday.** **[TBD: the integration start command, once NV merges it]**. It starts the dashboard at http://127.0.0.1:8080.
+3. **Faraday.** Run `integration/start_mac.sh`. It refuses to start if LM Studio or Argmax don't answer, and it warns about the Wi-Fi, a missing Flipper or the example passphrase. Then it starts the app and the dashboard at http://127.0.0.1:8080. Push-to-talk is the **Talk** button on the dashboard (or `r` in the app console).
 4. **Dashboard.** Open http://127.0.0.1:8080 in the browser and go full screen (Cmd+Ctrl+F). It should say HOME in green.
 5. **Settings check.** In `config/settings.json`, the passphrase is set (not the example one) and `llm.profile` is `mac`.
 
@@ -62,7 +62,7 @@ Keep talking. Say what happened in one sentence, switch, and move on.
 | Speaker or text-to-speech | No sound | Turn up the volume or check the output device. Everything Faraday says still shows under "Heard & said" on the dashboard |
 | Camera | No photo | The flow keeps going with "No description available". Say so and move on |
 | Bonsai slow or LM Studio crashed | Long pauses, "One moment, please" | Keep going. The lights, photos and alarm are plain code, and the fallback rules answer. Say "that's the safety net". Restart LM Studio between demos |
-| Dashboard frozen | Badge says "app not responding" | Reload the page. If Faraday crashed, restart it **[TBD: start command]** |
+| Dashboard frozen | Badge says "app not responding" | Reload the page. If Faraday crashed, restart it with `integration/start_mac.sh` |
 | Everything | Hardware won't cooperate | **Backup demo:** stop Faraday, run `python -m sim --demo --dashboard` (add `--manual` to step it yourself with Enter). It plays the whole PLAN.md script through the real software on the same dashboard. Say out loud that the sensors are simulated |
 
 ## 7. After each demo
