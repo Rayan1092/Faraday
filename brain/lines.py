@@ -34,6 +34,20 @@ CANT_DISARM = "I'm sorry, I can't do that. Only the owner can disarm the system.
 SORRY = ("Sorry, I can't help with that. You can ask who's at the door, what happened, "
          "or arm the house.")
 REPEAT = "Sorry, I missed the end of that. Please say it again."
+# Standing tasks (rules/tasks.py). The confirmations are built from the task itself.
+TASK_REFUSED = ("I can't keep that as a task. A task can say something, switch the lights, "
+                "take a photo or arm the house.")
+ALL_TASKS_REMOVED = "Okay. I've removed all your tasks."
+NO_TASKS = "There's no task to remove."
+# Out of scope (owner, 2026-11-15): what it can't do offline, and what it can.
+CANT_DO_ANY = ("Sorry, I can't help with that. I work offline, with no internet, but I can watch the door, "
+               "take messages, switch the lights and remember tasks for you.")
+_cant_any = "Sorry, I can't help with that."
+
+
+def cant_do(topic: str = "") -> str:
+    """"Sorry, I can't check the weather. I work offline, ..." (topic checked by brain/owner.py)."""
+    return f"Sorry, I can't {topic}." + CANT_DO_ANY[len(_cant_any):] if topic else CANT_DO_ANY
 ARMED_NO_CHANGE = "The system is armed. I can't make changes right now."   # never hints a passphrase
 RULE_SAVED = "Understood. The rule is saved."
 LOOKING = "Checking the camera."
@@ -93,6 +107,11 @@ FIXED_LINES = [
     "Sorry, I missed the end of that. Please say it again.",
     "The system is armed. I can't make changes right now.",
     "Understood. The rule is saved.",
+    "I can't keep that as a task. A task can say something, switch the lights, take a photo or arm the house.",
+    "Okay. I've removed all your tasks.",
+    "There's no task to remove.",
+    "Sorry, I can't help with that. I work offline, with no internet, but I can watch the door, take messages, "
+    "switch the lights and remember tasks for you.",
     "Checking the camera.",
     "I can't see the door right now.",
     "No one is at the front door.",

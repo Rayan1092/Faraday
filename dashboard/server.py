@@ -34,6 +34,11 @@ from shared import Mode, Outlet
 
 from brain.pipeline import snapshot_action
 from rules import instructions as owner_instructions
+from rules import tasks as tasks_store
+
+_TASK_WHO = {tasks_store.SAY_OWNER: "Reminder", tasks_store.SAY_VISITOR: "Visitors",
+             tasks_store.LIGHTS_ON: "Lights", tasks_store.LIGHTS_OFF: "Lights",
+             tasks_store.SET_MODE: "Mode", tasks_store.TAKE_PHOTO: "Photo"}
 
 from .photos import PhotoWatcher
 from .state import build_state
@@ -135,17 +140,27 @@ class Dashboard:
         return state
 
     def instructions(self) -> list:
-        """The owner's standing instructions for visitors, for the Rules card."""
+        """The owner's standing tasks (rules/tasks.py), and any older instructions, for
+        the Tasks card: one line each, as Faraday confirmed it."""
+        tasks = getattr(self.pipeline, "tasks", None)
         store = getattr(self.pipeline, "instructions", None)
-        if store is None:
-            return []
-        return [{"id": i["id"], "who": owner_instructions.NAMES[i["audience"]],
-                 "text": owner_instructions.owner_words(i), "said": i.get("said", "")}
-                for i in store.all()]
+        out = []
+        if tasks is not None:
+            out += [{"id": t["id"], "who": _TASK_WHO.get(t["action"], "Task"),
+                     "text": tasks_store.describe(t)[:1].upper() + tasks_store.describe(t)[1:],
+                     "said": t.get("said", "")} for t in tasks.all()]
+        if store is not None and store is not tasks:
+            out += [{"id": i["id"], "who": owner_instructions.NAMES[i["audience"]],
+                     "text": owner_instructions.owner_words(i), "said": i.get("said", "")}
+                    for i in store.all()]
+        return out
 
     def delete_instruction(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
-        store = getattr(self.pipeline, "instructions", None)
-        ok = store is not None and store.remove(str(body.get("id", "")))
+        item = str(body.get("id", ""))
+        ok = False
+        for store in (getattr(self.pipeline, "tasks", None), getattr(self.pipeline, "instructions", None)):
+            if store is not None and not ok:
+                ok = store.remove(item)
         return (200 if ok else 404), {"ok": bool(ok)}
 
     def snapshot(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
