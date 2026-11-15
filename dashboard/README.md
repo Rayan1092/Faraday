@@ -22,6 +22,7 @@ Or from the sim: `python -m sim --dashboard` (add `--offline` to run without LM 
 - **Rules:** with a delete button.
 - **Messages:** plus the latest spoken summary.
 - **Buttons:** Away and Night. Home asks for the passphrase.
+- **Listen:** a small tap button (push-to-talk is gone). One tap opens one listening window through integration's `board.listen_hook`, like saying "Hey Faraday". While the mic is open the button reads "Listening…" and a small green mic breathes next to "Live". That follows `board.listening_hook()` if integration sets it, otherwise it shows for 8 s after a tap.
 - **Backup text box:** sends a `speech_heard` event.
 - **Stage backup buttons:** "Ring doorbell" and "Motion" send the same events the Flipper would, marked `source: "dashboard"` in the log.
 - **Real offline check:** the badge asks the OS for a route to a reserved test address (192.0.2.1 / 2001:db8::1) with a UDP connect, which sends no packets. No route shows a green OFFLINE. Any network shows a red, blinking "ONLINE: turn Wi-Fi off".
@@ -52,7 +53,8 @@ The page finds the controls server at `location.hostname` plus `controls_port` f
 | `POST /api/rules/delete {"id": ...}` | remove a rule |
 | `POST /api/sensor {"type": "doorbell"\|"motion"}` | stage backup: the same event the Flipper would send |
 | `POST /api/control {"outlet": ..., "on": true\|false}` | light switch through `board.control_hook`. 400 for a bad outlet, 503 if the hook isn't set |
-| `POST /api/talk` | opens one listening window through `board.talk_hook` |
+| `POST /api/listen` | Listen button: one listening window through `board.listen_hook` (`talk_hook` also works). Replies `{"opened": false}` if one is already open |
+| `POST /api/talk` | old name for `/api/listen` |
 | `GET /controls` | the Controls page |
 | `POST /api/snapshot` | owner snapshot: a `take_photo` with `source: dashboard`. Replies 202 with the request `id` |
 
