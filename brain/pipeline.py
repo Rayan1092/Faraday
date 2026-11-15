@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from shared import (Action, ActionType, AlertLevel, ChangedBy, Event, EventType, Mode,
@@ -115,6 +116,9 @@ class Pipeline:
         if tasks is not None and instructions is None:
             self.instructions = tasks            # its say_visitor tasks are the visitor's words
             brain.instructions = tasks
+        if tasks is not None:
+            self.router.tasks_mode = True
+            self.router.has_tasks = lambda: bool(tasks.all())
         self.task_client: Optional[Any] = None
         self._clock: Optional[threading.Timer] = None
 
@@ -140,7 +144,11 @@ class Pipeline:
             settings, use_llm=use_llm, log=say)
         # One standing-task tool replaces the separate instructions and reminders (owner,
         # 2026-11-15): the task store is also where the visitor's words come from.
-        tasks = callbacks.pop("tasks", None) or TaskStore.from_settings(settings)
+        tasks = callbacks.pop("tasks", None)
+        if tasks is None and log is not None and getattr(log, "path", None):
+            # A custom log (tests, integration --log) keeps its tasks next to it (review).
+            tasks = TaskStore(Path(log.path).with_name(Path(log.path).stem + "-tasks.json"))
+        tasks = tasks or TaskStore.from_settings(settings)
         for problem in tasks.skipped:
             say(f"[tasks] {problem}")
         instructions = callbacks.pop("instructions", None)
@@ -387,7 +395,11 @@ class Pipeline:
         if self.tasks is not None:
             # Standing tasks run after Faraday's own reply ("Welcome home. The system is
             # disarmed." first, then the reminder). Same photo rule as the user rules above.
-            extra = merge(done, self.tasks.fire(event, mode))
+            try:
+                extra = merge(done, self.tasks.fire(event, mode))
+            except Exception as e:      # a task must never stop the house (review)
+                self.say(f"[tasks] failed on {event.type}: {e!r}")
+                extra = []
             if outcome in (MotionOutcome.GRACE, MotionOutcome.PENDING, MotionOutcome.QUIET):
                 extra = [a for a in extra if a.type != ActionType.TAKE_PHOTO]
             for action in extra:
@@ -467,7 +479,12 @@ class Pipeline:
             return   # the passphrase: modes/ has already disarmed (or refused); nothing to add
         if self.tasks is not None and mode == Mode.HOME:
             # "The next time I talk to you, remind me to ...": said first, then the answer.
-            for action in self.tasks.on_owner_speech(mode, caused_by=event.id):
+            try:
+                reminders = self.tasks.on_owner_speech(mode, caused_by=event.id)
+            except Exception as e:
+                self.say(f"[tasks] reminders failed: {e!r}")
+                reminders = []
+            for action in reminders:
                 self._emit(action, result, done)
         route = self.router.route(text, extract=mode not in Mode.ARMED)
 
@@ -508,7 +525,11 @@ class Pipeline:
                 act(ActionType.OUTLET_ON if on else ActionType.OUTLET_OFF, {"outlet": outlet})
             say(" ".join(lines.light_line(outlet, on) for outlet, on in route.lights))
         elif intent in (owner.TASK, owner.ADD_INSTRUCTION, owner.ADD_RULE) and self.tasks is not None:
-            self._owner_task(event, route, say)
+            try:
+                self._owner_task(event, route, say)
+            except Exception as e:      # never stop the house on a task (review)
+                self.say(f"[tasks] failed: {e!r}")
+                say(lines.TASK_REFUSED)
         elif intent == owner.ADD_INSTRUCTION:
             if self.instructions is None or not self._owner_instruction(event, result, done,
                                                                         route.instruction):
@@ -555,7 +576,13 @@ class Pipeline:
                 return
             if fallback is None:
                 self.say(f"  [tasks] nothing stored: {plan.note}")
-                say(lines.REPEAT)
+                # Say what was missing, never "I missed the end" when it was heard (review).
+                note = plan.note or ""
+                say(lines.cant_do(owner.topic_for(text)) if note.startswith("out of scope")
+                    else lines.TASK_WHEN if "time" in note
+                    else lines.TASK_WHICH if ("lights" in note or "mode" in note)
+                    else lines.REPEAT if route.cut_off or not note or note.startswith("Bonsai failed")
+                    else lines.TASK_REFUSED)
                 return
             plan = task_planner.TaskPlan(task_planner.REMEMBER, task=fallback, via="rules")
         if plan.op == task_planner.REMEMBER:
@@ -568,7 +595,7 @@ class Pipeline:
             say(tasks_store.updated_line(changed) if changed else lines.TASK_REFUSED)
         elif plan.op == task_planner.REMOVE:
             if plan.task_id == "all":
-                gone = self.tasks.clear()
+                gone = self.tasks.clear((plan.task or {}).get("action"))     # "all my reminders"
                 say(lines.ALL_TASKS_REMOVED if gone else lines.NO_TASKS)
             else:
                 removed = self.tasks.remove(plan.task_id)
@@ -598,9 +625,13 @@ class Pipeline:
                 for action in self.tasks.due(self.modes.mode):
                     self._emit(action, result, done)
                 self._software_actions(result, done, 0)
-            self._arm_clock()
         except Exception as e:   # a timer thread must never crash the app
             self.say(f"[tasks] clock failed: {e!r}")
+        finally:
+            try:
+                self._arm_clock()      # the next clock task still runs (review)
+            except Exception as e:
+                self.say(f"[tasks] clock not re-armed: {e!r}")
 
     def _rule_from_model(self, event: Event) -> Optional[Dict[str, Any]]:
         """add_rule args written by Bonsai when the keyword parser couldn't. Only the

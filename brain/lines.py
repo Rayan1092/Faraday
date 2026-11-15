@@ -38,6 +38,8 @@ REPEAT = "Sorry, I missed the end of that. Please say it again."
 TASK_REFUSED = ("I can't keep that as a task. A task can say something, switch the lights, "
                 "take a photo or arm the house.")
 ALL_TASKS_REMOVED = "Okay. I've removed all your tasks."
+TASK_WHEN = "Sorry, what time? Please say it again with AM or PM."
+TASK_WHICH = "Sorry, which light or mode? Please say it again."
 NO_TASKS = "There's no task to remove."
 # Out of scope (owner, 2026-11-15): what it can't do offline, and what it can.
 CANT_DO_ANY = ("Sorry, I can't help with that. I work offline, with no internet, but I can watch the door, "
@@ -109,6 +111,8 @@ FIXED_LINES = [
     "Understood. The rule is saved.",
     "I can't keep that as a task. A task can say something, switch the lights, take a photo or arm the house.",
     "Okay. I've removed all your tasks.",
+    "Sorry, what time? Please say it again with AM or PM.",
+    "Sorry, which light or mode? Please say it again.",
     "There's no task to remove.",
     "Sorry, I can't help with that. I work offline, with no internet, but I can watch the door, take messages, "
     "switch the lights and remember tasks for you.",

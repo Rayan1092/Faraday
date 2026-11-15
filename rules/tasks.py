@@ -51,7 +51,10 @@ MAX_TASKS = 20
 DELIVERY_REPEAT_S = 120          # one delivery visit can be labelled more than once
 OUTLET_NAMES = {Outlet.PORCH_LIGHT: "the porch light", Outlet.LIVING_ROOM_LAMP: "the living room lamp",
                 Outlet.SPARE: "the spare outlet"}
-_SECRET = re.compile(r"\b(?:pass ?phrase|password|pin|code)\b", re.I)
+# Never spoken (review): any code, and for visitors any run of digits that could be one.
+_SECRET = re.compile(r"\b(?:pass\s?(?:phrase|word|code)s?|codes?|pins?|combination|combo|keypad)\b", re.I)
+_DIGITS = re.compile(r"\d[\d\s-]{2,}\d|\d{3,}")
+SPEAK_MAX = 240
 _TIME = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 FIELDS = ("trigger", "night", "mode", "time", "action", "text", "outlets", "to_mode", "repeat")
 
@@ -85,7 +88,7 @@ def check_task(task: Any) -> List[str]:
             problems.append("words of 3 to 120 characters")
         elif _SECRET.search(text):
             problems.append("never a passphrase or a code")
-        elif action == SAY_VISITOR and oi.is_forbidden({"request": text}):
+        elif action == SAY_VISITOR and (oi.is_forbidden({"request": text}) or _DIGITS.search(text)):
             problems.append("words for a visitor only: no lights, modes, alarm, locks or codes")
     if action == SAY_VISITOR and trigger not in (DOORBELL, DELIVERY):
         problems.append("words for a visitor need a doorbell or a delivery")
@@ -221,30 +224,46 @@ def _cap(text: str) -> str:
 
 
 def confirmation(task: Task) -> str:
-    return f"Okay. {_cap(describe(task))}."
+    return fit(f"Okay. {_cap(describe(task))}.")
 
 
 def updated_line(task: Task) -> str:
-    return f"Okay. Now {describe(task)}."
+    return fit(f"Okay. Now {describe(task)}.")
 
 
 def removed_line(task: Task) -> str:
-    return f"Okay. I won't {do_words(task)} {when_words(task)}."
+    return fit(f"Okay. I won't {do_words(task)} {when_words(task)}.")
+
+
+def fit(text: str, limit: int = SPEAK_MAX) -> str:
+    """Within the speak limit, cut at a word (a long confirmation must never fail to be said)."""
+    return text if len(text) <= limit else text[:limit - 1].rsplit(" ", 1)[0].rstrip(",;:") + "."
 
 
 def list_line(tasks: List[Task]) -> str:
+    """Every task that fits in one spoken line; the rest are on the dashboard (review: four
+    tasks made 274 characters and nothing was said)."""
     if not tasks:
         return "You have no tasks set."
     n = len(tasks)
-    shown = "; ".join(describe(t) for t in tasks[:4])
-    more = f"; and {n - 4} more on the dashboard" if n > 4 else ""
-    return f"You have {n} task{'s' if n != 1 else ''}: {shown}{more}."
+    head = f"You have {n} task{'s' if n != 1 else ''}: "
+    shown: List[str] = []
+    for t in tasks:
+        left = n - len(shown) - 1
+        tail = f"; and {left} more on the dashboard." if left else "."
+        if len(head + "; ".join(shown + [describe(t)]) + tail) > SPEAK_MAX:
+            break
+        shown.append(describe(t))
+    left = n - len(shown)
+    if not shown:
+        return f"You have {n} task{'s' if n != 1 else ''}. They're on the dashboard."
+    return head + "; ".join(shown) + (f"; and {left} more on the dashboard." if left else ".")
 
 
 def reminder_line(task: Task) -> str:
     """What Faraday says to the owner when a say_owner task runs."""
     text = second_person(re.sub(r"^(?:to|that)\s+", "", str(task.get("text") or ""), flags=re.I))
-    return f"Reminder: {text}."
+    return fit(f"Reminder: {text}.")
 
 
 def visitor_instruction(task: Task) -> Dict[str, str]:
@@ -312,7 +331,10 @@ class TaskStore:
             for k in ("id", "said", "created", "caused_by"):
                 new[k] = old.get(k)
             new["last_run"] = None
-            self._tasks = [new if t["id"] == task_id else t for t in self._tasks]
+            # One set of words per moment, as add() keeps it (review: two delivery tasks).
+            self._tasks = [new if t["id"] == task_id else t for t in self._tasks
+                           if t["id"] == task_id or not (new["action"] == SAY_VISITOR == t["action"]
+                                                         and t["trigger"] == new["trigger"])]
             self._save()
             return dict(new)
 
@@ -325,10 +347,12 @@ class TaskStore:
                 return True
         return False
 
-    def clear(self) -> int:
+    def clear(self, action: Optional[str] = None) -> int:
+        """Remove every task, or every task with this action ("cancel all my reminders")."""
         with self._lock:
-            gone = len(self._tasks)
-            self._tasks = []
+            before = len(self._tasks)
+            self._tasks = [t for t in self._tasks if action is not None and t["action"] != action]
+            gone = before - len(self._tasks)
             if gone:
                 self._save()
         return gone
@@ -360,15 +384,17 @@ class TaskStore:
         tasks = self.all()
         return tasks[-1] if tasks else None
 
-    def relevant(self, label: str = "") -> List[Dict[str, str]]:
+    def relevant(self, label: str = "", mode: str = "", now: Optional[datetime] = None) -> List[Dict[str, str]]:
         """Words for the visitor at this moment, as owner instructions: a delivery gets the
         delivery and doorbell ones, anyone else who rang the doorbell ones; nothing for
-        suspicious or nobody."""
+        suspicious or nobody. A night task only at night (review)."""
         if label in (ThreatCategory.SUSPICIOUS, ThreatCategory.NOBODY):
             return []
+        now = now or datetime.now()
         want = (DELIVERY, DOORBELL) if label == ThreatCategory.DELIVERY else (DOORBELL,)
         return [visitor_instruction(t) for t in self.all()
-                if t["action"] == SAY_VISITOR and t["trigger"] in want]
+                if t["action"] == SAY_VISITOR and t["trigger"] in want
+                and (not t.get("night") or is_night(mode, now))]
 
     # ---- running -----------------------------------------------------------------
 
@@ -404,7 +430,11 @@ class TaskStore:
         now = now or datetime.now()
         out: List[Action] = []
         for task in self.all():
-            if task["trigger"] != TIME or task["time"] != now.strftime("%H:%M"):
+            if task["trigger"] != TIME:
+                continue
+            h, m = (int(x) for x in task["time"].split(":"))
+            late = (now - now.replace(hour=h, minute=m, second=0, microsecond=0)).total_seconds()
+            if not 0 <= late < 180:           # up to 3 minutes late (a slow call held the lock)
                 continue
             if (task.get("last_run") or "")[:10] == now.strftime("%Y-%m-%d"):
                 continue                      # already ran today
@@ -421,8 +451,9 @@ class TaskStore:
             if task["trigger"] == TIME:
                 h, m = (int(x) for x in task["time"].split(":"))
                 at = now.replace(hour=h, minute=m, second=0, microsecond=0)
-                if at <= now - timedelta(seconds=30):
-                    at += timedelta(days=1)
+                ran_today = (task.get("last_run") or "")[:10] == now.strftime("%Y-%m-%d")
+                if at <= now - timedelta(seconds=30) or ran_today:
+                    at += timedelta(days=1)   # review: no 1 s re-arm loop right after it ran
                 waits.append(max(0.0, (at - now).total_seconds()))
         return min(waits) if waits else None
 
@@ -444,9 +475,9 @@ class TaskStore:
             except ValueError:
                 recent = False
             return not recent
-        if trigger == HOME:
+        if trigger == HOME:      # back from Away, not getting up after Night (review)
             return (event.type == EventType.MODE_CHANGED and data.get("mode") == Mode.HOME
-                    and data.get("changed_by") == ChangedBy.PASSPHRASE)
+                    and data.get("changed_by") == ChangedBy.PASSPHRASE and data.get("previous") == Mode.AWAY)
         if trigger == MODE_CHANGE:
             return (event.type == EventType.MODE_CHANGED and data.get("changed_by") != ChangedBy.STARTUP
                     and data.get("mode") != data.get("previous")
@@ -458,8 +489,10 @@ class TaskStore:
         action = task["action"]
         try:
             if action == SAY_OWNER:
-                if mode == Mode.AWAY:
-                    return []                 # the owner is out: never said to whoever is at the door
+                # Only to the owner: at Home, or right when the owner arms or comes back. Never
+                # through the door speaker to whoever is outside at Away or Night (review).
+                if mode != Mode.HOME and task["trigger"] not in (MODE_CHANGE, HOME, OWNER_SPEAKS):
+                    return []
                 return [make_action(ActionType.SPEAK, {"text": reminder_line(task)}, Source.RULES,
                                     caused_by=caused_by)]
             if action in (LIGHTS_ON, LIGHTS_OFF):
@@ -506,7 +539,12 @@ class TaskStore:
             self._tasks.append(task)
 
     def _save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"tasks": self._tasks}, indent=2, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, self.path)
+        """Never raises (review: a OneDrive lock must not stop the house): the tasks stay in
+        memory and the problem is kept for the console."""
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"tasks": self._tasks}, indent=2, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, self.path)
+        except OSError as e:
+            self.skipped.append(f"could not save {self.path.name}: {e}")

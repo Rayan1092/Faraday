@@ -171,13 +171,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     settings = load_settings()
     cfg = llm_config(settings)
-    log, rules, instructions = None, None, None
-    if args.log:  # keep the rules next to a custom log, so test runs don't touch logs/
+    log, rules = None, None
+    if args.log:  # keep the rules and tasks next to a custom log, so test runs don't touch logs/
         log = EventLog(args.log, settings["security"]["passphrase"])
         rules = RuleStore(Path(args.log).with_name(Path(args.log).stem + "-rules.json"))
-        instructions = InstructionStore(Path(args.log).with_name(Path(args.log).stem + "-instructions.json"))
+    # The standing tasks (from_settings puts them next to a custom log) are also the
+    # visitor's words: no separate instruction store (review).
     pipeline = Pipeline.from_settings(settings, use_llm=not args.offline, log=log, mode=args.mode,
-                                      rules=rules, instructions=instructions)
+                                      rules=rules)
     sim = Sim(pipeline, args.verbose, args.photo)
 
     print(f"Faraday sim. Settings: {settings_path().name}. Log: {pipeline.log.path}")

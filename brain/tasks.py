@@ -69,7 +69,7 @@ REMEMBER, UPDATE, REMOVE, LIST = "remember", "update", "remove", "list"
 # ---- what the owner's words back ----------------------------------------------------
 
 _TRIGGER_WORDS = {
-    T.HOME: r"\b(home|get back|come back|back|arrive\w*|return\w*|walk in|get in)\b",
+    T.HOME: r"\b(home|get back|come back|back|arrive\w*|return\w*|walk in|get in|disarm\w*)\b",
     T.DOORBELL: r"\b(door ?bell|bell|rings?|ringing|rang|knocks?|knocking|visitors?|guests?|someone|somebody|"
                 r"anyone|anybody|people|at the door|to the door)\b",
     T.DELIVERY: r"\b(deliver\w*|packages?|parcels?|couriers?|amazon|fedex|ups|dhl|usps|mail\w*|postman|"
@@ -78,7 +78,8 @@ _TRIGGER_WORDS = {
     T.MODE_CHANGE: r"\b(mode|arm\w*|disarm\w*|leav\w*|bed|sleep\w*|away|night)\b",
     T.OWNER_SPEAKS: r"\b(talk|speak|hear from me|next time i)\b",
 }
-_NIGHT = re.compile(r"\b(at night|night ?time|tonight|overnight|after dark|in the night|nights|every night)\b", re.I)
+# "tonight" is this evening, not "only at night" (review: "when I get home tonight" at 8 PM)
+_NIGHT = re.compile(r"\b(at night|night ?time|overnight|after dark|in the night|nights|every night)\b", re.I)
 _ALWAYS = re.compile(r"\b(whenever|every ?time|each time|every day|every night|every morning|daily|always|"
                      r"from now on)\b", re.I)
 _ONCE = re.compile(r"\b(next time|once|just this time|today|tonight|tomorrow)\b", re.I)
@@ -92,8 +93,15 @@ _OUTLET_WORDS = {Outlet.PORCH_LIGHT: re.compile(r"\b(porch|front light|outside l
                  Outlet.SPARE: re.compile(r"\b(spare|third outlet|outlet (3|three))\b", re.I)}
 _BOTH = re.compile(r"\b(both|all)\b.*\b(lights?|lamps?)\b|\b(the )?lights\b", re.I)
 _ALL = re.compile(r"\b(all|every|everything)\b", re.I)
-_CORRECTION = re.compile(r"^\s*(?:(?:hey|ok|okay)\s+)?(?:faraday[\s,.!]*)?(?:actually|instead|no|sorry|wait|"
-                         r"correction|change|make (?:that|it))\b", re.I)
+_CORRECTION = re.compile(r"^\s*(?:(?:hey|ok|okay)\s+)?(?:faraday[\s,.!]*)?(?:actually|instead|correction|"
+                         r"change (?:that|it)|make (?:that|it))\b", re.I)
+_CANCEL = re.compile(r"\b(cancel\w*|forget|remove|delete|stop|don'?t|never ?mind|clear|scrap|drop|get rid of)\b", re.I)
+_POINTS_BACK = re.compile(r"\b(that|it|this|last|previous|before|the task|the reminder|the instruction)\b", re.I)
+_NEG = re.compile(r"\b(not|never|don'?t|do not|n't)\b|n't\b", re.I)
+# Faraday asked to contact someone ("text me when a package comes"): it has no phone or
+# internet. "Remind me to call my mom" is the owner's own call, so only "me"/"us".
+_ASKS_US = re.compile(r"\b(?:text|call|phone|email|e-mail|message|notify|ping|page)\s+(?:me|us)\b"
+                      r"|\bsend (?:me|us) an? (?:text|message|email)\b", re.I)
 # Words that carry no content: the rest of what Faraday says must be the owner's.
 _PLAIN = {"the", "a", "an", "to", "of", "at", "by", "on", "in", "it", "its", "and", "or", "please", "them",
           "him", "her", "they", "their", "your", "you", "you're", "is", "be", "are", "owner", "owner's", "my",
@@ -138,14 +146,19 @@ def words_time(text: str) -> Optional[str]:
     return None
 
 
+def _norm(text: str) -> str:
+    """"don't" and "do not" are both "not", so a faithful negation is grounded (review)."""
+    return re.sub(r"\bdo not\b|\bdon'?t\b|\bdoesn'?t\b", "not", (text or "").lower().replace("’", "'"))
+
+
 def _content(text: str) -> List[str]:
-    return [w for w in re.findall(r"[a-z0-9']+", text.lower()) if w not in _PLAIN]
+    return [w for w in re.findall(r"[a-z0-9']+", _norm(text)) if w not in _PLAIN]
 
 
 def grounded(text: str, *sources: str) -> bool:
     """Is every content word of `text` in the sources (4-letter stems)? The first word
     may be a plain request verb Bonsai chose ("leave" for the owner's "put")."""
-    heard = {w[:4] for s in sources for w in re.findall(r"[a-z0-9']+", (s or "").lower())}
+    heard = {w[:4] for s in sources for w in re.findall(r"[a-z0-9']+", _norm(s))}
     words = _content(text)
     if words and oi._DO.match(text.strip()) and words[0][:4] not in heard:
         words = words[1:]
@@ -178,14 +191,21 @@ def check_words(task: Dict[str, Any], said: str, old: Optional[Dict[str, Any]] =
     """(task, problem): the task with only what the owner's words back. `old`: the task
     being changed, whose words count too."""
     task = dict(task)
-    for k in ("time", "mode", "to_mode", "text"):
+    for k in ("trigger", "action", "time", "mode", "to_mode", "text"):
         if task.get(k) is not None and not isinstance(task.get(k), str):
-            task[k] = None
+            task[k] = None                                    # a malformed call (review)
+    if not isinstance(task.get("outlets"), (list, type(None))) or any(
+            not isinstance(o, str) for o in task.get("outlets") or []):
+        task["outlets"] = []
     if isinstance(task.get("text"), str):
-        task["text"] = _LEAD_IN.sub("", " ".join(task["text"].split()).strip().rstrip(".!,?"))
+        text = " ".join(task["text"].split()).strip().rstrip(".!,?")
+        text = oi._ASKING.sub("", text)                        # "tell him to ..." echoed (review)
+        task["text"] = re.sub(r"^(?:please\s+)+", "", _LEAD_IN.sub("", text), flags=re.I)
     if task.get("trigger") == T.MODE_CHANGE and task.get("mode") == Mode.HOME:
         task["trigger"], task["mode"] = T.HOME, None          # only the passphrase reaches Home
     trigger, action = task.get("trigger"), task.get("action")
+    if action == T.SAY_OWNER and _ASKS_US.search(said):
+        return task, "out of scope: texts and calls"           # "text me when a package comes"
     if old is None or trigger != old.get("trigger"):
         if trigger == T.TIME:
             at = words_time(said)
@@ -194,21 +214,25 @@ def check_words(task: Dict[str, Any], said: str, old: Optional[Dict[str, Any]] =
             task["time"] = at                                 # the owner's time, not Bonsai's
         elif trigger in _TRIGGER_WORDS and not re.search(_TRIGGER_WORDS[trigger], said, re.I):
             return task, f"nothing in the words for {trigger}"
-    elif trigger == T.TIME and words_time(said):
-        task["time"] = words_time(said)
+    elif trigger == T.TIME:
+        task["time"] = words_time(said) or old.get("time")    # never Bonsai's own time
     night = bool(_NIGHT.search(said))
-    if old is None or night:
-        task["night"] = night if trigger != T.TIME else False
+    if old is None or trigger != old.get("trigger"):
+        task["night"] = night and trigger != T.TIME
+    else:                                                     # an update keeps it unless said
+        task["night"] = True if night and trigger != T.TIME else bool(old.get("night"))
     if action in (T.SAY_OWNER, T.SAY_VISITOR):
         text = str(task.get("text") or "")
-        partial = bool(_PART.match(text)) and not _PART.match(str((old or {}).get("text") or ""))
-        if old is not None and old.get("text") and text and (partial or not grounded(text, said)):
+        old_text = str((old or {}).get("text") or "")
+        if old is not None and old_text and text and text.lower() != old_text.lower() and _partial(text, old_text, action):
             # "actually make that the side door": "the side door" takes the place of the
             # matching words of the old task ("use the main door" -> "use the side door").
-            text = _merge(old["text"], text)
+            text = _merge(old_text, text)
             task["text"] = text
-        if not text or not grounded(text, said, (old or {}).get("text", "")):
+        if not text or not grounded(text, said, old_text):
             return task, "the words to say weren't the owner's"
+        if _NEG.search(_action_part(said)) and not _NEG.search(text) and (old is None or text != old_text):
+            return task, "the owner said not to"              # review: "tell them not to ring"
     if action in (T.LIGHTS_ON, T.LIGHTS_OFF):
         if _OFF.search(said) and not _ON.search(said):
             task["action"] = T.LIGHTS_OFF
@@ -222,24 +246,48 @@ def check_words(task: Dict[str, Any], said: str, old: Optional[Dict[str, Any]] =
     if action == T.SET_MODE:
         want = [m for m, rx in _TO_MODE.items() if rx.search(said.split(" switch", 1)[-1])]
         if task.get("to_mode") not in want:
-            if len(want) != 1:
+            if old is not None and not want and old.get("to_mode"):
+                task["to_mode"] = old["to_mode"]              # "make it 10 PM" keeps night (review)
+            elif len(want) != 1:
                 return task, "which mode wasn't said"
-            task["to_mode"] = want[0]
+            else:
+                task["to_mode"] = want[0]
     if action == T.TAKE_PHOTO and not _PHOTO.search(said) and old is None:
         return task, "no photo in the words"
-    if old is None or "repeat" not in task or task.get("repeat") is None:
-        task["repeat"] = (T.ALWAYS if _ALWAYS.search(said) else T.ONCE if _ONCE.search(said)
-                          else T.default_repeat(task))
+    said_repeat = T.ALWAYS if _ALWAYS.search(said) else T.ONCE if _ONCE.search(said) else None
+    if old is None:
+        task["repeat"] = said_repeat or T.default_repeat(task)
+    else:                                                     # never Bonsai's own repeat
+        task["repeat"] = said_repeat or old.get("repeat") or T.default_repeat(task)
     return task, ""
 
 
+def _action_part(said: str) -> str:
+    """The part of what the owner said about what to say ("tell them not to ring")."""
+    parts = re.split(r"\b(?:tell|ask|let|remind|say|warn)\s+\w+\b", said, flags=re.I)
+    return parts[-1] if len(parts) > 1 else said
+
+
+def _partial(text: str, old_text: str, action: str) -> bool:
+    """Only part of the words ("the side door", "side door") for a task whose words are a
+    whole request ("use the main door")."""
+    if action == T.SAY_VISITOR and oi._DO.match(old_text) and not oi._DO.match(text):
+        return not oi._SAY.match(text)
+    return bool(_PART.match(text)) and not _PART.match(old_text)
+
+
 def _merge(old_text: str, new: str) -> str:
-    """Put the new words in place of the old words with the same last word."""
+    """Put the new words in place of the old words with the same last word, or else in
+    place of the old words' last noun phrase ("use the main door" + "the back gate")."""
     new = re.sub(r"^(?:make (?:that|it)|change (?:that|it) to|to)\s+", "", new.strip(), flags=re.I)
     head = (_HEAD.search(new) or [None, None])[1]
     if not head:
         return new
-    m = re.search(r"(?:\b(?:the|a|an|my|your|our)\s+)?(?:\w+\s+){0,2}?" + re.escape(head) + r"\b", old_text, re.I)
+    if not re.match(r"(?:the|a|an|my|your|our)\b", new, re.I) and not _PART.match(new):
+        new = "the " + new                                    # "side door" -> "the side door"
+    m = re.search(r"\b(?:(?:the|a|an|my|your|our)\s+)?(?:\w+\s+){0,2}?" + re.escape(head) + r"\b", old_text, re.I)
+    if m is None:
+        m = re.search(r"\b(?:the|a|an|my|your|our)\s+(?:\w+\s+){0,2}?\w+$", old_text, re.I)
     return old_text[:m.start()] + new + old_text[m.end():] if m else new
 
 
@@ -281,7 +329,10 @@ def plan(text: str, tasks: List[Dict[str, Any]], client: Any, log: Callable[[str
         log(f"[tasks] Bonsai failed: {e}")
         return TaskPlan(note=f"Bonsai failed: {e}", elapsed_s=time.perf_counter() - started)
     name, args = _call(reply)
-    result = check(name, args, text, tasks)
+    try:
+        result = check(name, args, text, tasks)
+    except Exception as e:                   # a malformed call must never stop the house (review)
+        result = TaskPlan(note=f"check failed: {e!r}")
     result.elapsed_s = time.perf_counter() - started
     result.model = {"tool": name, "args": args}
     log(f"[tasks] Bonsai: {name or 'no tool'} {json.dumps(args)[:200]} -> {result.op or 'refused'}"
@@ -305,12 +356,20 @@ def check(name: str, args: Dict[str, Any], text: str, tasks: List[Dict[str, Any]
         if not problem and not T.check_task(changed):
             return TaskPlan(UPDATE, task=changed, task_id=old["id"])
     if name == "remove_task":
+        if not _CANCEL.search(text):
+            return TaskPlan(note="nothing in the words cancels a task")     # review
         target = str(args.get("task_id") or "")
         if target == "all":
-            return TaskPlan(REMOVE, task_id="all") if _ALL.search(text) else TaskPlan(note="'all' wasn't said")
-        task = by_id.get(target) or _named(text, tasks) or last
-        return TaskPlan(REMOVE, task=task, task_id=task["id"]) if task else TaskPlan(note="no task to remove")
-    if name == "update_task" or (name == "remember" and last is not None and _CORRECTION.search(text)):
+            if not _ALL.search(text):
+                return TaskPlan(note="'all' wasn't said")
+            reminders = re.search(r"\breminders?\b", text, re.I) and not re.search(r"\btasks?\b", text, re.I)
+            return TaskPlan(REMOVE, task_id="all", task={"action": T.SAY_OWNER} if reminders else None)
+        task = by_id.get(target) or _named(text, tasks) or (last if _POINTS_BACK.search(text) else None)
+        return TaskPlan(REMOVE, task=task, task_id=task["id"]) if task else TaskPlan(note="which task wasn't clear")
+    raw_trigger, raw_action = args.get("trigger"), args.get("action")
+    correction = (name == "remember" and last is not None and _CORRECTION.search(text)
+                  and raw_trigger in (None, "", last["trigger"]) and raw_action in (None, "", last["action"]))
+    if name == "update_task" or correction:
         old = by_id.get(str(args.get("task_id") or "")) or last
         if old is None:
             return TaskPlan(note="no task to change")

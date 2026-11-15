@@ -102,11 +102,26 @@ class Routing(unittest.TestCase):
         for text in ("Any courier who shows up should use the main door.",
                      "At night, if the doorbell goes, switch on the porch light and the lamp.",
                      "Put the house in night mode at 10 tonight.", "At 9 PM, switch to night mode.",
-                     "Actually, make that the side door.", "What tasks do I have?",
+                     "Switch to night mode at 9.", "Switch to night mode in an hour.",
+                     "Switch to night mode later tonight.", "What tasks do I have?",
                      "When I get back, remind me to call the plumber."):
             self.assertEqual(owner.strong(text, tasks=True), owner.TASK, text)
-        self.assertEqual(owner.strong("Turn on the porch light.", tasks=True), owner.LIGHT)
-        self.assertEqual(owner.strong("I'm heading out.", tasks=True), owner.ARM_AWAY)
+        self.assertEqual(owner.strong("Actually, make that the side door.", tasks=True, has_tasks=True), owner.TASK)
+        self.assertNotEqual(owner.strong("Actually, make that the side door.", tasks=True), owner.TASK)
+
+    def test_now_stays_now(self):
+        """Review: a time aside, "actually" or a question about the past must not become a task."""
+        for text, want in (("Turn on the porch light.", owner.LIGHT), ("I'm heading out.", owner.ARM_AWAY),
+                           ("I'm heading out, back at 6 pm.", owner.ARM_AWAY),
+                           ("Goodnight, wake me at 7 am.", owner.ARM_NIGHT),
+                           ("Actually, I'm heading out.", owner.ARM_AWAY),
+                           ("Actually, turn the porch light off.", owner.LIGHT),
+                           ("Instead, turn on the lamp.", owner.LIGHT),
+                           ("What happened at 2 pm?", owner.SUMMARY),
+                           ("Who's at the door?", owner.LOOK)):
+            self.assertEqual(owner.strong(text, tasks=True, has_tasks=True), want, text)
+        for text in ("Did anyone ring at 3 pm?", "Remind me what happened today."):
+            self.assertNotEqual(owner.strong(text, tasks=True, has_tasks=True), owner.TASK, text)
 
     def test_look_up_is_not_a_look(self):
         self.assertFalse(owner.backed(owner.LOOK, "Can you look up the news for me?"))
@@ -119,6 +134,81 @@ class Routing(unittest.TestCase):
                           "the delivery man to leave the package by the main door.", [old])
         self.assertEqual((p.op, p.task_id, p.task["text"]),
                          (planner.UPDATE, "task_1", "leave the package by the main door"))
+
+
+def _task(**kw):
+    t = T.normalize(kw)
+    t.update(id=kw.get("id", "task_1"))
+    return t
+
+
+class ReviewFixes(unittest.TestCase):
+    def test_reminders_never_go_to_whoever_is_outside(self):
+        t = _task(trigger="motion", action="say_owner", text="the back door is unlocked")
+        store_actions = TaskStore._actions(t, Mode.NIGHT, None) + TaskStore._actions(t, Mode.AWAY, None)
+        self.assertEqual(store_actions, [])
+        self.assertEqual(len(TaskStore._actions(t, Mode.HOME, None)), 1)
+
+    def test_four_tasks_fit_one_spoken_line(self):
+        tasks = [_task(trigger="home", action="say_owner", text="take out the trash"),
+                 _task(trigger="delivery", action="say_visitor", text="use the main door"),
+                 _task(trigger="doorbell", night=True, action="lights_on", outlets=["porch_light", "living_room_lamp"]),
+                 _task(trigger="time", time="21:00", action="set_mode", to_mode="night")]
+        line = T.list_line(tasks)
+        self.assertLessEqual(len(line), 240)
+        self.assertIn("more on the dashboard", line)
+
+    def test_updates_never_garble_the_words(self):
+        trash = _task(trigger="home", action="say_owner", text="take out the trash")
+        p = planner.check("update_task", {"text": "take out the trash", "repeat": "always"},
+                          "Actually, make that every time I get home.", [trash])
+        self.assertEqual((p.task["text"], p.task["repeat"]), ("take out the trash", "always"))
+        door = _task(trigger="delivery", action="say_visitor", text="use the main door")
+        for args, said, want in (({"text": "the back gate"}, "Change that to the back gate.", "use the back gate"),
+                                 ({"text": "side door"}, "Actually, make that side door.", "use the side door")):
+            p = planner.check("update_task", args, said, [door])
+            self.assertEqual(p.task["text"], want, args)
+
+    def test_a_new_request_is_not_an_edit(self):
+        door = _task(trigger="delivery", action="say_visitor", text="use the main door")
+        p = planner.check("remember", {"trigger": "home", "action": "say_owner", "text": "call mom"},
+                          "Sorry, remind me to call mom when I get home.", [door])
+        self.assertEqual((p.op, p.task["trigger"]), (planner.REMEMBER, T.HOME))
+
+    def test_removal_needs_a_cancel(self):
+        trash = _task(trigger="home", action="say_owner", text="take out the trash")
+        self.assertEqual(planner.check("remove_task", {"task_id": "task_1"}, "Actually, turn on the lamp.",
+                                       [trash]).op, "")
+        self.assertEqual(planner.check("remove_task", {"task_id": "nope"}, "Cancel the lights one.", [trash]).op, "")
+
+    def test_retime_keeps_the_mode(self):
+        nine = _task(trigger="time", time="21:00", action="set_mode", to_mode="night")
+        p = planner.check("update_task", {"time": "22:00"}, "Actually, make it 10 PM.", [nine])
+        self.assertEqual((p.op, p.task["time"], p.task["to_mode"]), (planner.UPDATE, "22:00", "night"))
+
+    def test_a_dropped_not_is_refused(self):
+        p = planner.check("remember", {"trigger": "delivery", "action": "say_visitor", "text": "ring the bell"},
+                          "If a delivery comes, tell them not to ring the bell.", [])
+        self.assertEqual(p.op, "")
+        p = planner.check("remember", {"trigger": "delivery", "action": "say_visitor", "text": "don't ring the bell"},
+                          "If a delivery comes, tell them not to ring the bell.", [])
+        self.assertEqual(p.op, planner.REMEMBER)
+
+    def test_the_asking_part_is_not_said(self):
+        said = "If a delivery comes, I wanted to tell him to put the delivery box next to the side door."
+        p = planner.check("remember", {"trigger": "delivery", "action": "say_visitor",
+                                       "text": "tell him to put the delivery box next to the side door"}, said, [])
+        self.assertEqual(p.task["text"], "put the delivery box next to the side door")
+
+    def test_codes_never_reach_a_visitor(self):
+        for text in ("the passcode is 4521", "use the codes 45 21", "the gate combination is 4521",
+                     "the keypad number is 4521", "the number is 4521"):
+            self.assertTrue(T.check_task(_task(trigger="doorbell", action="say_visitor", text=text)), text)
+
+    def test_texting_is_out_of_scope(self):
+        p = planner.check("remember", {"trigger": "delivery", "action": "say_owner", "text": "text me"},
+                          "Text me when a package arrives.", [])
+        self.assertTrue(p.note.startswith("out of scope"))
 
 
 class Words(unittest.TestCase):
