@@ -35,7 +35,8 @@ from shared import (Action, ActionType, AlertLevel, ChangedBy, Event, EventType,
 
 from log import EventLog
 from modes import ModeState
-from rules import RuleStore, baseline_actions, lights_off_on_disarm, merge
+from rules import InstructionStore, RuleStore, baseline_actions, lights_off_on_disarm, merge
+from rules import instructions as owner_instructions
 
 from . import summary, threat
 from .threat import ThreatAssessor
@@ -44,6 +45,8 @@ from .settings import load_settings, passphrase
 
 FILLER = "One moment, please."
 SNAPSHOT_REASON = "Snapshot from the dashboard"
+INSTRUCTION_REFUSED = ("I can only pass on words to visitors. "
+                       "Lights, modes and the alarm stay with you.")
 CHECKING = "Let me check."
 MAX_DEPTH = 4  # event -> action -> follow-up event chains, so nothing can loop
 TRACE_WINDOW = 50  # log entries searched when tracing caused_by
@@ -61,11 +64,16 @@ class Pipeline:
                  on_action: Optional[Callable[[Action], None]] = None,
                  say: Callable[[str], None] = print,
                  rules: Optional[RuleStore] = None,
-                 assessor: Optional[Any] = None):
+                 assessor: Optional[Any] = None,
+                 instructions: Optional[InstructionStore] = None):
         self.brain = brain
         self.modes = modes
         self.log = log
         self.rules = rules
+        # Owner instructions for visitors ("if a delivery comes, ask them to..."). The
+        # brain reads them for the visitor prompt; they only ever shape speech.
+        self.instructions = instructions
+        brain.instructions = instructions
         # Threat label after every photo. Rules-only by default; from_settings gives it Bonsai.
         self.assessor = assessor if assessor is not None else ThreatAssessor(None)
         self.on_event = on_event
@@ -92,8 +100,11 @@ class Pipeline:
             say(f"[rules] {problem}")
         assessor = callbacks.pop("assessor", None) or ThreatAssessor.from_settings(
             settings, use_llm=use_llm, log=say)
+        instructions = callbacks.pop("instructions", None) or InstructionStore.from_settings(settings)
+        for problem in instructions.skipped:
+            say(f"[instructions] {problem}")
         return cls(brain, modes, log or EventLog.from_settings(settings), rules=rules,
-                   assessor=assessor, **callbacks)
+                   assessor=assessor, instructions=instructions, **callbacks)
 
     # ---- entry points ------------------------------------------------------
 
@@ -194,6 +205,10 @@ class Pipeline:
                 self._owner_photos.pop(event.caused_by)
                 return  # the owner asked for this photo: there's no visitor to answer
 
+        if (event.type == EventType.SPEECH_HEARD and mode == Mode.HOME
+                and self.instructions is not None and self._owner_instruction(event, result, done)):
+            return  # plain code stored (or refused) it and answered
+
         # A wide window so caused_by chains (photo -> take_photo -> doorbell) can be
         # traced; the prompt itself only shows the last brain.recent_lines entries.
         recent = [e for e in self.log.recent(TRACE_WINDOW) if e.get("id") != event.id]
@@ -238,6 +253,26 @@ class Pipeline:
             self._photo_cause[action.id] = (cause, self.modes.mode, self.modes.alert)
         if self.on_action:
             self.on_action(action)
+
+    def _owner_instruction(self, event: Event, result: Result, done: List[Action]) -> bool:
+        """'If a delivery comes, ask them to leave it by the side door.' At Home only (the
+        owner is talking). Stores it and confirms; refuses anything beyond words."""
+        text = str(event.data.get("text", ""))
+        parsed = owner_instructions.parse_instruction(text)
+        if parsed is not None:
+            ins = self.instructions.add(parsed, said=text, caused_by=event.id)
+            line = owner_instructions.confirmation(ins) if ins else INSTRUCTION_REFUSED
+            self.say(f"  [instructions] {'stored ' + ins['id'] if ins else 'refused'}: {text}")
+        else:
+            which = owner_instructions.forget_request(text)
+            if which is None:
+                return False
+            gone = self.instructions.forget(which)
+            what = "all your instructions" if which == "all" else f"the {which} instruction"
+            line = f"Okay. I've forgotten {what}." if gone else "There was no instruction to forget."
+        self._emit(make_action(ActionType.SPEAK, {"text": line}, Source.BRAIN, caused_by=event.id),
+                   result, done)
+        return True
 
     def _summarize(self, action: Action, result: Result, done: List[Action]) -> None:
         """Spoken summary of the log: Bonsai from plain-code facts, else a simple list."""

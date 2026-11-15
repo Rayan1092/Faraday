@@ -1,0 +1,229 @@
+{
+ "cases": [
+  {
+   "name": "doorbell_greeting",
+   "title": "Away: photo after a doorbell (greet, offer a message)",
+   "runs": 3,
+   "model_right": 2,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 1,
+   "avg_s": 3.86,
+   "worst_s": 6.82,
+   "role": "smart",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 6.82,
+     "role": "smart",
+     "result": [
+      [
+       "speak",
+       {
+        "text": "Hello! I'm here for you. Would you like me to pass along a message?"
+       }
+      ]
+     ],
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.77,
+     "role": "smart",
+     "result": [
+      [
+       "speak",
+       {
+        "text": "Hello, I'm Faraday. Can you leave a message for me?"
+       }
+      ]
+     ],
+     "dropped": []
+    },
+    {
+     "model_ok": false,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": true,
+     "seconds": 2.0,
+     "role": null,
+     "result": [
+      [
+       "speak",
+       {
+        "text": "Hello. Nobody can come to the door right now. Would you like to leave a message?"
+       }
+      ]
+     ],
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "i_delivery",
+   "title": "Instruction, away delivery: owner said \"ask them to leave it by the side door\"",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 4.18,
+   "worst_s": 4.52,
+   "role": "smart",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.81,
+     "role": "smart",
+     "result": [
+      [
+       "speak",
+       {
+        "text": "Hello! Please leave your package by the side door."
+       }
+      ]
+     ],
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 4.52,
+     "role": "smart",
+     "result": [
+      [
+       "speak",
+       {
+        "text": "Hello! Please leave your package by the side door."
+       }
+      ]
+     ],
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 4.21,
+     "role": "smart",
+     "result": [
+      [
+       "speak",
+       {
+        "text": "Hello, please leave your package by the side door."
+       }
+      ]
+     ],
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "i_visitor",
+   "title": "Instruction, away doorbell: owner said \"tell them I'm in the back garden\"",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 5.93,
+   "worst_s": 6.19,
+   "role": "smart",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 5.58,
+     "role": "smart",
+     "result": [
+      [
+       "speak",
+       {
+        "text": "Hello! I see you waving. Please leave your name and message for me."
+       }
+      ],
+      [
+       "speak",
+       {
+        "text": "I will tell them to stay in the back garden."
+       }
+      ]
+     ],
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 6.03,
+     "role": "smart",
+     "result": [
+      [
+       "speak",
+       {
+        "text": "Hello! I'm here at the door. Would you like me to take a message for you?"
+       }
+      ],
+      [
+       "speak",
+       {
+        "text": "For anyone: tell them I'm in the back garden"
+       }
+      ]
+     ],
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 6.19,
+     "role": "smart",
+     "result": [
+      [
+       "speak",
+       {
+        "text": "Hello! I'm here at the door. Would you like a message for me?"
+       }
+      ],
+      [
+       "speak",
+       {
+        "text": "I'll tell them I'm in the back garden."
+       }
+      ]
+     ],
+     "dropped": []
+    }
+   ]
+  }
+ ],
+ "meta": {
+  "date": "2026-11-14T20:31-05:00",
+  "model": "ternary-bonsai-2-4b@q2_0",
+  "fast_model": "ternary-bonsai-2-4b@q2_0",
+  "force": null,
+  "profile": "nv_backup",
+  "reasoning_effort": "none",
+  "prompts": "9b",
+  "machine": "Windows 11 (AMD64)",
+  "runs": 3,
+  "command": "python -m brain.bench --only i_delivery,i_visitor,doorbell_greeting --runs 3 --prompts 9b"
+ }
+}

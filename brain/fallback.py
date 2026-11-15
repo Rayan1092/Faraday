@@ -6,7 +6,7 @@ guard rails as the model's output.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from shared import ActionType, Event, EventType, Mode
 
@@ -37,18 +37,21 @@ _LIGHT = re.compile(r"\bturn (on|off) (the )?(porch( light)?|living room( lamp)?
                     r"|\b(porch( light)?|living room( lamp)?|lamp|lights?) (on|off)\b", re.I)
 
 
-def fallback(event: Event, mode: str, photo_cause: str = "", label: str = "") -> List[RawItem]:
+def fallback(event: Event, mode: str, photo_cause: str = "", label: str = "",
+             delivery_line: Optional[str] = None, also_say: Sequence[str] = ()) -> List[RawItem]:
     """Doorbell/motion photos, lights and warning lines are rules/baseline.py's job.
 
     photo_cause: for photo_described, the event type that led to the photo ("doorbell",
     "motion"), traced through caused_by.
+    delivery_line / also_say: the owner's instructions as spoken lines (rules/instructions.py).
     """
     if event.type == EventType.PHOTO_DESCRIBED:
         if photo_cause == EventType.MOTION or mode == Mode.NIGHT or label in ("suspicious", "nobody"):
             return []  # motion lines are spoken by the baseline; night stays quiet
         if label == "delivery":
-            return [_speak("Hello! " + DELIVERY_LINE)]
-        return [_speak(GREETING_ARMED if mode in Mode.ARMED else GREETING_HOME)]
+            return [_speak("Hello! " + (delivery_line or DELIVERY_LINE))]
+        greeting = GREETING_ARMED if mode in Mode.ARMED else GREETING_HOME
+        return [_speak(" ".join([greeting, *also_say])[:240])]
     if event.type == EventType.SPEECH_HEARD:
         return _speech(str(event.data.get("text", "")), mode)
     return []

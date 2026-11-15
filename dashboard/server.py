@@ -34,6 +34,7 @@ from urllib.parse import unquote, urlparse
 from shared import EventType, Mode, Outlet, Source, make_event
 
 from brain.pipeline import snapshot_action
+from rules import instructions as owner_instructions
 
 from .netcheck import NetCheck
 from .photos import PhotoWatcher
@@ -142,7 +143,22 @@ class Dashboard:
         state["listening"] = self._listening()
         state["control_available"] = self.control_hook is not None
         state["controls_port"] = self.controls_port
+        state["instructions"] = self.instructions()
         return state
+
+    def instructions(self) -> list:
+        """The owner's standing instructions for visitors, for the Rules card."""
+        store = getattr(self.pipeline, "instructions", None)
+        if store is None:
+            return []
+        return [{"id": i["id"], "who": owner_instructions.NAMES[i["audience"]],
+                 "text": owner_instructions.owner_words(i), "said": i.get("said", "")}
+                for i in store.all()]
+
+    def delete_instruction(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+        store = getattr(self.pipeline, "instructions", None)
+        ok = store is not None and store.remove(str(body.get("id", "")))
+        return (200 if ok else 404), {"ok": bool(ok)}
 
     def snapshot(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
         """Snapshot button: a take_photo with source dashboard. Answers at once with the
@@ -238,7 +254,7 @@ def _make_handler(app: Dashboard):
              "/api/sensor": app.sensor, "/api/listen": app.listen,
              "/api/talk": app.listen,   # old name for Listen
              "/api/control": app.control,
-             "/api/snapshot": app.snapshot}
+             "/api/snapshot": app.snapshot, "/api/instructions/delete": app.delete_instruction}
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "Faraday"
