@@ -34,6 +34,7 @@ from shared import Action, ActionType, Event, Mode  # noqa: E402
 from brain.pipeline import Pipeline  # noqa: E402
 from brain.settings import llm_config, load_settings, settings_path  # noqa: E402
 from dashboard import Dashboard  # noqa: E402
+from sim.controls import SimControls  # noqa: E402
 from log import EventLog  # noqa: E402
 from rules import RuleStore  # noqa: E402
 from sim import events  # noqa: E402
@@ -190,6 +191,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     board = None
     if args.dashboard:
         board = Dashboard.from_settings(pipeline, settings, args.port).start()
+        board.control_hook = SimControls(pipeline, sim.show_action)  # light switches, no Flipper
         print(f"Dashboard: {board.url}")
         if not args.no_browser:
             webbrowser.open(board.url)

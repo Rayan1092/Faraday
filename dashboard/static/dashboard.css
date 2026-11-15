@@ -389,14 +389,21 @@ body.toast-on .timeline-card .card-head { display: none; }
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--stroke);
   transition: background var(--t) var(--ease), border-color var(--t) var(--ease);
+  color: inherit; font: inherit; text-align: left;
 }
+.light:disabled { cursor: default; opacity: 1; }
+.light.switchable { cursor: pointer; }
+.light.switchable:hover { border-color: rgba(255, 255, 255, 0.28); }
+.light.switchable:active .switch { transform: scale(0.94); }
+.light:focus-visible { outline: 2px solid var(--warm); outline-offset: 2px; }
+.light.busy .switch { opacity: 0.6; }
 .light .ico { width: 1.4rem; height: 1.4rem; color: var(--text-3); transition: color var(--t), filter var(--t); }
 .light .name { font-size: 1rem; font-weight: 600; white-space: nowrap; }
 .light .state { font-size: 0.75rem; color: var(--text-3); }
 .light.on { background: rgba(255, 211, 138, 0.10); border-color: rgba(255, 211, 138, 0.35); }
 .light.on .ico { color: var(--warm); filter: drop-shadow(0 0 8px rgba(255, 211, 138, 0.8)); }
 .light.on .state { color: var(--warm); }
-.switch {                     /* display only: lights change by voice, rules and the mode table */
+.switch {                     /* follows the log; tap to switch when integration's control_hook is set */
   width: 2.6rem; height: 1.5rem; border-radius: 999px; margin-left: 0.25rem;
   background: rgba(255, 255, 255, 0.12); position: relative; flex: none;
   transition: background var(--t) var(--ease);

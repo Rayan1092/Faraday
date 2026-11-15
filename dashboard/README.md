@@ -18,7 +18,7 @@ Or from the sim: `python -m sim --dashboard` (add `--offline` to run without LM 
 - **Camera:** the latest photo and its description, plus why it was taken.
 - **Heard & said:** speech in, Faraday's speech out. The passphrase shows as `[passphrase]`.
 - **Live events:** feed, newest first.
-- **Lights:** porch light and lamp, ON/OFF.
+- **Lights:** porch light and lamp as real switches. A tap posts `/api/control` to integration's `board.control_hook`, which sends the code and logs an `outlet_on`/`outlet_off` with `source: dashboard`. The tile always shows the state from the log, never what the tap hoped for. Without the hook the tiles are display only. The spare outlet shows only while it's on.
 - **Rules:** with a delete button.
 - **Messages:** plus the latest spoken summary.
 - **Buttons:** Away and Night. Home asks for the passphrase.
@@ -41,5 +41,7 @@ Or from the sim: `python -m sim --dashboard` (add `--offline` to run without LM 
 | `POST /api/say {"text": ...}` | backup for the mic |
 | `POST /api/rules/delete {"id": ...}` | remove a rule |
 | `POST /api/sensor {"type": "doorbell"\|"motion"}` | stage backup: the same event the Flipper would send |
+| `POST /api/control {"outlet": ..., "on": true\|false}` | light switch through `board.control_hook`. 400 for a bad outlet, 503 if the hook isn't set |
+| `POST /api/talk` | opens one listening window through `board.talk_hook` |
 
 POSTs need the header `X-Faraday: 1`, so another web page can't press the buttons.
