@@ -18,15 +18,14 @@ decision.elapsed_s  # Bonsai call time (also printed)
 2. `log/` writes the event.
 3. The `rules/` baseline goes out at once, escalating with the alert.
 4. Stored user rules fire.
-5. "One moment, please." is said for visitors.
-6. Bonsai's actions are added on top, minus repeats.
+5. Bonsai's actions are added on top, minus repeats. A photo is never answered by the model: the doorbell greeting, the warning and the alarm line are fixed and spoken by code.
 
 Then the software actions run: `set_mode` goes back through `modes/`, `add_rule` is stored in `rules/`, and `summarize_log` is spoken. At an alarm (Away or Night), a background thread asks Bonsai for one confrontation line once the photo description arrives. It's dropped if the owner disarmed meanwhile. `on_action` / `on_event` fire as soon as each thing exists, and one lock serializes the app, the dashboard and background threads. See PLAN.md Q21/Q22.
 
 | File | What it does |
 |---|---|
 | `core.py` | `Brain.decide()`: plain-code cases first, then Bonsai, then guard rails, then fallback. Builds the prompt |
-| `tools.py` | One tool per action. Each (event, mode) pair is offered only a few tools. `set_mode` is shown as `arm_away` / `arm_night` with no arguments (with a `mode` argument the 4B kept writing "home"), and it's never offered while armed. In Away (a visitor) speech gets only `save_message` and `speak`: no rules, lights or summary |
+| `tools.py` | One tool per action. Each (event, mode) pair is offered only a few tools. `set_mode` is shown as `arm_away` / `arm_night` with no arguments (with a `mode` argument the 4B kept writing "home"), and it's never offered while armed. Visitor speech (`channel` "visitor" in any mode, or untagged while armed) gets only `save_message` and `speak`: no rules, lights or summary |
 | `guard.py` | Parses tool calls (or JSON in the text) and drops unknown actions, tools that weren't offered, bad args, `set_mode` while armed, and rules that change mode |
 | `fallback.py` | Keyword rules used when Bonsai errors, times out, returns garbage or nothing usable. Includes `parse_rule()` for rules by voice |
 | `threat.py` | The threat label after every photo: delivery, visitor, suspicious, nobody or unknown, with a reason. Plain code first: zero people from NV's detector is always nobody; failed vision is "unknown, couldn't analyse the photo" (no model call). Otherwise the 2B judges the 9B's description plus the detector's people, faces and objects, and code checks it: warning signs escalate, rang with a plain face is a visitor or a delivery, stayed without ringing while armed is suspicious, and the reason must name what was seen ("1 person, holding a box", "face covered") or code writes it from the facts |
@@ -49,15 +48,16 @@ Code fix-ups on top of Bonsai's answer, all recorded in `Decision.fixups`, so th
 - It promised "I'll take that message" but didn't save it: code saves the visitor's words.
 - The owner clearly said "heading out" or "goodnight" and Bonsai armed the other mode: code goes with the words.
 - It armed the house, saved a message or stored a rule without saying anything: code adds a spoken confirmation.
-- A doorbell greeting with no offer to take a message: code adds the offer.
-- The visitor replied to "Would you like to leave a message?" and Bonsai answered with something else: code saves the reply as the message.
+- Bonsai asked a question about a message ("Would you like to leave a message?") and then answered the visitor's reply with something else: code saves the reply as the message.
+- A visitor mentions a package while the owner's delivery instruction is stored: the reply always includes the owner's words.
 - The spoken summary left out the visitor's message: code adds it (`summary.ensure_messages`).
 
 Free-text Bonsai calls (no tools): `Brain.summarize(facts)` and `Brain.confront(description)`. Each returns one clean line, or `None` when there's no model or the call fails.
 
 `photo_described` is traced back through `caused_by` (`photo_described` → `take_photo` → event, see `photo_cause()`):
-- **Doorbell photo (Away):** Bonsai is asked to greet and offer to take a message. If its reply never mentions a message, code adds the offer. The fallback does the same.
-- **Motion photos and anything at Night:** nothing. The warning lines are spoken by the baseline at motion time, and Night stays quiet.
+- **Every photo:** the threat label, then nothing spoken by the model. The Away doorbell greeting already went out at the ring (code), the warning line comes from the baseline when the 15 s grace period ends with no doorbell, and Night stays quiet.
+- **"Who's at the door?" photos** (`take_photo` with source dashboard): code speaks the description and the label (`look.py`).
+- **Alarm photos:** a background thread asks Bonsai for one line to the intruder about what it sees (`Brain.confront`), with a code fallback.
 
 Tests (no LM Studio needed): `python -m unittest discover` from the repo root.
 

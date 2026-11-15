@@ -24,7 +24,7 @@ Everything shown is on main: the final spoken lines (including the refusal in sh
 ## Before you shoot
 
 **Setup**
-1. On the Mac mini: Wi-Fi off, LM Studio with the 9B and the 2B loaded, `argmax-cli serve` running, then `python3 -m integration --fresh`. That gives an empty log, rules and instructions.
+1. On the Mac mini: Wi-Fi off, then `integration/start_mac.sh`. It loads the 9B and the 2B in LM Studio, starts `argmax-cli serve`, checks every device, and starts Faraday with an empty log, rules and instructions.
 2. Put the dashboard full screen on a second display and screen-record it (QuickTime > File > New Screen Recording). For shot 10, open `http://127.0.0.1:8080/controls` in a phone-width browser window on the Mac. A real phone can't reach the Mac with the Wi-Fi off.
 3. Film with two phones in airplane mode, used only as cameras. Phone 1 films the front walkway, the door, the motion sensor and the two lamps. Phone 2 films the Mac mini and the Flipper Zero.
 4. Off camera, at Home, say: "Hey Faraday, if a delivery comes, ask them to leave it by the side door." Then: "Hey Faraday, I'm heading out." The house stays in Away mode until shot 8.
