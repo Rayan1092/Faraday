@@ -20,6 +20,7 @@ from typing import Any, Callable, Deque, Optional
 
 import numpy as np
 
+from hardware import audio
 from hardware.audio import MicGate
 
 log = logging.getLogger("hardware.intercom")
@@ -69,13 +70,24 @@ class Intercom:
                 self._queue.clear()
                 self._queued = 0
         self._finish(old)
+        # the speaker is looked up outside the lock (CoreAudio on the Mac): the audio
+        # callback and end()/stop() never wait for it
+        device = self._device() if self._stream is None else None
         with self._lock:
             if self._stream is None:
                 try:
-                    self._open_locked(rate)
+                    self._open_locked(rate, device)
                 except Exception as e:          # no speaker / wrong speaker_device
-                    log.error("intercom: speaker didn't open (%r); chunk dropped", e)
-                    return
+                    if device is None:
+                        log.error("intercom: speaker didn't open (%r); chunk dropped", e)
+                        return
+                    # a speaker that went away (Bluetooth asleep): the system default
+                    log.warning("intercom: speaker %r didn't open (%r); using the default", device, e)
+                    try:
+                        self._open_locked(rate, None)
+                    except Exception as e2:
+                        log.error("intercom: speaker didn't open (%r); chunk dropped", e2)
+                        return
             self._queue.append(samples)
             self._queued += samples.size
             limit = int(MAX_QUEUE_S * rate)
@@ -102,9 +114,20 @@ class Intercom:
         self._finish(stream)
 
     # ---- internals ---------------------------------------------------------------
-    def _open_locked(self, rate: int) -> None:
+    def _device(self) -> Any:
+        """The speaker for this session: audio.speaker_device, else the system's
+        current default output (Mac: looked up now, as argmax-cli --play does)."""
+        if self.device is not None or not audio._is_mac():
+            return self.device
+        try:
+            return audio.system_output_index()
+        except Exception as e:
+            log.warning("intercom: can't read the system output (%r); PortAudio's default", e)
+            return None
+
+    def _open_locked(self, rate: int, device: Any = None) -> None:
         stream = self.stream_factory(samplerate=rate, channels=1, dtype="int16",
-                                     device=self.device, callback=self._callback)
+                                     device=device, callback=self._callback)
         try:
             stream.start()
         except Exception:
