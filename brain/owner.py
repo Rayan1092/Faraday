@@ -64,7 +64,15 @@ _TASK_STRONG = re.compile(
     r"|\bremind (?:me|us)\b|\b(?:set|add) (?:a |an )?(?:reminder|task)\b"
     r"|\b(?:what|which) (?:tasks?|reminders?)\b|\b(?:my|the|any|all) (?:tasks?|reminders?)\b"
     r"|\bnext time (?:i|we) (?:talk|speak)\b"
-    r"|\b(?:at|by|around) (?:\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?|o'?clock)|noon|midnight)", re.I)
+    r"|\b(?:at|by|around) (?:\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?|o'?clock|tonight|this evening|in the "
+    r"evening|in the morning|tomorrow)|noon|midnight)|\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)(?!\w)"
+    # "if the doorbell goes, ...", "when I get home, ...": something to do later, not now
+    r"|\b(?:if|when|whenever|every ?time|each time|once)\b[^.?!]*\b(?:door ?bell|bell|rings?|knocks?|motion|"
+    r"movement|moves|deliver\w*|packages?|parcels?|couriers?|visitors?|guests?|someone comes|anyone comes|"
+    r"get home|get back|come home|i'?m home|arrive\w*)\b|^\s*at night\b"
+    # "any courier who shows up should use the main door"
+    r"|\b(?:couriers?|deliver\w*|visitors?|guests?|drivers?|anyone|someone|whoever)\b[^.?!]*\b(?:should|must|"
+    r"needs? to|has to)\b", re.I)
 
 # When the keyword parser can't read an instruction, the 2B pulls it out; code checks
 # it (rules/instructions.from_model). Owner, Mac test: "any phrasing".
@@ -88,7 +96,8 @@ _WEAK = {
                            r"stop the alarm|switch off the alarm)\b", re.I),
     SUMMARY: re.compile(r"\b(happen\w*|summar\w*|recap|visitors?|messages?|who came|"
                         r"anyone (come|came|stop\w*|ring|rang)|news|log|while i was)\b", re.I),
-    LOOK: re.compile(r"\b(door|outside|porch|camera|see|look)\b", re.I),
+    # "look up the news" is not a look at the door (bench)
+    LOOK: re.compile(r"\b(door|outside|porch|camera|see)\b|\blook\b(?!\s+(?:up|into|for|forward)\b)", re.I),
     ADD_RULE: re.compile(r"\b(when(ever)?|every time|each time|from now on)\b", re.I),
     ADD_INSTRUCTION: re.compile(r"\b(if|when(ever)?)\b.*\b(deliver\w*|couriers?|parcels?|packages?|visitors?|"
                                 r"someone|anyone|somebody|guests?|friends?|amazon|fedex|ups|dhl|usps|drivers?)\b"

@@ -295,6 +295,15 @@ def check(name: str, args: Dict[str, Any], text: str, tasks: List[Dict[str, Any]
     last = tasks[-1] if tasks else None
     if name == "list_tasks":
         return TaskPlan(LIST)
+    new = _replacement(text)
+    if name == "remove_task" and new is not None and tasks:
+        # "Cancel the instruction before and tell the delivery man to ..." (Mac retest 3):
+        # the cancelled task becomes the new one, so it replaces instead of only removing.
+        old = by_id.get(str(args.get("task_id") or "")) or _named(text, tasks) or last
+        changed, problem = check_words({**old, **new}, text, old=old)
+        changed = T.normalize(changed)
+        if not problem and not T.check_task(changed):
+            return TaskPlan(UPDATE, task=changed, task_id=old["id"])
     if name == "remove_task":
         target = str(args.get("task_id") or "")
         if target == "all":
@@ -324,6 +333,21 @@ def check(name: str, args: Dict[str, Any], text: str, tasks: List[Dict[str, Any]
         problems = T.check_task(task)
         return TaskPlan(REMEMBER, task=task) if not problems else TaskPlan(note=problems[0])
     return TaskPlan(note="no task tool called")
+
+
+_THEN = re.compile(r"\b(?:and(?:\s+then)?|then|instead|but)\b\s*,?\s*", re.I)
+
+
+def _replacement(text: str) -> Optional[Dict[str, Any]]:
+    """The new words for visitors after a cancel in the same breath ("cancel that and tell
+    them to use the main door"), as a task, or None."""
+    if not re.search(r"\b(cancel|forget|remove|delete|scrap|drop)\b", text, re.I):
+        return None
+    for m in _THEN.finditer(text):
+        ins = oi.parse_instruction(text[m.end():])
+        if ins is not None:
+            return from_instruction(ins)
+    return None
 
 
 def _named(text: str, tasks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

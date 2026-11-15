@@ -95,6 +95,32 @@ class Check(unittest.TestCase):
         self.assertEqual(planner.check("list_tasks", {}, "What are my tasks?", [t]).op, planner.LIST)
 
 
+class Routing(unittest.TestCase):
+    """Bench, first run: these never reached the task tool."""
+
+    def test_later_is_a_task_not_now(self):
+        for text in ("Any courier who shows up should use the main door.",
+                     "At night, if the doorbell goes, switch on the porch light and the lamp.",
+                     "Put the house in night mode at 10 tonight.", "At 9 PM, switch to night mode.",
+                     "Actually, make that the side door.", "What tasks do I have?",
+                     "When I get back, remind me to call the plumber."):
+            self.assertEqual(owner.strong(text, tasks=True), owner.TASK, text)
+        self.assertEqual(owner.strong("Turn on the porch light.", tasks=True), owner.LIGHT)
+        self.assertEqual(owner.strong("I'm heading out.", tasks=True), owner.ARM_AWAY)
+
+    def test_look_up_is_not_a_look(self):
+        self.assertFalse(owner.backed(owner.LOOK, "Can you look up the news for me?"))
+        self.assertTrue(owner.backed(owner.LOOK, "Look outside."))
+
+    def test_cancel_and_tell_replaces(self):
+        old = T.normalize({"trigger": "delivery", "action": "say_visitor", "text": "leave the package by the side door"})
+        old.update(id="task_1")
+        p = planner.check("remove_task", {"task_id": "task_1"}, "Actually, cancel the instruction before and tell "
+                          "the delivery man to leave the package by the main door.", [old])
+        self.assertEqual((p.op, p.task_id, p.task["text"]),
+                         (planner.UPDATE, "task_1", "leave the package by the main door"))
+
+
 class Words(unittest.TestCase):
     def test_times(self):
         for said, want in (("at 9 PM", "21:00"), ("at 9pm", "21:00"), ("at 7:30 am", "07:30"),
