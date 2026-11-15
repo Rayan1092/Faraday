@@ -207,7 +207,7 @@ class Pipeline:
         """End a motion grace period that's due (the timer calls this): no doorbell came,
         so the warning goes up, the photo is taken and the warning line spoken. A
         visitor who rang meanwhile cancelled it in modes/. force=True: end it now
-        (the backup demo at rehearsal speed)."""
+        (the simulator's "w" key and tests)."""
         with self.lock:
             events = self.modes.end_grace(force)
             motion_id = self.modes.grace_ended

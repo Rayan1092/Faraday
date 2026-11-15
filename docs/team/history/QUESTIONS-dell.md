@@ -25,7 +25,8 @@ Each one has the default I used. Answer inline and I'll adjust.
     - At **Night**, "who's at the door?" still answers, because it changes nothing and the owner may be inside.
     - At **Away**, nothing does: anyone at the door can say "Hey Faraday", so not even the summary (it would read the house log to a stranger).
     - Everything else gets "The system is armed. Say the passphrase to make changes." "Disarm" gets "Please say the passphrase to disarm."
-13. **Typed text (`channel: null`)** keeps the old meaning: the owner at Home, a visitor while armed. *Default:* yes, so the dashboard text box and the sim behave as before.
+    - **Changed 2026-11-15 (Dell PR "calm voice lines", #61):** no armed reply mentions a passphrase any more, because whoever is at the door may not be the owner. Everything else now gets "The system is armed. I can't make changes right now.", and "disarm" gets the refusal: "I'm sorry, I can't do that. Only the owner can disarm the system."
+13. **Typed text (`channel: null`)** keeps the old meaning: the owner at Home, a visitor while armed. *Default:* yes, so the dashboard text box and the sim behave as before. (Since the real-product decision on 2026-11-15, the text box is gone, so typed text only comes from the sim and the tests.)
 14. **"If a delivery comes, leave it by the side door"** (no "ask them to") is now accepted as an instruction, the same as "ask them to leave it...". A request that stops on a dangling word ("tell visitors that") is refused and the owner is asked to repeat. *Default:* on.
 
 15. **A courier who says nothing.** The doorbell greeting offers to help with a delivery, but the owner's delivery instruction ("leave it by the side door") is said only once the visitor speaks. You said "if nobody answers, stay quiet". *Default:* quiet. The other choice is to say the delivery instruction when the photo's label is `delivery` and nobody has spoken after 8 s.

@@ -1,7 +1,7 @@
 """Prompt profiles. Pick one per model size.
 
 - "small" (Bonsai 2B/4B): short and strict. Tuned with brain/bench.py on the 4B q2_0,
-  90/90 on the demo cases (docs/bench/).
+  90/90 on the bench cases (docs/bench/).
 - "9b" (Bonsai 9B on the Mac mini): a little more context about who is talking in
   each mode and how to sound, which a bigger model can use. Same tools, same
   guard rails, same fix-ups. Not benchmarked yet: run `python -m brain.bench --profile mac`
