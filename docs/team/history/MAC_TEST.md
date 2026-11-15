@@ -46,7 +46,7 @@ All of this was built and tested on Windows with fakes and the Bonsai 2 4B; only
     - Nothing says "pass phase".
 13. **"Hey Faraday, who's at the door?"** The answer is facts only, for example "One person is at the front door." The description stays on the dashboard (Dell).
 14. **"Hey Faraday, what happened while I was out?"** The times and counts match the log (Dell).
-15. **"Hey Faraday, if a delivery comes, I want you to tell him to leave the package by the side door."** It's accepted, not "please say it again" (Dell PR "instruction phrasing", once merged).
+15. **"Hey Faraday, if a delivery comes, I want you to tell him to leave the package by the side door."** It's accepted, not "please say it again" (Dell).
 
 ---
 
