@@ -27,3 +27,10 @@ Owner's list after the Mac test, item 9, plus the dashboard part of "the real pr
 Screenshots were checked at 1280×720 and 1920×1080 with sample events.
 
 **Still to do (demo removal, next PR):** `sim --demo`, and the stage-fallback notes in the pitch, video script and setup checklist.
+
+**Review fixes** (fresh reviewer agent, checked in headless Edge):
+- **Frozen LIVE frame:** a stream `<img>` fires `load` once and never reports a drop, so a closed stream left a frozen LIVE frame. The page now polls integration's `/api/status` every 3 s. No camera or no server brings the photo back; the camera back restarts the stream. Probe: the stream closes at 3.6 s and the photo is back by 3.8 s; the camera is back at 14 s and live again at 16 s.
+- **Paused stream:** the stream pauses while the page is hidden, so the camera's detector isn't kept busy for nobody.
+- **Recording saved:** it now shows only during the alarm (after the passphrase, the activity entry keeps it). The banner says `Recording saved.` only once it's true; nothing is claimed while no recording exists, for example with no camera.
+- **Small fixes:** the owner-voice tag reads `Another voice`, not `Not the owner's voice` (NV: false means another voice). Timeline rows without a thumbnail lose the extra gap. Leftover projector and audience wording in comments and docstrings is gone.
+- **Docs to update next** (demo-removal PR): README, pitch, setup checklist, video script shot 2 (the OFFLINE badge is gone) and PLAN.md line 46.

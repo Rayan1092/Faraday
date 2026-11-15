@@ -53,7 +53,7 @@ class Camera(unittest.TestCase):
         self.assertEqual(s["feed"][0]["text"], "Recording saved (10 s)")
         self.assertEqual(s["feed"][0]["level"], "alarm")
         self.assertEqual(s["feed"][0]["thumb"], "/media/captures/alarm-20261115-013000/frame-0001.jpg")
-        self.assertIn("Recording.", state(alarm, alert="alarm")["banner"]["text"])   # not saved yet
+        self.assertNotIn("Recording", state(alarm, alert="alarm")["banner"]["text"])  # never claimed
         later = make_event(EventType.ALERT_CHANGED, {"level": "alarm", "previous": "warning", "reason": "y"},
                            Source.MODES)
         old = state(alarm, saved, later, alert="alarm")
@@ -74,7 +74,9 @@ class Camera(unittest.TestCase):
             self.assertIn(needed, html, needed)
         self.assertIn('ctrl("/stream.mjpg', js)                 # NV's stream, from the controls port
         self.assertIn("showPhoto(lastPhotoSrc)", js)              # the photo when the stream drops
-        self.assertIn('"thumb"', js) if False else self.assertIn("f.thumb", js)
+        self.assertIn('ctrl("/api/status")', js)                  # a drop is noticed by polling
+        self.assertIn('alert === "alarm"', js)                    # "Recording saved" only at the alarm
+        self.assertIn("f.thumb", js)
         self.assertIn("Owner's voice", js)
         # the label sits under the camera, before the description
         self.assertLess(html.index('id="threat"'), html.index('id="photo-text"'))

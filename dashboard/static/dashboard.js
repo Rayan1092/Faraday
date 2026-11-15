@@ -30,7 +30,7 @@
   }
 
   function sentence(title) {
-    // "THE AI CAN'T DISARM" -> "The AI can't disarm"
+    // "DISARM REFUSED" -> "Disarm refused" ("ai" stays "AI")
     const s = String(title || "").toLowerCase();
     return (s.charAt(0).toUpperCase() + s.slice(1)).replace(/\bai\b/g, "AI");
   }
@@ -56,7 +56,7 @@
     renderLive(s);
     renderPhoto(s.photo);
     renderChips(s.photo);
-    renderRecording(s.recording);
+    renderRecording(s.recording, s.alert);
     renderLights(s.lights, s.control_available);
     if (s.version === lastVersion) return; // the log didn't change
     lastVersion = s.version;
@@ -67,16 +67,29 @@
   }
 
   // Live camera in the centre: integration's stream on the controls port, with the
-  // object detector's boxes drawn in. The latest photo shows until the stream is up,
-  // and again whenever it drops (it's retried every few seconds).
+  // object detector's boxes drawn in. The latest photo shows until the stream is up and
+  // whenever it's down. A stream <img> reports "load" once and never a drop (Chrome,
+  // Safari), so integration's /api/status is polled: no camera or no server -> the
+  // photo, camera back -> the stream again. Paused while the page is hidden.
   let controlsPort = null;
   let liveUp = false;
-  let liveRetry = null;
+  let camDown = false;
   let lastPhotoSrc = null;
-  const LIVE_RETRY_MS = 8000;
+  const CAMERA_POLL_MS = 3000;
   const ctrl = (path) => location.protocol + "//" + location.hostname + ":" + controlsPort + path;
 
+  function stopLive() {
+    const img = $("live");
+    liveUp = false;
+    img.onload = img.onerror = null;
+    img.removeAttribute("src");           // closes the stream connection
+    img.hidden = true;
+    $("live-badge").hidden = true;
+    showPhoto(lastPhotoSrc);
+  }
+
   function startLive() {
+    if (controlsPort === null || document.hidden) return;
     const img = $("live");
     img.onload = () => {
       liveUp = true;
@@ -85,23 +98,34 @@
       $("photo").hidden = true;
       $("photo-empty").hidden = true;
     };
-    img.onerror = () => {
-      liveUp = false;
-      img.hidden = true;
-      $("live-badge").hidden = true;
-      showPhoto(lastPhotoSrc);
-      clearTimeout(liveRetry);
-      liveRetry = setTimeout(startLive, LIVE_RETRY_MS);
-    };
+    img.onerror = () => { camDown = true; stopLive(); };   // the status poll brings it back
     img.src = ctrl("/stream.mjpg?t=" + Date.now());
+  }
+
+  function pollCamera() {
+    if (controlsPort === null || document.hidden) return;
+    fetch(ctrl("/api/status"), { cache: "no-store" })
+      .then((r) => r.json())
+      .then((s) => {
+        if (!s.camera) { if (!camDown) { camDown = true; stopLive(); } }
+        else if (camDown) { camDown = false; startLive(); }
+      })
+      .catch(() => { if (!camDown) { camDown = true; stopLive(); } });
   }
 
   function renderLive(s) {
     if (controlsPort === null && s.controls_port) {
       controlsPort = s.controls_port;
       startLive();
+      setInterval(pollCamera, CAMERA_POLL_MS);
     }
   }
+
+  // No stream while nobody is looking: the camera and its detector rest.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stopLive();
+    else if (!camDown) startLive();
+  });
 
   // What the detector saw in the latest photo, as small chips under the camera.
   function renderChips(photo) {
@@ -111,9 +135,10 @@
     box.hidden = !chips.length;
   }
 
-  // "Recording saved" under the camera while the alarm it belongs to is the latest one.
-  function renderRecording(rec) {
-    const show = !!(rec && rec.for_alarm);
+  // "Recording saved" under the camera during the alarm it belongs to (the activity
+  // entry keeps the record after the passphrase).
+  function renderRecording(rec, alert) {
+    const show = alert === "alarm" && !!(rec && rec.for_alarm);
     $("recording").hidden = !show;
     if (show) $("recording-text").textContent = "Recording saved · " + rec.time;
   }
@@ -259,7 +284,7 @@
       const li = el("li", t.who);
       const who = el("div", "who", t.who === "heard" ? "Heard" : "Faraday");
       who.append(el("time", "", t.time));
-      if (t.voice) who.append(el("span", "voice " + t.voice, t.voice === "owner" ? "Owner's voice" : "Not the owner's voice"));
+      if (t.voice) who.append(el("span", "voice " + t.voice, t.voice === "owner" ? "Owner's voice" : "Another voice"));
       li.append(icon(t.who === "heard" ? "mic" : "speaker"), who, el("div", "line", t.text));
       list.append(li);
     }
@@ -282,7 +307,7 @@
     list.replaceChildren();
     if (!feed.length) list.append(el("li", "empty", "Waiting for the first event."));
     for (const f of feed) {
-      const li = el("li", f.level + " " + f.kind);
+      const li = el("li", f.level + " " + f.kind + (f.thumb ? " has-thumb" : ""));
       const node = el("span", "node");
       node.append(icon(FEED_ICON[f.type] || "activity"));
       const text = el("span", "text", f.text);

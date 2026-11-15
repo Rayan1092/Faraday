@@ -278,7 +278,7 @@ def banner(mode: str, alert: str, now: datetime, last_disarm: Optional[datetime]
     if alert == AlertLevel.ALARM:
         return {"kind": "alarm", "title": "ALARM",
                 "text": "Someone stayed after the warning. Both lights on."
-                        + (" Recording saved." if recorded else " Recording.")}
+                        + (" Recording saved." if recorded else "")}
     if mode == Mode.HOME and _within(last_disarm, now, DISARMED_FOR_S):
         return {"kind": "ok", "title": "DISARMED",
                 "text": "Passphrase accepted. Welcome home."}

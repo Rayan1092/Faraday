@@ -1,4 +1,3 @@
-"""The real offline check and the big audience banners."""
 """The big banner on the dashboard: the one message for the owner, most important first."""
 import unittest
 from datetime import datetime, timedelta

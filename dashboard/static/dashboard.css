@@ -1,4 +1,4 @@
-/* Faraday dashboard. Calm, dark, frosted glass. Readable on a projector.
+/* Faraday dashboard. Calm, dark, frosted glass. Readable across a room.
    Fully offline: system fonts only, no external assets. Spacing on an 8px grid
    (0.5rem steps); sizes scale with the screen so 1280x720 and 1920x1080 both work. */
 
@@ -34,7 +34,7 @@ body[data-status="red"]    { --status: var(--red); }
 
 * { box-sizing: border-box; }
 
-/* 16px at ~1100px wide, ~21px at 1920: big enough for the back of the room. */
+/* 16px at ~1100px wide, ~21px at 1920: readable from across the room. */
 html { font-size: clamp(14px, calc(0.62vw + 9px), 22px); }
 
 body {
@@ -374,12 +374,12 @@ body.toast-on .timeline-card .card-head { display: none; }
 .timeline li {
   position: relative;
   display: grid;
-  grid-template-columns: 2rem 1fr auto auto;
+  grid-template-columns: 2rem 1fr auto;
   gap: 0.75rem;
   align-items: start;
   padding: 0.45rem 0;
 }
-.timeline li > time { grid-column: 4; }
+.timeline li.has-thumb { grid-template-columns: 2rem 1fr auto auto; }
 .timeline .thumb {             /* photos and alarm recordings, small */
   grid-column: 3; width: 3.4rem; height: 2.4rem; object-fit: cover; border-radius: 0.45rem;
   border: 1px solid var(--stroke); margin-top: 0.15rem;
