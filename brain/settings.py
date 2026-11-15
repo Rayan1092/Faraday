@@ -51,7 +51,7 @@ def llm_config(settings: Dict[str, Any]) -> Dict[str, Any]:
         "reasoning_effort": llm.get("reasoning_effort", "none"),
         # What to do when the model thinks anyway (the Mac's MLX 9B): see brain/bonsai.py.
         # Optional: a profile's own "no_think" wins over the shared one.
-        "no_think": str(profile.get("no_think", llm.get("no_think", "auto"))),
+        "no_think": str(profile.get("no_think") or llm.get("no_think") or "auto"),
     }
 
 

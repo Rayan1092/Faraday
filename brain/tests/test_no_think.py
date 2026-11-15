@@ -57,7 +57,7 @@ class Parsing(unittest.TestCase):
                             + "\n<tool_call>\n<function=summarize_log>\n<parameter=minutes>\n60\n"
                               "</parameter>\n</function>\n</tool_call>")
         self.assertEqual([json.loads(c["function"]["arguments"]) for c in two],
-                         [{"text": "porch_light"}, {"minutes": 60}])
+                         [{"text": "porch_light"}, {"minutes": "60"}])   # no schema: text
 
     def test_thinking_is_removed(self):
         self.assertEqual(clean_reply("<think>hmm</think>\n\nPlease leave."), "Please leave.")
@@ -128,6 +128,60 @@ class Modes(unittest.TestCase):
         c = Scripted(chat=[PLAIN, {"message": {"content": "<think>x</think>" + XML}, "finish_reason": "stop"}])
         m = c.chat(MESSAGES, TOOLS)
         self.assertEqual(m["tool_calls"][0]["function"]["name"], "outlet_on")
+
+
+class ReviewFixes(unittest.TestCase):
+    """From the review of PR #42."""
+
+    def test_inline_thinking_is_seen_and_a_finished_answer_kept(self):
+        inline = {"message": {"content": "<think>they want the light</think>\n" + XML}, "finish_reason": "stop"}
+        c = Scripted(chat=[PLAIN, inline], raw=[raw("Hi.")])
+        m = c.chat(MESSAGES, TOOLS)
+        self.assertEqual(m["tool_calls"][0]["function"]["name"], "outlet_on")   # kept, no retry
+        self.assertEqual((c.mode, c.thinking_seen, c.last["thought_chars"] > 0), ("raw", 1, True))
+        self.assertEqual([k for k, _ in c.calls], ["chat", "chat"])
+        self.assertEqual(c.chat(MESSAGES)["content"], "Hi.")                     # later calls: raw
+
+    def test_a_call_waits_for_the_probe_in_flight(self):
+        import threading
+        import time as _t
+        gate = threading.Event()
+
+        class Slow(Scripted):
+            def _post(self, url, body, timeout_s=None):
+                if body.get("max_tokens") == 16:
+                    gate.wait(2)
+                return super()._post(url, body, timeout_s)
+
+        c = Slow(chat=[THINKING], raw=[raw("Please leave.")])
+        c.warm_up()
+        _t.sleep(0.05)
+        threading.Timer(0.2, gate.set).start()
+        self.assertEqual(c.chat(MESSAGES)["content"], "Please leave.")
+        self.assertEqual([k for k, _ in c.calls], ["chat", "raw"])                # probe, then raw only
+
+    def test_a_slow_retry_keeps_raw_for_next_time(self):
+        c = Scripted(chat=[PLAIN, THINKING], raw=[BonsaiError("connection failed: timed out"), raw("Hi.")])
+        self.assertEqual(c.chat(MESSAGES)["content"], "")
+        self.assertEqual(c.mode, "raw")
+        self.assertEqual(c.chat(MESSAGES)["content"], "Hi.")
+
+    def test_values_typed_by_the_schema(self):
+        tools = [{"type": "function", "function": {"name": "save_message", "parameters": {"properties": {
+            "text": {"type": "string"}, "sender": {"type": "string"}}}}},
+                 {"type": "function", "function": {"name": "summarize_log", "parameters": {"properties": {
+                     "minutes": {"type": "integer"}}}}}]
+        xml = ("<tool_call>\n<function=save_message>\n<parameter=text>\n5551234567\n</parameter>\n"
+               "<parameter=sender>\ntrue\n</parameter>\n</function>\n</tool_call>\n"
+               "<tool_call>\n<function=summarize_log>\n<parameter=minutes>\n60\n</parameter>\n"
+               "</function>\n</tool_call>")
+        a, b = [json.loads(c["function"]["arguments"]) for c in tool_calls_in(xml, tools)]
+        self.assertEqual(a, {"text": "5551234567", "sender": "true"})
+        self.assertEqual(b, {"minutes": 60})
+
+    def test_null_setting_means_auto(self):
+        llm = {"profile": "mac", "profiles": {"mac": {"base_url": "u", "model": "m", "no_think": None}}}
+        self.assertEqual(llm_config({"llm": llm})["no_think"], "auto")
 
 
 class Settings(unittest.TestCase):
