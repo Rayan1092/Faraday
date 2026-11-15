@@ -16,7 +16,7 @@ import logging
 import re
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from hardware.settings import for_os
 
@@ -77,6 +77,20 @@ def parse_voice_count(text: str) -> Optional[int]:
     return None
 
 
+def parse_rttm(text: str) -> List[Tuple[float, float, str]]:
+    """RTTM lines -> [(start_s, duration_s, speaker)]. argmax-cli diarize prints RTTM
+    when --rttm-path isn't given (Sources/ArgmaxCLI/DiarizeCLI.swift)."""
+    out = []
+    for line in (text or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 8 and parts[0] == "SPEAKER":
+            try:
+                out.append((float(parts[3]), float(parts[4]), parts[7]))
+            except ValueError:
+                continue
+    return out
+
+
 class Diarizer:
     def __init__(self, command: List[str], timeout_s: float = 20.0):
         self.command, self.timeout_s = command, timeout_s
@@ -97,7 +111,8 @@ class Diarizer:
     def build(self, wav: Path) -> List[str]:
         return [part.replace("{wav}", str(wav)) for part in self.command]
 
-    def count_voices(self, wav: Path) -> Optional[int]:
+    def run(self, wav: Path) -> Optional[Tuple[str, str]]:
+        """The command's (stdout, stderr), or None if it failed."""
         try:
             proc = subprocess.run(self.build(Path(wav)), capture_output=True, text=True,
                                   timeout=self.timeout_s)
@@ -107,7 +122,14 @@ class Diarizer:
         if proc.returncode != 0:
             log.warning("diarize exited %s: %s", proc.returncode, (proc.stderr or proc.stdout)[-300:])
             return None
-        n = parse_voice_count(proc.stdout) or parse_voice_count(proc.stderr)
+        return proc.stdout or "", proc.stderr or ""
+
+    def count_voices(self, wav: Path) -> Optional[int]:
+        out = self.run(wav)
+        if out is None:
+            return None
+        stdout, stderr = out
+        n = parse_voice_count(stdout) or parse_voice_count(stderr)    # stdout first
         if n is None:
-            log.warning("diarize output not understood: %s", (proc.stdout or proc.stderr)[-200:])
+            log.warning("diarize output not understood: %s", (stdout or stderr).strip()[-200:])
         return n

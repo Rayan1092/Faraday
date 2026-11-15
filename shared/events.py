@@ -53,6 +53,7 @@ class SpeechHeardData:
     duration_s: Optional[float] = None
     voices: Optional[int] = None        # distinct voices (Argmax diarization), if it finished in time
     channel: Optional[str] = None       # SpeechChannel.*: "owner" (after "Hey Faraday") or "visitor"
+    owner_voice: Optional[bool] = None  # owner requests: the enrolled owner's voice? (display only)
 
 
 class SpeechChannel:
@@ -316,6 +317,9 @@ def validate_event(d: Dict[str, Any]) -> List[str]:
         v = data["voices"]
         if isinstance(v, bool) or not isinstance(v, int) or v < 1:
             errors.append("data.voices must be a whole number >= 1")
+    if d["type"] == EventType.SPEECH_HEARD and data.get("owner_voice") is not None \
+            and not isinstance(data["owner_voice"], bool):
+        errors.append("data.owner_voice must be true, false or null")
     if d["type"] == EventType.SPEECH_HEARD and data.get("channel") is not None:
         if data["channel"] not in SpeechChannel.ALL:
             errors.append(f"data.channel must be one of {sorted(SpeechChannel.ALL)} or null")
