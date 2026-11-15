@@ -1,12 +1,12 @@
 # Bonsai benchmark results
 
-Made with `python -m brain.bench` (see `brain/bench.py`). Each demo moment that asks Bonsai is run 10 times. Times are the Bonsai call only. On the Mac mini, rerun with `python -m brain.bench --profile mac` and add the file here.
+Made with `python -m brain.bench` (see `brain/bench.py`). Each scripted moment that asks Bonsai is run 10 times. Times are the Bonsai call only. On the Mac mini, rerun with `python -m brain.bench --profile mac` and add the file here.
 
 ## 4B q2_0 on the NV laptop (Windows), 2026-11-14
 
 | | Before tuning ([1537](2026-11-14-1537-ternary-bonsai-2-4b-q2-0.md)) | After tuning ([1553](2026-11-14-1553-ternary-bonsai-2-4b-q2-0.md)) |
 |---|---|---|
-| Cases | 9 demo phrases | 9 demo phrases + 5 reworded variants never used for tuning |
+| Cases | 9 scripted phrases | 9 scripted phrases + 5 reworded variants never used for tuning |
 | Bonsai alone right | 55/90 (61%) | **136/140 (97%)** |
 | Final right (after code checks, fix-ups and fallback) | 67/90 (74%) | **139/140 (99%)** |
 | Unsafe actions that got through | 0 | **0** |
@@ -25,11 +25,11 @@ Made with `python -m brain.bench` (see `brain/bench.py`). Each demo moment that 
 
 **Still imperfect:** 1 of 10 confrontation lines didn't mention what the camera saw ("Please leave, stranger, before I lock you out of this house."). Nothing unsafe got through in any run, before or after.
 
-What these numbers are: one machine, one model, fixed phrases plus a handful of rewordings. They're good evidence that the demo moments work and that the guard rails hold. They aren't a general accuracy score.
+What these numbers are: one machine, one model, fixed phrases plus a handful of rewordings. They're good evidence that the scripted moments work and that the guard rails hold. They aren't a general accuracy score.
 
 ## Prompt profiles compared on the same 4B, 2026-11-14
 
-Both profiles ran on the 16 cases: the 9 demo phrases, 5 reworded variants, and 2 new hard visitor lines (a visitor at night asking "Is anyone home?", and a visitor leaving a phone number). 5 runs each.
+Both profiles ran on the 16 cases: the 9 scripted phrases, 5 reworded variants, and 2 new hard visitor lines (a visitor at night asking "Is anyone home?", and a visitor leaving a phone number). 5 runs each.
 
 | Profile | Bonsai alone right | Final right | Unsafe | Avg / worst |
 |---|---|---|---|---|
@@ -39,7 +39,7 @@ Both profiles ran on the 16 cases: the 9 demo phrases, 5 reworded variants, and 
 - **Where they differ.** The `9b` system prompt explains who is talking in each mode, and that fixed "I'm off to work" (2/5 → 5/5). Its first confrontation prompt was too vague (3/5), so it now uses the `small` wording ("using words from the description"), which scored 5/5. The table shows that fixed version.
 - **Both profiles pass the two hard visitor lines** 5/5. The phone number is saved, and nothing touches lights or modes.
 - **Summary safety net.** Bonsai's summary left out the visitor's message once per profile. Now plain code adds it if it's missing (`summary.ensure_messages`). The bench measures Bonsai alone, so that isn't counted here.
-- **Decision.** The `9b` prompts are safe to use on the Mac's 9B, and they even help the 4B a little. Defaults are unchanged for now: the 4B uses `small`, and a model id with "9b" picks `9b`. Five runs per case is a small sample. If we want the `9b` prompts on the 4B, set `"prompt_profile": "9b"` under `llm` in `config/settings.json`.
+- **Decision.** The `9b` prompts are safe to use on the Mac's 9B, and they even help the 4B a little. Defaults are unchanged for now: the 4B uses `small`, and a model id with "9b" picks `9b`. Five runs per case is a small sample. To use the `9b` prompts on the 4B, set `"prompt_profile": "9b"` under `llm` in `config/settings.json`.
 
 ## A model that thinks anyway (the Mac's MLX 9B), 2026-11-14
 
