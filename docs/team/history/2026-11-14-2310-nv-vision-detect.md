@@ -18,7 +18,7 @@ Owner items 1 and 2. Built and tested on Windows with stand-ins (no camera, no L
 
 - **Objects:** YOLOX-tiny (Megvii, Apache-2.0), 80 COCO classes, through OpenCV DNN (no new package), about 21 ms per frame on the NV laptop.
   - Fallback: OpenCV's HOG people detector, on OpenCV 4 only (OpenCV 5 dropped it).
-  - Read-only research picked it over YOLOX-nano: it found 4 people against nano's 2 on the reference image. The Ultralytics YOLO models were ruled out (AGPL).
+  - Picked over YOLOX-nano after measuring both here: tiny found 4 people against nano's 2 on the reference image, for 8 ms more per frame. The Ultralytics YOLO models were ruled out (AGPL).
 - **Faces:** YuNet (OpenCV `FaceDetectorYN`, MIT). OpenCV 5 dropped the Haar cascades, so Haar is the fallback on OpenCV 4 only.
 - **Live stream:** labelled boxes, at about 5 detections a second while someone watches. Saved photos stay clean.
 - **Photos:** `photo_described` gets `people`, `faces` and `detections` ([{label, count, confidence}]).
