@@ -20,7 +20,7 @@ For each incoming event, in this order:
 
 Photos the owner asks for (owner_snapshot: the dashboard Snapshot button) get their
 threat label like any photo, but nobody at the door is greeted for them.
-"Who's at the door?" (Home or Night) is answered by plain code: "Let me look.", a
+"Who's at the door?" (Home or Night) is answered by plain code: "Checking the camera.", a
 fresh photo, then its description and threat label spoken (brain/look.py), or
 "I can't see the door right now." if the camera or vision fails or is too slow.
 
@@ -52,9 +52,8 @@ from .settings import load_settings, passphrase
 from modes.passphrase import REDACTED
 
 SNAPSHOT_REASON = "Snapshot from the dashboard"
-INSTRUCTION_REFUSED = ("I can only pass on words to visitors. "
-                       "Lights, modes and the alarm stay with you.")
-CHECKING = "Let me check."
+INSTRUCTION_REFUSED = lines.INSTRUCTION_REFUSED
+CHECKING = lines.CHECKING
 GREET_AGAIN_S = 60  # a second doorbell press within this gets no second greeting
 MAX_DEPTH = 4  # event -> action -> follow-up event chains, so nothing can loop
 TRACE_WINDOW = 50  # log entries searched when tracing caused_by
@@ -174,7 +173,7 @@ class Pipeline:
         return action
 
     def _look(self, question: Event, result: Result, done: List[Action]) -> None:
-        """'Who's at the door?': say "Let me look.", take a fresh photo, and answer when
+        """'Who's at the door?': say "Checking the camera.", take a fresh photo, and answer when
         its description arrives (or say we can't see, if it doesn't in time)."""
         self._emit(make_action(ActionType.SPEAK, {"text": look.LOOKING}, Source.BRAIN,
                                caused_by=question.id), result, done)
@@ -433,7 +432,9 @@ class Pipeline:
             if intent in owner.ARMED_OK.get(mode, set()):
                 self._look(event, result, done)
             elif intent == owner.PASSPHRASE:
-                say(lines.SAY_PASSPHRASE)
+                # The owner refusal line (owner, 2026-11-15): never hint that a passphrase
+                # exists to whoever is at the door. The owner just says it.
+                say(lines.CANT_DISARM)
             elif intent == owner.UNCLEAR:
                 say(lines.REPEAT if route.cut_off else lines.SORRY)
             else:
@@ -501,8 +502,8 @@ class Pipeline:
             if which is None:
                 return False
             gone = self.instructions.forget(which)
-            what = "all your instructions" if which == "all" else f"the {which} instruction"
-            line = f"Okay. I've forgotten {what}." if gone else "There was no instruction to forget."
+            line = ((lines.ALL_FORGOTTEN if which == "all" else lines.forgot_line(which)) if gone
+                    else lines.NOTHING_TO_FORGET)
         self._emit(make_action(ActionType.SPEAK, {"text": line}, Source.BRAIN, caused_by=event.id),
                    result, done)
         return True

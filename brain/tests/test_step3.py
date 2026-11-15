@@ -64,7 +64,7 @@ class Step3(unittest.TestCase):
     def test_demo_rule_by_voice_then_both_lights(self):
         p = self.pipeline(None, Mode.NIGHT)  # offline: the plain-code parser stores it
         said = [a.args.get("text") for a in p.handle(events.speech(DEMO_RULE)).actions]
-        self.assertIn("Okay. I'll remember that.", said)
+        self.assertIn("Understood. The rule is saved.", said)
         rule = p.rules.all()[0]
         self.assertEqual(rule["when"], {"event": "motion", "modes": ["night"]})
         self.assertEqual(rule["description"], DEMO_RULE)
@@ -199,8 +199,7 @@ class Step3(unittest.TestCase):
             p.handle(events.photo_described(photo.id, "A man in a dark jacket by the window."))
             p.wait_background(5)
             new = [a.args.get("text") for a in self.emitted[before:]]
-            self.assertEqual(new, ["You are on camera. I can see a man in a dark jacket by the window. "
-                                   "Please leave now."], mode)
+            self.assertEqual(new, ["I can see a man in a dark jacket by the window. Please leave now."], mode)
 
     def test_no_code_line_when_the_camera_failed(self):
         p = self.pipeline(SlowClient("", delay=0), Mode.AWAY)

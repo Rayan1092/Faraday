@@ -153,9 +153,18 @@ class ThroughThePipeline(unittest.TestCase):
                 r = self.owner(text)
                 self.assertEqual(said(r.actions), [lines.ARMED_NO_CHANGE], (mode, text))
                 self.assertEqual(kinds(r.actions), [ActionType.SPEAK], (mode, text))
-            self.assertEqual(said(self.owner("Disarm please.").actions), [lines.SAY_PASSPHRASE])
+            self.assertEqual(said(self.owner("Disarm please.").actions), [lines.CANT_DISARM])
             self.assertEqual(self.p.modes.mode, mode)
             self.assertEqual(self.p.rules.all(), [])
+
+    def test_armed_replies_never_hint_at_a_passphrase(self):
+        """Whoever says "Hey Faraday" at the door may not be the owner."""
+        for mode in (Mode.AWAY, Mode.NIGHT):
+            self.make(mode)
+            for text in ("Turn off the porch light.", "I'm heading out.", "What happened?",
+                         "Disarm the system.", "Turn off the alarm.", "A piece of paper."):
+                for line in said(self.owner(text).actions):
+                    self.assertNotIn("passphrase", line.lower(), (mode, text, line))
 
     def test_armed_owner_passphrase_still_disarms(self):
         self.make(Mode.AWAY)

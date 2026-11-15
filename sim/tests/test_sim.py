@@ -37,7 +37,7 @@ class SimDemo(unittest.TestCase):
             text = out.getvalue()
             self.assertEqual((sim.modes.mode, sim.modes.alert), (Mode.HOME, AlertLevel.NORMAL))
             self.assertIn('"level": "alarm"', text)
-            self.assertIn("I can't disarm", text)
+            self.assertIn("Only the owner can disarm the system", text)
             self.assertIn("wrong passphrase", text)
             self.assertNotIn("otter", text.replace("t Silver, otter lantern!", ""))
             rows = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines()]

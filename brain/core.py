@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from shared import Action, ActionType, ChangedBy, Event, EventType, Mode, SpeechChannel, ThreatCategory
 
 from . import fallback as fb
+from . import lines as spoken
 from .bonsai import BonsaiClient, BonsaiError
 from .guard import GarbageReply, RawItem, filter_actions, parse_reply
 from modes.passphrase import REDACTED, redact
@@ -146,7 +147,9 @@ class Brain:
             if matched or REDACTED in text:
                 return Decision([], "code")  # passphrase handled by the mode code path
             if is_disarm_request(text):
-                reply = fb.CANT_DISARM if mode in Mode.ARMED else "Faraday is already in home mode."
+                reply = (fb.CANT_DISARM if mode in Mode.ARMED
+                         else fb.CANT_HELP if channel == SpeechChannel.VISITOR   # a visitor at Home
+                         else spoken.ALREADY_HOME)
                 return self._code(event, mode, allowed, [fb._speak(reply)])
             if mode == Mode.HOME and fb.is_summary_request(text):
                 # Skip one model round trip: the summary itself is Bonsai's job (summarize()).
@@ -370,11 +373,10 @@ class Brain:
                 or any(a.type == ActionType.SAVE_MESSAGE for a in actions)):
             return actions
         text = str(event.data.get("text", ""))[:500]
-        promised = any(a.type == ActionType.SPEAK and "message" in a.args["text"].lower()
-                       for a in actions)
+        promised = any(a.type == ActionType.SPEAK and _PROMISE.search(a.args["text"]) for a in actions)
         last = _last_said(recent).strip()
         # an offer is a question about a message ("Would you like to leave a message?"),
-        # not a confirmation ("Thank you. I saved your message.")
+        # not a confirmation ("Thank you. I'll pass that along.")
         offered = ("message" in last.lower() and last.endswith("?")
                    and not _DECLINE.match(text))
         if not (promised or offered):
@@ -395,8 +397,7 @@ class Brain:
             return actions
         set_modes = [a for a in actions if a.type == ActionType.SET_MODE]
         if set_modes:
-            text = {Mode.AWAY: "Away mode on. I'll watch the door.",
-                    Mode.NIGHT: "Night mode on. Sleep well."}[set_modes[0].args["mode"]]
+            text = {Mode.AWAY: spoken.AWAY_ON, Mode.NIGHT: spoken.NIGHT_ON}[set_modes[0].args["mode"]]
         elif any(a.type == ActionType.SAVE_MESSAGE for a in actions):
             text = fb.MESSAGE_SAVED
         elif any(a.type == ActionType.ADD_RULE for a in actions):
@@ -425,14 +426,15 @@ def _clean_line(text: Any) -> Optional[str]:
 def _mode_reply(event: Event) -> List[RawItem]:
     changed_by, new = event.data.get("changed_by"), event.data.get("mode")
     if changed_by == ChangedBy.PASSPHRASE:
-        return [fb._speak("Welcome home. Faraday is disarmed.")]
+        return [fb._speak(spoken.DISARMED)]
     if changed_by in (ChangedBy.BRAIN, ChangedBy.STARTUP):
         return []  # the brain already spoke when it chose set_mode
-    text = {Mode.AWAY: "Away mode on. I'll watch the door.",
-            Mode.NIGHT: "Night mode on. Sleep well."}.get(new)
+    text = {Mode.AWAY: spoken.AWAY_ON, Mode.NIGHT: spoken.NIGHT_ON}.get(new)
     return [fb._speak(text)] if text else []
 
 
+# Bonsai promising to pass something on ("I'll pass that along", "I'll take your message").
+_PROMISE = re.compile(r"\b(message|pass (it|that|this|them) (on|along)|let (the owner|them|him|her) know)\b", re.I)
 _DECLINE = re.compile(r"^\s*(no|nope|nah|not now|no thanks?|no thank you)\b[\s,.!]*(thanks?|thank you)?[\s.!]*$", re.I)
 
 

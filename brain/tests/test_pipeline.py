@@ -152,7 +152,7 @@ class PipelineTests(unittest.TestCase):
         p.handle(events.motion())
         self.clock.t += 15
         warned = p.tick()
-        self.assertIn("You're on camera. The owner has been alerted.",
+        self.assertIn("Please be aware this property is monitored and you are on camera.",
                       [a.args.get("text") for a in warned.actions])
         photo = next(a for a in warned.actions if a.type == ActionType.TAKE_PHOTO)
         self.assertIn("no doorbell", photo.args["reason"])

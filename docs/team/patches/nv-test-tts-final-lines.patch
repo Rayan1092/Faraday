@@ -1,0 +1,17 @@
+diff --git a/hardware/tests/test_tts_voice.py b/hardware/tests/test_tts_voice.py
+--- a/hardware/tests/test_tts_voice.py
++++ b/hardware/tests/test_tts_voice.py
+@@ -252,8 +252,11 @@ class FixedLines(unittest.TestCase):
+     def test_dells_fixed_lines_are_found(self):
+         from integration.fixed_lines import fixed_lines, lines_in
+         lines = fixed_lines()
+-        for want in ("Night mode on. Sleep well.", "Alarm. You are being recorded. Leave now.",
+-                     "I can't see the door right now.", "Welcome home. Faraday is disarmed."):
++        # Dell's final lines (owner 2026-11-15: one calm tone, brain/lines.py FIXED_LINES)
++        for want in ("Night mode is on. Good night.",
++                     "This property is protected. You are being recorded and the owner has been notified. "
++                     "Please leave now.",
++                     "I can't see the door right now.", "Welcome home. The system is disarmed."):
+             self.assertIn(want, lines)
+         self.assertNotIn("Owner asked who's at the door", lines)           # a log reason
+         self.assertFalse(any("15:09" in line for line in lines))            # bench data

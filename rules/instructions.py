@@ -144,7 +144,7 @@ def confirmation(ins: Instruction) -> str:
     """What Faraday says to the owner after storing it."""
     to = "to " if ins.get("form") == "to" else ""
     verb = "ask" if ins.get("form") == "to" and ins.get("verb") == "ask" else "tell"
-    return f"Okay. If {IF_WHO[ins['audience']]}, I'll {verb} them {to}{ins['request']}."
+    return f"Understood. If {IF_WHO[ins['audience']]}, I'll {verb} them {to}{ins['request']}."
 
 
 def owner_words(ins: Instruction) -> str:

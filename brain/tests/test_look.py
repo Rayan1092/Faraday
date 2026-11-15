@@ -45,7 +45,7 @@ class Words(unittest.TestCase):
         self.assertEqual(look_line(photo("t", "An empty porch at night"), "nobody"),
                          "An empty porch at night.")                  # not said twice
         self.assertEqual(look_line(photo("t", "Nobody is there."), "nobody"), "Nobody is there.")
-        self.assertEqual(look_line(photo("t", "A dark porch"), "nobody"), "A dark porch. Nobody is there.")
+        self.assertEqual(look_line(photo("t", "A dark porch"), "nobody"), "A dark porch. No one is there.")
 
     def test_camera_or_vision_failure(self):
         self.assertEqual(look_line(photo("t", "Camera unavailable.", path="", source=Source.CAMERA), "nobody"),
