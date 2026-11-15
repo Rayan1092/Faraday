@@ -10,8 +10,9 @@ import unittest
 import cv2
 import numpy as np
 
-from hardware.detect import (COCO, DEFAULT_MODEL, FACE_MODEL, Detection, Detector, Faces, Yolox,
-                             _agnostic, describe_from, draw, hint, plural, summary)
+from hardware.detect import (COCO, DEFAULT_MODEL, FACE_MODEL, UNKNOWN, Detection, Detector, Faces,
+                             StreamFilter, Yolox, _agnostic, describe_from, draw, hint, plural,
+                             steady_objects, summary)
 
 
 class Decode(unittest.TestCase):
@@ -177,6 +178,146 @@ class StreamOverlay(unittest.TestCase):
         finally:
             feed.stop()
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class Steadiness(unittest.TestCase):
+    """Owner 2026-11-15: random things showed as "cell phone" and a bag that wasn't
+    there was reported. Objects are named only at 0.6+ ("unknown object" below)
+    and only when seen in 3 of the last 5 frames; people stay sensitive."""
+
+    def phone(self, conf, label="cell phone", dx=0):
+        return Detection(label, conf, (100 + dx, 100, 140 + dx, 180))
+
+    def test_a_flicker_is_never_shown(self):
+        f = StreamFilter()
+        shown = [f.update(frame) for frame in ([self.phone(0.9)], [], [self.phone(0.9)], [], [])]
+        self.assertEqual(shown, [[], [], [], [], []])               # 2 of 5 frames
+
+    def test_steady_and_sure_is_named_from_the_third_frame(self):
+        f = StreamFilter()
+        self.assertEqual(f.update([self.phone(0.8)]), [])
+        self.assertEqual(f.update([self.phone(0.8, dx=3)]), [])     # moved a little: same thing
+        third = f.update([self.phone(0.7, dx=5)])
+        self.assertEqual([(d.label, d.confidence) for d in third], [("cell phone", 0.8)])
+        self.assertEqual(third[0].box, (105, 100, 145, 180))        # where it is now
+
+    def test_steady_but_unsure_is_an_unknown_object(self):
+        f = StreamFilter()
+        for conf, label in ((0.5, "cell phone"), (0.45, "remote"), (0.55, "cell phone")):
+            shown = f.update([self.phone(conf, label)])
+        self.assertEqual([d.label for d in shown], [UNKNOWN])
+        f = StreamFilter()                                          # sure only twice in 5
+        for conf in (0.9, 0.5, 0.9, 0.5, 0.5):
+            shown = f.update([self.phone(conf)])
+        self.assertEqual([d.label for d in shown], [UNKNOWN])
+
+    def test_old_frames_drop_out(self):
+        f = StreamFilter()
+        for _ in range(3):
+            f.update([self.phone(0.9)])
+        self.assertEqual(len(f.update([self.phone(0.9)])), 1)
+        for _ in range(3):
+            f.update([])
+        self.assertEqual(f.update([self.phone(0.9)]), [])           # 2 of the last 5 now
+
+    def test_a_person_shows_at_once_even_unsure(self):
+        person = Detection("person", 0.36, (10, 10, 100, 300))
+        self.assertEqual(StreamFilter().update([person]), [person])
+
+    def test_two_things_in_one_frame_stay_two(self):
+        a, b = Detection("cup", 0.9, (0, 0, 50, 50)), Detection("cup", 0.9, (300, 300, 350, 350))
+        found = steady_objects([[a, b]] * 3)
+        self.assertEqual(sorted(s.detection.box for s in found), [a.box, b.box])
+
+    def stub(self, per_frame):
+        class Stub:
+            def __init__(self):
+                self.left = list(per_frame)
+
+            def detect(self, frame):
+                return self.left.pop(0)
+        return Detector(Stub())
+
+    def test_photo_reports_people_and_only_steady_sure_objects(self):
+        person = Detection("person", 0.4, (10, 10, 100, 300))
+        bag = Detection("handbag", 0.45, (200, 200, 260, 260))          # unsure: never reported
+        case = Detection("suitcase", 0.8, (300, 300, 400, 400))         # steady and sure
+        phone = Detection("cell phone", 0.9, (500, 100, 520, 140))      # once: a flicker
+        det = self.stub([[person, bag, case, phone], [bag, case], [person, case], [bag], [person, case]])
+        info = det.analyse_frames([np.zeros((480, 640, 3), np.uint8)] * 5)
+        self.assertEqual(info["people"], 1)
+        self.assertEqual([d["label"] for d in info["detections"]], ["suitcase", "person"])
+        self.assertEqual(info["frames"], 5)
+        for text in (hint(info), describe_from(info)):
+            self.assertNotIn("handbag", text)
+            self.assertNotIn("phone", text)
+        self.assertIn("suitcase", describe_from(info))
+
+    def test_one_image_names_only_sure_objects(self):
+        det = self.stub([[Detection("person", 0.37, (10, 10, 100, 300)),
+                          Detection("handbag", 0.5, (200, 200, 260, 260)),
+                          Detection("backpack", 0.7, (300, 300, 400, 400))]])
+        info = det.analyse(np.zeros((480, 640, 3), np.uint8))
+        self.assertEqual([d["label"] for d in info["detections"]], ["backpack", "person"])
+
+    def test_unknown_object_drawn_without_a_percentage(self):
+        frame = np.zeros((120, 200, 3), np.uint8)
+        img = draw(frame, [Detection(UNKNOWN, 0.5, (150, 40, 199, 100))])   # at the right edge
+        self.assertGreater(int(img[30:40, 120:199].max()), 0)              # label moved inside
+
+    def test_live_stream_shows_unsure_steady_things_as_unknown(self):
+        import shutil
+        import tempfile
+        from pathlib import Path
+        from hardware.camera import CameraFeed
+        from hardware.tests.test_media import FakeCapture, wait_until
+
+        class Det:
+            calls = 0
+
+            def detect(self, frame):
+                Det.calls += 1
+                return [Detection("cell phone", 0.5, (10, 8, 60, 64))]
+
+        tmp = Path(tempfile.mkdtemp(prefix="faraday-det-"))
+        feed = CameraFeed(photos_dir=tmp, fps=30, idle_s=5, capture_factory=lambda *a: FakeCapture(),
+                          detector=Det(), detect_fps=20)
+        try:
+            with feed.viewer():
+                self.assertTrue(wait_until(lambda: Det.calls >= 4))
+                with feed._lock:
+                    labels = [d.label for d in feed._boxes]
+            self.assertEqual(labels, [UNKNOWN])
+            self.assertEqual(feed.frame_size(), (128, 72))          # FakeCapture's whole frame
+        finally:
+            feed.stop()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_photo_checks_the_frames_after_it(self):
+        import shutil
+        import tempfile
+        from pathlib import Path
+        from hardware.camera import CameraFeed, PhotoCamera
+        from hardware.tests.test_media import FakeCapture
+        seen = []
+
+        class Det:
+            def detect(self, frame):
+                return []
+
+            def analyse_frames(self, frames):
+                seen.append(len(frames))
+                return {"people": 0, "detections": [], "close_people": 0, "boxes": []}
+
+        tmp = Path(tempfile.mkdtemp(prefix="faraday-det-"))
+        feed = CameraFeed(photos_dir=tmp, fps=30, idle_s=5, capture_factory=lambda *a: FakeCapture())
+        try:
+            ev = PhotoCamera(feed, None, Det()).take()
+        finally:
+            feed.stop()
+            shutil.rmtree(tmp, ignore_errors=True)
+        self.assertEqual(seen, [5])
+        self.assertEqual((ev.data["description"], ev.data["described_by"]), ("Nobody is there.", "detector"))
 
 
 class EventFields(unittest.TestCase):

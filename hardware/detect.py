@@ -15,6 +15,18 @@ description); on OpenCV 4 without the model, the built-in Haar cascade.
     found = det.detect(frame_bgr)                # [Detection(label, confidence, box)]
     summary(found)  -> {"people": 1, "detections": [{"label": "person", "count": 1, "confidence": 0.91}]}
     draw(frame_bgr, found)                       # copy with labelled boxes (live stream)
+
+False positives (owner 2026-11-15: random things showed as "cell phone", and a bag
+that wasn't there was reported). People stay sensitive: any person box at SCORE
+(0.35) counts at once. Every other object must be steady and confident:
+- steady: seen in at least 3 of the last 5 frames (the same place, any label, so
+  a phone flickering between "cell phone" and "remote" is one thing), else it
+  isn't shown at all;
+- named only if one label reached NAMED (0.6) in at least 3 of those frames,
+  else the live stream shows it as "unknown object".
+A photo is checked over itself plus the next 4 frames (about 0.4 s), and only
+people and named objects go on photo_described, into the vision hint and into
+the detector's own description. StreamFilter does the same for the live boxes.
 """
 from __future__ import annotations
 
@@ -55,6 +67,10 @@ PLURAL = {"person": "people", "knife": "knives", "mouse": "mice", "sheep": "shee
           "skis": "skis", "scissors": "scissors", "bus": "buses", "couch": "couches",
           "wine glass": "wine glasses", "sandwich": "sandwiches", "toothbrush": "toothbrushes"}
 CLOSE = 0.3           # a person box this tall (share of the frame) is close to the camera
+NAMED = 0.6           # an object (not a person) is named only at this confidence or more
+STEADY = (3, 5)       # ... and only if seen in at least 3 of the last 5 frames
+MATCH_IOU = 0.3       # the same thing in two frames: boxes overlapping at least this much
+UNKNOWN = "unknown object"
 
 
 def plural(label: str, n: int) -> str:
@@ -171,6 +187,81 @@ def _agnostic(found: List[Detection], iou: float = 0.7) -> List[Detection]:
         if all(k.label == d.label or _iou(k.box, d.box) < iou for k in kept):
             kept.append(d)
     return kept
+
+
+class Steady(NamedTuple):
+    detection: Detection         # its latest box
+    name: Optional[str]          # the confident label, or None ("unknown object")
+    confidence: float            # the named label's best confidence (else the latest box's)
+    frame: int                   # index of the frame its latest box came from
+
+
+def steady_objects(frames: Sequence[Sequence[Detection]], need: int = STEADY[0],
+                   named: float = NAMED, iou: float = MATCH_IOU) -> List[Steady]:
+    """Objects other than people seen in at least `need` of `frames` (oldest
+    first). The same object in two frames = boxes overlapping at least `iou`,
+    whatever the label. Named only if one label reached `named` confidence in
+    at least `need` frames. People are never in the result (callers keep them)."""
+    tracks: List[Dict[str, Any]] = []
+    for fi, found in enumerate(frames):
+        for d in found:
+            if d.label == "person":
+                continue
+            best, best_iou = None, iou
+            for ti, t in enumerate(tracks):
+                if t["frame"] == fi:
+                    continue                          # one box per object per frame
+                overlap = _iou(t["latest"].box, d.box)
+                if overlap >= best_iou:
+                    best, best_iou = ti, overlap
+            if best is None:
+                tracks.append({"latest": d, "frame": fi, "frames": set(), "named": {}})
+                best = len(tracks) - 1
+            t = tracks[best]
+            t["latest"], t["frame"] = d, fi
+            t["frames"].add(fi)
+            if d.confidence >= named:
+                hits, top = t["named"].get(d.label, (set(), 0.0))
+                hits.add(fi)
+                t["named"][d.label] = (hits, max(top, d.confidence))
+    out: List[Steady] = []
+    for t in tracks:
+        if len(t["frames"]) < need:
+            continue                                  # a flicker: not shown at all
+        names = sorted(((len(h), top, label) for label, (h, top) in t["named"].items()
+                        if len(h) >= need), reverse=True)
+        if names:
+            out.append(Steady(t["latest"], names[0][2], round(names[0][1], 2), t["frame"]))
+        else:
+            out.append(Steady(t["latest"], None, t["latest"].confidence, t["frame"]))
+    return out
+
+
+class StreamFilter:
+    """The live stream's boxes: people at once (sensitive); other objects only once
+    steady over the last 5 detection frames, named only when confident, else
+    "unknown object"."""
+
+    def __init__(self, window: int = STEADY[1], need: int = STEADY[0], named: float = NAMED):
+        from collections import deque
+        self.need, self.named = need, named
+        self.frames: Any = deque(maxlen=window)
+
+    def reset(self) -> None:
+        self.frames.clear()
+
+    def update(self, found: Sequence[Detection]) -> List[Detection]:
+        self.frames.append(list(found))
+        latest = len(self.frames) - 1
+        shown = [d for d in found if d.label == "person"]
+        for s in steady_objects(list(self.frames), self.need, self.named):
+            if s.frame != latest:
+                continue                              # not in this frame: no box now
+            if s.name is None:
+                shown.append(s.detection._replace(label=UNKNOWN))
+            else:
+                shown.append(s.detection._replace(label=s.name, confidence=s.confidence))
+        return shown
 
 
 class HogPeople:
@@ -294,21 +385,39 @@ class Detector:
         return found
 
     def analyse(self, frame: np.ndarray) -> Optional[Dict[str, Any]]:
-        """For a photo: summary of objects + people + visible faces, or None if the
-        detector failed."""
-        found = self.detect(frame)
-        if found is None:
+        """For one image: see analyse_frames."""
+        return self.analyse_frames([frame])
+
+    def analyse_frames(self, frames: Sequence[np.ndarray],
+                       need: int = STEADY[0]) -> Optional[Dict[str, Any]]:
+        """For a photo: frames[0] is the photo, the rest the frames right after it.
+        People, close people and faces come from the photo (sensitive, as before).
+        Other objects count only if steady (in at least `need` of the frames, or
+        all of them when fewer came) and confident (NAMED). Unknown objects are
+        never reported. None if the detector failed on the photo."""
+        if not len(frames):
             return None
-        out = summary(found)
-        h = frame.shape[0]
-        out["close_people"] = sum(1 for d in found if d.label == "person"
-                                  and (d.box[3] - d.box[1]) >= CLOSE * h)
+        first = self.detect(frames[0])
+        if first is None:
+            return None
+        per_frame = [first]
+        for frame in frames[1:]:
+            found = self.detect(frame)
+            if found is not None:
+                per_frame.append(found)
+        people = [d for d in first if d.label == "person"]
+        objects = [s.detection._replace(label=s.name, confidence=s.confidence)
+                   for s in steady_objects(per_frame, min(need, len(per_frame))) if s.name]
+        out = summary(people + objects)
+        h = frames[0].shape[0]
+        out["close_people"] = sum(1 for d in people if (d.box[3] - d.box[1]) >= CLOSE * h)
         if self.faces is not None:
             try:
-                out["faces"] = self.faces.count(frame)
+                out["faces"] = self.faces.count(frames[0])
             except Exception as e:
                 log.warning("face count failed: %r", e)
-        out["boxes"] = found
+        out["boxes"] = people + objects
+        out["frames"] = len(per_frame)
         return out
 
 
@@ -357,22 +466,24 @@ def describe_from(info: Dict[str, Any]) -> str:
     return line
 
 
-COLORS = {"person": (60, 200, 255)}
+COLORS = {"person": (60, 200, 255), UNKNOWN: (170, 170, 170)}
 
 
 def draw(frame: np.ndarray, found: Sequence[Detection]) -> np.ndarray:
     """A copy of the frame with labelled boxes (for the live stream only)."""
     import cv2
     img = frame.copy()
+    width = img.shape[1]
     for d in found:
         x1, y1, x2, y2 = d.box
         color = COLORS.get(d.label, (80, 230, 120))
         cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
-        text = f"{d.label} {int(d.confidence * 100)}%"
+        text = d.label if d.label == UNKNOWN else f"{d.label} {int(d.confidence * 100)}%"
         (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
         ty = max(th + 4, y1)
-        cv2.rectangle(img, (x1, ty - th - 4), (x1 + tw + 6, ty), color, -1)
-        cv2.putText(img, text, (x1 + 3, ty - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 1,
+        tx = max(0, min(x1, width - tw - 6))             # a box at the right edge: label stays in
+        cv2.rectangle(img, (tx, ty - th - 4), (tx + tw + 6, ty), color, -1)
+        cv2.putText(img, text, (tx + 3, ty - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 1,
                     cv2.LINE_AA)
     return img
 
@@ -399,11 +510,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         if frame is None:
             print(f"{path}: cannot read")
             continue
-        det.detect(frame)                       # warm-up
+        raw = det.detect(frame) or []           # also the warm-up
         info = det.analyse(frame)
         print(f"{path}: {det.last_ms:.0f} ms  people={info['people']}  faces={info.get('faces')}")
         for d in info["detections"]:
             print(f"   {d['label']:<14} x{d['count']}  {d['confidence']:.2f}")
+        dropped = [d for d in raw if d.label != "person" and d.confidence < NAMED]
+        if dropped:
+            print("   not reported (under %.1f): %s" % (NAMED, ", ".join(
+                f"{d.label} {d.confidence:.2f}" for d in dropped)))
         print(f"   says: {describe_from(info)}")
     return 0
 
