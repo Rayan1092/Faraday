@@ -171,7 +171,7 @@ class ThroughThePipeline(unittest.TestCase):
             photo = delivery_photo(p, emitted)
             self.assertEqual(said(photo), [])          # the photo itself is never answered
             r = p.handle(events.speech("Hi, I have a package for Sam.", "visitor"))
-            self.assertIn("Please leave it by the side door.", said(r))
+            self.assertIn("Please leave it by the side door. I'll let the owner know it arrived.", said(r))
             # words only: the instruction adds no lights, modes or alerts
             self.assertLessEqual({a.type for a in r.actions}, {ActionType.SPEAK, ActionType.SAVE_MESSAGE})
 
@@ -184,7 +184,7 @@ class ThroughThePipeline(unittest.TestCase):
             delivery_photo(p, emitted)
             r = p.handle(events.speech("Hi, I have a package for Sam.", "visitor"))
             self.assertNotIn("Hi! Please leave the package by the front door.", said(r))
-            self.assertIn("Please leave it by the side door.", said(r))
+            self.assertIn("Please leave it by the side door. I'll let the owner know it arrived.", said(r))
             prompt = client.calls[-1]["messages"][1]["content"]
             self.assertIn("For a delivery: ask them to leave it by the side door", prompt)
 
