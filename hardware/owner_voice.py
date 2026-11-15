@@ -4,8 +4,8 @@ Enroll about 10 s of the owner's voice once. For each owner request, the
 enrollment and the request are joined into one wav (with a short silence
 between) and run through `argmax-cli diarize` once:
 - every voice in the request part is the enrollment's speaker -> owner (True)
-- another voice is in the request part -> not the owner (False)
-- diarization failed or found nothing -> unknown (None)
+- another voice is in the request part -> unknown voice (False)
+- diarization failed or found nothing -> can't tell (None)
 With RTTM output (argmax-cli prints it) the check is per time range. With only
 a speaker count it falls back to the owner's rule: one voice = owner, two =
 unknown.
@@ -123,12 +123,13 @@ class OwnerVoice:
         if out is None:
             self.last = {"error": "diarize failed"}
             return None
-        segments = parse_rttm(out)
+        stdout, stderr = out
+        segments = parse_rttm(stdout) or parse_rttm(stderr)
         if segments:
             result = decide(segments, split)
             how = "rttm"
         else:
-            n = parse_voice_count(out)              # the owner's rule on a plain count
+            n = parse_voice_count(stdout) or parse_voice_count(stderr)   # the owner's rule: a count
             result = None if not n else (n == 1)
             how = "count"
         self.last = {"result": result, "how": how, "segments": len(segments),
@@ -137,7 +138,7 @@ class OwnerVoice:
 
 
 def label(result: Optional[bool]) -> str:
-    return {True: "owner", False: "NOT the owner", None: "unknown"}[result]
+    return {True: "owner", False: "unknown voice", None: "can't tell"}[result]
 
 
 # ---- command line ---------------------------------------------------------------------
@@ -162,6 +163,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     t = sub.add_parser("trial", help="record several short requests and score them")
     t.add_argument("--n", type=int, default=10)
     t.add_argument("--seconds", type=float, default=4.0)
+    t.add_argument("--other", action="store_true",
+                   help="someone else is speaking: a pass is 'unknown voice'")
     a = ap.parse_args(argv)
     settings = load_settings()
     cfg = settings.get("audio", {}).get("voice_check", {}) or {}
@@ -177,7 +180,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         data, rate = _read_mono(path)
         peak = int(np.abs(data).max()) if len(data) else 0
         enrollment.parent.mkdir(parents=True, exist_ok=True)
-        path.replace(enrollment)
+        import shutil
+        shutil.move(str(path), str(enrollment))          # works across disks too
         print(f"enrolled: {enrollment} ({len(data) / rate:.1f} s, peak {peak}/32767"
               f"{'  <- very quiet, record again closer to the mic' if peak < 2000 else ''})")
         return 0
@@ -190,15 +194,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         result = checker.check(Path(a.wav))
         print(f"{label(result)}  {checker.last}")
         return 0
-    score = 0
+    counts = {True: 0, False: 0, None: 0}
     for i in range(1, a.n + 1):
         input(f"try {i}/{a.n}: press Enter, then say a request for {a.seconds:.0f} s...")
         path = _record(settings, a.seconds)
         result = checker.check(path) if path is not None else None
-        score += result is True
+        counts[result] += 1
         print(f"   {label(result)}  ({checker.last.get('seconds', '?')} s)")
-    print(f"owner recognised {score}/{a.n} times. Enforce for disarm only if 9/10 or better,"
-          f" and run it once more with someone else speaking (they should get NOT the owner).")
+    want = False if a.other else True
+    print(f"owner {counts[True]}, unknown voice {counts[False]}, can't tell {counts[None]} (of {a.n}).")
+    print(f"score: {counts[want]}/{a.n} correct" + (" (someone else speaking)" if a.other else "")
+          + ". Enforce for disarm only at 9/10 or better, for both runs (yours, and --other).")
     return 0
 
 

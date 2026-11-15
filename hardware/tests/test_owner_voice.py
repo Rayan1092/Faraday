@@ -199,6 +199,46 @@ class OnSpeechHeard(unittest.TestCase):
         self.assertIsNone(self.got[0].data.get("owner_voice"))
         self.assertTrue(self.wait(lambda: any("too late" in s for s in self.said), timeout=5))
 
+    def test_alarm_never_waits_for_the_voice_check(self):
+        """Review: "Hey Faraday, <passphrase>" during an alarm must disarm at once."""
+        class Slow:
+            def check(self, wav):
+                time.sleep(1.5)
+                return True
+        v = self.voice(Slow(), grace=2.0)
+        v.urgent = lambda: True
+        v.start_wake()
+        self.speak()
+        self.assertTrue(self.wait(lambda: self.got, timeout=4))
+        t_event = time.monotonic()
+        self.assertIsNone(self.got[0].data.get("owner_voice"))
+        self.assertTrue(self.wait(lambda: any("too late" in s for s in self.said), timeout=5))
+        self.assertGreater(time.monotonic() - t_event, 0.3)      # it came after the event
+
+    def test_one_breath_request_checks_alongside_the_wake_stt(self):
+        """Review: the check started only after the wake STT, so its wait was pure delay."""
+        from integration.tests.test_voice import FakeSTT
+
+        class SlowSTT(FakeSTT):
+            def transcribe(self, wav):
+                time.sleep(0.6)
+                return super().transcribe(wav)
+
+        class Check:
+            def check(self, wav):
+                time.sleep(0.4)
+                return True
+        v = self.voice(Check(), grace=0.1)
+        v.stt = SlowSTT("Hey Faraday, turn on the porch light.")
+        v.start_wake()
+        self.speak()
+        self.assertTrue(self.wait(lambda: self.got))
+        self.assertIs(self.got[0].data.get("owner_voice"), True)  # done while STT ran
+
+    def test_unknown_voice_wording(self):
+        from hardware.owner_voice import label
+        self.assertEqual((label(True), label(False), label(None)), ("owner", "unknown voice", "can't tell"))
+
     def test_field_validation(self):
         make_event("speech_heard", {"text": "hi", "owner_voice": False}, Source.SPEECH)
         with self.assertRaises(ValueError):

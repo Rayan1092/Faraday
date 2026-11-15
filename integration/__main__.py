@@ -88,6 +88,7 @@ def build_app(args: argparse.Namespace, settings, known_outlets=None) -> App:
                           diarizer=diarizer,
                           diarize_grace_s=Diarizer.grace_s(settings),
                           owner_voice=owner_voice, owner_voice_grace_s=OwnerVoice.grace_s(settings),
+                          urgent=lambda: app.pipeline.modes.alert != "normal",
                           busy=app.speech_busy,
                           chime=None if args.print_speech else (lambda: play_chime(gate, speaker_device)))
     if app.board is not None:

@@ -111,8 +111,8 @@ class Diarizer:
     def build(self, wav: Path) -> List[str]:
         return [part.replace("{wav}", str(wav)) for part in self.command]
 
-    def run(self, wav: Path) -> Optional[str]:
-        """The command's raw output (stdout, then stderr), or None if it failed."""
+    def run(self, wav: Path) -> Optional[Tuple[str, str]]:
+        """The command's (stdout, stderr), or None if it failed."""
         try:
             proc = subprocess.run(self.build(Path(wav)), capture_output=True, text=True,
                                   timeout=self.timeout_s)
@@ -122,13 +122,14 @@ class Diarizer:
         if proc.returncode != 0:
             log.warning("diarize exited %s: %s", proc.returncode, (proc.stderr or proc.stdout)[-300:])
             return None
-        return (proc.stdout or "") + "\n" + (proc.stderr or "")
+        return proc.stdout or "", proc.stderr or ""
 
     def count_voices(self, wav: Path) -> Optional[int]:
         out = self.run(wav)
         if out is None:
             return None
-        n = parse_voice_count(out)
+        stdout, stderr = out
+        n = parse_voice_count(stdout) or parse_voice_count(stderr)    # stdout first
         if n is None:
-            log.warning("diarize output not understood: %s", out.strip()[-200:])
+            log.warning("diarize output not understood: %s", (stdout or stderr).strip()[-200:])
         return n

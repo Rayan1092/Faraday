@@ -92,6 +92,15 @@ class FieldValidation(unittest.TestCase):
                     make_event("speech_heard", {"text": "hi", "voices": bad}, Source.SPEECH)
 
 
+class StdoutFirst(unittest.TestCase):
+    """Review of the owner voice PR: stdout is read before stderr again."""
+
+    def test_json_on_stdout_with_log_lines_on_stderr(self):
+        code = ("import sys; print('{\"speakers\": 2}'); "
+                "print('Loading model 2 of 3, speaker_0 ready', file=sys.stderr)")
+        self.assertEqual(Diarizer([sys.executable, "-c", code]).count_voices(Path("x.wav")), 2)
+
+
 class NeverDelays(unittest.TestCase):
     """Voice: the count is attached when diarization beat STT, else the reply goes
     out at once without it. Owner wake requests are not diarized."""
