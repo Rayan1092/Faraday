@@ -47,6 +47,7 @@ vals = {
     "PROFILE": llm["profile"],
     "LLM_URL": str(prof.get("base_url", "")).rstrip("/"),
     "LLM_MODEL": prof.get("model", ""),
+    "FAST_MODEL": prof.get("fast_model") or "",
     "STT_URL": stt.get("url", "") if stt.get("kind", "argmax") != "standin" else "",
     "TTS_BIN": (tts.get("command") or [""])[0],
     "PORT_GLOB": (s.get("flipper", {}).get("serial_port", {}) or {}).get("mac", ""),
@@ -71,40 +72,58 @@ if [ "${FARADAY_SKIP_CHECKS:-0}" != "1" ]; then
 
   [ "$PROFILE" = "mac" ] && ok "llm profile mac" || warn "llm.profile is '$PROFILE', not 'mac'"
 
-  # LM Studio
+  # LM Studio: the profile's model (smart, 9B) and fast_model (2B) must both be
+  # downloaded AND loaded. /v1/models lists every downloaded model; /api/v0/models
+  # says which are loaded. Only Bonsai 2 may run (event rule), and the Mac also has
+  # 27B models installed, so anything else loaded gets an "eject" warning.
+  # (-f: a 404 from an older LM Studio gives no body -> "can't tell", not "nothing loaded")
   MODELS="$(curl -s -m 5 "$LLM_URL/v1/models" 2>/dev/null)"
+  V0="$(curl -s -f -m 5 "$LLM_URL/api/v0/models" 2>/dev/null)"
   if [ -z "$MODELS" ]; then
-    fail "LM Studio not answering at $LLM_URL. Start its server (Developer tab, or: lms server start) and load $LLM_MODEL."
-  elif printf '%s' "$MODELS" | "$PY" -c "import json,sys; ids=[m['id'] for m in json.load(sys.stdin).get('data',[])]; sys.exit(0 if sys.argv[1] in ids else 1)" "$LLM_MODEL"; then
-    ok "LM Studio at $LLM_URL has $LLM_MODEL downloaded"
-    # /v1/models lists every downloaded model. Only Bonsai 2 may run (event rule), and
-    # the Mac also has 27B models installed, so check which model is actually LOADED.
-    # (-f: a 404 from an older LM Studio gives no body -> "unknown", not "nothing loaded")
-    LOADED="$(curl -s -f -m 5 "$LLM_URL/api/v0/models" 2>/dev/null | "$PY" -c '
-import json, sys
-try:
-    obj = json.load(sys.stdin)
-    data = obj.get("data") if isinstance(obj, dict) else None
-except Exception:
-    data = None
-if not isinstance(data, list):
-    print("unknown"); sys.exit(0)
-want = sys.argv[1]
-loaded = [m.get("id") for m in data if str(m.get("state", "")).lower() == "loaded"]
-if want in loaded:
-    print("loaded" + ("|" + ",".join(m for m in loaded if m != want) if len(loaded) > 1 else ""))
-else:
-    print("not-loaded|" + (",".join(loaded) or "nothing"))
-' "$LLM_MODEL" 2>/dev/null || echo unknown)"
-    case "$LOADED" in
-      loaded)      ok "$LLM_MODEL is the loaded model" ;;
-      loaded\|*)   ok "$LLM_MODEL is loaded"
-                   warn "other models are loaded too (${LOADED#loaded|}): eject them, they only use RAM" ;;
-      not-loaded*) fail "$LLM_MODEL is downloaded but NOT loaded (loaded now: ${LOADED#not-loaded|}). In LM Studio eject that and load $LLM_MODEL. Only Bonsai 2 is allowed." ;;
-      *)           warn "can't tell which model is loaded (no /api/v0/models); every request names $LLM_MODEL exactly" ;;
-    esac
+    fail "LM Studio not answering at $LLM_URL. Start its server (Developer tab, or: lms server start) and load $LLM_MODEL${FAST_MODEL:+ and $FAST_MODEL}."
   else
-    fail "LM Studio answers but has no model '$LLM_MODEL'. Load it, or fix llm.profiles.$PROFILE.model (see: curl $LLM_URL/v1/models)."
+    REPORT="$(MODELS="$MODELS" V0="$V0" "$PY" - "$LLM_MODEL" "$FAST_MODEL" "$LLM_URL" <<'EOF'
+import json, os, sys
+need = [m for m in dict.fromkeys(sys.argv[1:3]) if m]
+url = sys.argv[3]
+
+def ids(raw, loaded_only=False):
+    try:
+        data = json.loads(raw).get("data")
+    except Exception:
+        return None
+    if not isinstance(data, list):
+        return None
+    return [m.get("id") for m in data
+            if not loaded_only or str(m.get("state", "")).lower() == "loaded"]
+
+have = ids(os.environ.get("MODELS", "")) or []
+loaded = ids(os.environ.get("V0", ""), loaded_only=True)
+for m in need:
+    if m in have:
+        print(f"OK|LM Studio at {url} has {m} downloaded")
+    else:
+        print(f"FAIL|LM Studio has no model '{m}' downloaded. Download it, or fix llm.profiles in settings (see: curl {url}/v1/models).")
+if loaded is None:
+    print("WARN|can't tell which models are loaded (no /api/v0/models); every request names its model id exactly")
+else:
+    for m in need:
+        if m in loaded:
+            print(f"OK|{m} is loaded")
+        elif m in have:
+            print(f"FAIL|{m} is downloaded but NOT loaded (loaded now: {', '.join(loaded) or 'nothing'}). Load it in LM Studio. Only Bonsai 2 is allowed.")
+    extra = [m for m in loaded if m not in need]
+    if extra:
+        print(f"WARN|other models are loaded ({', '.join(extra)}): eject them. Only Bonsai 2 is allowed, and they use RAM.")
+EOF
+)"
+    while IFS='|' read -r level msg; do
+      case "$level" in
+        OK)   ok "$msg" ;;
+        WARN) warn "$msg" ;;
+        FAIL) fail "$msg" ;;
+      esac
+    done <<< "$REPORT"
   fi
 
   # Argmax STT server: any HTTP answer means it's up

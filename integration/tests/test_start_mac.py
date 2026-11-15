@@ -98,7 +98,8 @@ class StartMac(unittest.TestCase):
         code, out = self.run_script(self.settings)
         self.assertEqual(code, 0, out)
         self.assertIn("has bonsai-test downloaded", out)
-        self.assertIn("bonsai-test is the loaded model", out)
+        self.assertIn("bonsai-test is loaded", out)
+        self.assertNotIn("other models are loaded", out)
         self.assertIn("Argmax STT answering", out)
         self.assertIn("would start", out)
         self.assertIn("-m integration --offline", out)
@@ -132,7 +133,7 @@ class StartMac(unittest.TestCase):
         self.settings["llm"]["profiles"]["mac"]["base_url"] = self.lm.base
         code, out = self.run_script(self.settings)
         self.assertEqual(code, 0, out)
-        self.assertIn("other models are loaded too (qwen-27b)", out)
+        self.assertIn("other models are loaded (qwen-27b)", out)
 
     def test_no_v0_endpoint_only_warns(self):
         self.lm.close()
@@ -140,7 +141,34 @@ class StartMac(unittest.TestCase):
         self.settings["llm"]["profiles"]["mac"]["base_url"] = self.lm.base
         code, out = self.run_script(self.settings)
         self.assertEqual(code, 0, out)
-        self.assertIn("can't tell which model is loaded", out)
+        self.assertIn("can't tell which models are loaded", out)
+
+    def use_lm(self, **kw):
+        self.lm.close()
+        self.lm = Server(**kw)
+        self.settings["llm"]["profiles"]["mac"]["base_url"] = self.lm.base
+
+    def test_fast_model_loaded_too_passes_without_eject_warning(self):
+        """Dell's #27: the profile's fast_model (2B) runs next to the 9B."""
+        self.use_lm(models=("bonsai-test", "bonsai-fast"))
+        self.settings["llm"]["profiles"]["mac"]["fast_model"] = "bonsai-fast"
+        code, out = self.run_script(self.settings)
+        self.assertEqual(code, 0, out)
+        self.assertIn("bonsai-fast is loaded", out)
+        self.assertNotIn("eject", out)
+
+    def test_fast_model_not_loaded_fails(self):
+        self.use_lm(models=("bonsai-test", "bonsai-fast"), loaded=("bonsai-test",))
+        self.settings["llm"]["profiles"]["mac"]["fast_model"] = "bonsai-fast"
+        code, out = self.run_script(self.settings)
+        self.assertEqual(code, 1, out)
+        self.assertIn("bonsai-fast is downloaded but NOT loaded", out)
+
+    def test_fast_model_not_downloaded_fails(self):
+        self.settings["llm"]["profiles"]["mac"]["fast_model"] = "bonsai-2-2b-missing"
+        code, out = self.run_script(self.settings)
+        self.assertEqual(code, 1, out)
+        self.assertIn("no model 'bonsai-2-2b-missing' downloaded", out)
 
     def test_argmax_down_fails(self):
         self.settings["stt"]["mac"]["url"] = "http://127.0.0.1:9/v1/audio/transcriptions"
