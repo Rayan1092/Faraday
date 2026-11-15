@@ -145,12 +145,15 @@ THINKING_OPENERS = ("<think>", "thinking process", "thinking:", "here's a thinki
                     "here is a thinking process", "okay, the user", "okay, let", "okay, i ",
                     "okay, so", "okay let", "okay so", "ok, let", "ok, so", "ok so", "hmm", "let me",
                     "let's", "let\u2019s", "alright", "got it", "the user", "so, the user", "so the user",
-                    "so, i", "well,", "wait,", "looking at", "we are given", "i need to", "we need to",
+                    "so, i ", "well,", "wait,", "we are given", "i need to", "we need to",
                     "first, i", "analyze the", "1. analyze")
 # In a reply that ran out of tokens, these anywhere mean reasoning, not a description
 # (a door description never talks about itself, the prompt or "I").
-REASONING_WORDS = re.compile(r"\b(i|i'm|i'll|i've|me|my|we|let's|prompt|describe|sentence|wait)\b"
-                             r"|\bthe user\b", re.I)
+REASONING_WORDS = re.compile(
+    r"\bI (?:should|need|will|must|think|have to)\b|\bI(?:'ll|\u2019ll)\b|\bbut wait\b|\bwait,"
+    r"|\blet me\b|\blet(?:'s|\u2019s)\b|\bthe (?:user|prompt)\b|\bdescribe\b|\bsentence\b"
+    r"|\bthe answer is\b", re.I)
+ABBREVIATIONS = {"dr", "mr", "mrs", "ms", "st", "apt", "jr", "sr", "no"}
 
 
 class ServerError(RuntimeError):
@@ -195,19 +198,27 @@ one_sentence = short_description      # old name
 
 
 def _sentence_ends(text: str) -> List[int]:
-    """Indexes of real sentence ends: not "U.S.", not "2." at the very end (a cut
-    decimal), not an ellipsis."""
-    ends = []
-    for m in re.finditer(r"[.!?](?=\s|$)", text):
+    """Indexes of the last character of each real sentence (a closing quote
+    included). Not "U.S.", "Dr.", "Apt B.", a list number "1.", "2." where the
+    reply stopped, or an ellipsis."""
+    ends: List[int] = []
+    start = 0
+    for m in re.finditer(r"[.!?][\"')\]\u201d]*(?=\s|$)", text):
         i = m.start()
         before = text[i - 1] if i else ""
+        word = re.findall(r"[A-Za-z0-9]+$", text[:i])
         if text[i] == "." and before == ".":
             continue                                  # "...": unfinished
         if text[i] == "." and before.isupper() and (i < 2 or not text[i - 2].isalpha()):
-            continue                                  # an initial: "U.S.", "J."
-        if text[i] == "." and before.isdigit() and i == len(text) - 1:
+            continue                                  # an initial: "U.S.", "J.", "Apt B."
+        if text[i] == "." and word and word[0].lower() in ABBREVIATIONS:
+            continue                                  # "Dr. Pepper"
+        if text[i] == "." and before.isdigit() and m.end() == len(text):
             continue                                  # "about 2." where the reply stopped
-        ends.append(i)
+        if len(re.findall(r"[A-Za-z]{2,}", text[start:i])) < 2:
+            continue                                  # "1." or a one-word fragment
+        ends.append(m.end() - 1)
+        start = m.end()
     return ends
 
 
@@ -217,7 +228,7 @@ def whole_sentences(text: str, max_chars: int = MAX_CHARS) -> Optional[str]:
     made-up full stop."""
     clean = _clean(text)
     ends = [e for e in _sentence_ends(clean) if e < max_chars]
-    return clean[:ends[-1] + 1] if ends else None
+    return (clean[:ends[-1] + 1].strip().strip('"“”').strip() or None) if ends else None
 
 
 def _load_cache() -> Dict[str, str]:
@@ -256,6 +267,7 @@ class Vision:
             self.strategy = None
         self.disabled_until = 0.0           # no strategy works: skip vision; re-probe from then
         self.disabled_why = ""
+        self._skip_logged = 0.0             # the rest whose skip was already logged
         self._warned = False
         self._lock = threading.Lock()       # one probe at a time
         # What happened on the last describe() (hardware.check vision prints it)
@@ -368,7 +380,7 @@ class Vision:
                 # verdict about thinking: it never answered)
                 why = f"timed out after {timeout:.0f} s" if isinstance(e, requests.Timeout) else repr(e)
                 self.probe_results.append({"strategy": strategy, "error": why[:300], "answer": None,
-                                           "thinks": None, "no_verdict": True})
+                                           "thinks": None, "no_verdict": True, "network": True})
                 break
             except ServerError as e:         # 5xx: try the next, but it's no verdict about thinking
                 reply = {"strategy": strategy, "error": str(e)[:300], "answer": None, "thinks": None,
@@ -394,14 +406,16 @@ class Vision:
                 log.warning("vision: %s thinks before every answer, whatever the request. "
                             "Photos are described by the object detector until that's fixed. %s",
                             self.model, FIX_HINT)
-        elif self.probe_results:
-            # no answer, but no clear verdict (down, a server error, an over-long reply):
-            # rest a minute so photos don't wait for a probe each time; the background
-            # retry tries again after that. The saved strategy (if any) is kept.
+        elif self.probe_results and not any(r.get("network") for r in self.probe_results):
+            # the server answered, but nothing usable and no clear verdict (a server error,
+            # an over-long reply): rest a minute so photos don't wait for a probe each
+            # time; the background retry tries again after that. Refused or timed out
+            # gets no rest: a photo then fails fast, and vision is back with the server.
             self.disabled_until = time.monotonic() + BACKOFF_S
             last = self.probe_results[-1]
             self.disabled_why = "the last try got no answer (" + str(last.get("error") or (
                 "too long" if last.get("too_long") else "thinking"))[:160] + "); trying again soon"
+            log.warning("vision: %s; photos use the detector for %.0f s", self.disabled_why, BACKOFF_S)
         return None
 
     def _choose(self, reply: Dict[str, Any], how: str) -> Dict[str, Any]:
@@ -472,10 +486,13 @@ class Vision:
         deadline = t0 + self.timeout_s
         try:
             until = self.disabled_until
-            if until:                        # nothing stops the thinking: never make a photo wait
+            if until:                        # resting (or nothing stops the thinking): never wait
                 if time.monotonic() >= until:
                     self._reprobe_in_background()
                 last["error"] = "vision skipped: " + (self.disabled_why or "no answer lately")
+                if self._skip_logged != until:
+                    self._skip_logged = until
+                    log.warning("%s; the detector describes photos meanwhile", last["error"])
                 return None
             b64 = encode_image(Path(path))
             last["image_kb"] = round(len(b64) * 3 / 4 / 1024, 1)
@@ -504,8 +521,9 @@ class Vision:
                 log.warning("vision skipped: %s; the detector describes this photo", last["error"])
                 return None
             try:
-                if self.disabled_until:      # that other probe found nothing works
-                    last["error"] = "vision skipped: the model thinks before every answer (" + FIX_HINT + ")"
+                if self.disabled_until:      # that other probe found nothing usable
+                    last["error"] = "vision skipped: " + (self.disabled_why or "no answer lately")
+                    log.warning("%s", last["error"])
                     return None
                 if self.strategy is not None:    # ... or it just picked one: use it
                     last["attempts"] += 1

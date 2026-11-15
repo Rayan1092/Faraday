@@ -252,9 +252,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             if secs is not None:
                 print(f"  [vision] ready in {secs} s; one description takes {vision.answer_s} s "
                       f"({vision.model}, no-think: {vision.strategy})")
-            elif vision.disabled_until:
+            elif vision.disabled_why.startswith("the model thinks"):
                 print(f"  [vision] {vision.model} thinks before every answer: photos are described by the "
                       f"object detector. Fix: {FIX_HINT}")
+            elif vision.disabled_until:
+                print(f"  [vision] {vision.model}: {vision.disabled_why}. Photos are described by the "
+                      "object detector meanwhile.")
             else:
                 print("  [vision] warm-up failed (is the model loaded in LM Studio? see the log)")
         threading.Thread(target=warm_vision, name="faraday-vision-warmup", daemon=True).start()

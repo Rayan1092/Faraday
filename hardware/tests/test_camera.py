@@ -362,7 +362,7 @@ class VisionClient(Base):
             self.assertIsNone(v.describe(self.photo))
         self.assertLess(time.monotonic() - t0, 6.0)
         self.assertEqual(len(v.probe_results), 1)                     # stopped at the first
-        self.assertNotIn("Prompt Template", v.disabled_why)           # no verdict: it never answered
+        self.assertEqual(v.disabled_until, 0.0)                       # no rest: back with the server
 
     def test_a_timeout_is_no_verdict_about_thinking(self):
         """Review of #64: a slow first image (prefill timed out) must not lead to
@@ -374,9 +374,8 @@ class VisionClient(Base):
             self.assertIsNone(v.probe(per_request=0.5))
         finally:
             lm.close()
-        self.assertEqual((len(v.probe_results), v.strategy), (1, None))
+        self.assertEqual((len(v.probe_results), v.strategy, v.disabled_until), (1, None, 0.0))
         self.assertIn("timed out", v.probe_results[0]["error"])
-        self.assertNotIn("Prompt Template", v.disabled_why)
 
     def test_cut_off_reasoning_without_an_opener_is_not_a_description(self):
         """Review of #64: a monologue that runs out of tokens never becomes the
@@ -398,6 +397,19 @@ class VisionClient(Base):
         self.assertIsNone(v.describe(self.photo))
         self.assertLess(time.monotonic() - t0, 0.5)
 
+    def test_real_descriptions_are_not_taken_for_reasoning(self):
+        from hardware.vision import REASONING_WORDS, looks_like_thinking
+        for text in ("Looking at the camera, one man in a black hoodie holds a brown box.",
+                     "So, in the doorway, one woman holds an umbrella.",
+                     "I see one man at the front door holding a brown box.",
+                     "One delivery driver with an I.D. badge holds a box.",
+                     "One woman stands at the door, appearing to wait for an answer."):
+            self.assertFalse(looks_like_thinking(text), text)
+            self.assertIsNone(REASONING_WORDS.search(text), text)
+        for text in ("I should describe this in one sentence.", "But wait, the prompt says",
+                     "Let me look again.", "So the answer is Nobody is there."):
+            self.assertIsNotNone(REASONING_WORDS.search(text), text)
+
     def test_empty_cut_off_reply_is_hidden_thinking(self):
         lm = FakeLMStudio(content="", finish_reason="length")
         try:
@@ -412,7 +424,11 @@ class VisionClient(Base):
         from hardware.vision import whole_sentences
         run_on = ("A man in a dark hooded jacket stands at the front door holding a large brown "
                   "cardboard box with both hands " * 4).strip()             # ~400 chars, no stop
-        for text, want in ((run_on, None),
+        for text, want in (("1. One person holds a box and his face is", None),
+                           ('"Nobody is there." The porch light is on and the', "Nobody is there."),
+                           ("One man in a Dr. Pepper shirt holds a can and", None),
+                           ("One man waits at the door of Apt B. He holds a", None),
+                           (run_on, None),
                            ("A man in a U.S. Postal Service uniform holds a package and looks at the", None),
                            ("One person holds a box. It is about 2.", "One person holds a box."),
                            ("A person waits... and then the", None),
