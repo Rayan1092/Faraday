@@ -66,6 +66,14 @@ class PhotoDescribedData:
     photo_path: str                     # "captures/photos/....jpg"
     description: str                    # one or two short sentences from Bonsai vision
     model: Optional[str] = None         # LM Studio model id that described it
+    described_by: Optional[str] = None  # "bonsai" (vision LLM) or "detector" (object detector only)
+    people: Optional[int] = None        # people the object detector counted
+    faces: Optional[int] = None         # faces visible to the camera (face detector)
+    detections: Optional[List[Dict[str, Any]]] = None   # [{"label", "count", "confidence"}]
+
+
+DESCRIBED_BY = frozenset({"bonsai", "detector"})
+DETECTION_KEYS = frozenset({"label", "count", "confidence"})
 
 
 class ChangedBy:
@@ -194,6 +202,37 @@ def check_fields(cls: type, data: Any, where: str) -> List[str]:
     return errors
 
 
+def _whole(v: Any) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _photo_errors(data: Dict[str, Any]) -> List[str]:
+    errors: List[str] = []
+    if data.get("described_by") is not None and data["described_by"] not in DESCRIBED_BY:
+        errors.append(f"data.described_by must be one of {sorted(DESCRIBED_BY)} or null")
+    for key in ("people", "faces"):
+        v = data.get(key)
+        if v is not None and (not _whole(v) or v < 0):
+            errors.append(f"data.{key} must be a whole number >= 0 or null")
+    dets = data.get("detections")
+    if dets is not None:
+        if not isinstance(dets, list):
+            return errors + ["data.detections must be a list or null"]
+        for i, item in enumerate(dets):
+            where = f"data.detections[{i}]"
+            if not isinstance(item, dict) or set(item) != DETECTION_KEYS:
+                errors.append(f"{where} must have exactly label, count, confidence")
+                continue
+            if not isinstance(item["label"], str) or not item["label"].strip():
+                errors.append(f"{where}.label must be a non-empty string")
+            if not _whole(item["count"]) or item["count"] < 1:
+                errors.append(f"{where}.count must be a whole number >= 1")
+            c = item["confidence"]
+            if isinstance(c, bool) or not isinstance(c, (int, float)) or not 0 <= c <= 1:
+                errors.append(f"{where}.confidence must be a number from 0 to 1")
+    return errors
+
+
 def validate_event(d: Dict[str, Any]) -> List[str]:
     """Return a list of problems; empty list means the event is valid."""
     if not isinstance(d, dict):
@@ -244,6 +283,8 @@ def validate_event(d: Dict[str, Any]) -> List[str]:
         if voices is not None and (not isinstance(voices, int) or isinstance(voices, bool)
                                    or voices < 0):
             errors.append("data.voices must be a whole number or null")
+    if d["type"] == EventType.PHOTO_DESCRIBED:
+        errors += _photo_errors(data)
     if d["type"] == EventType.SPEECH_HEARD and not str(data["text"]).strip():
         errors.append("data.text is empty")
     if d["type"] == EventType.SPEECH_HEARD and data.get("voices") is not None:

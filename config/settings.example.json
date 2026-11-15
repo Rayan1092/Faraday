@@ -66,7 +66,9 @@
     "temperature": 0.2,
     "timeout_s": 30,
     "recent_log_lines": 8,
-    "reasoning_effort": "none"
+    "reasoning_effort": "none",
+    "vision_timeout_s": 20,
+    "vision_max_tokens": 768
   },
 
   "stt": {
@@ -113,7 +115,8 @@
   "camera": {
     "index": 0,
     "width": 1280,
-    "height": 720
+    "height": 720,
+    "detector": {"enabled": true, "model": "hardware/models/yolox_tiny.onnx", "score": 0.35, "fps": 5}
   },
 
   "security": {
