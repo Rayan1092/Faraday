@@ -6,7 +6,7 @@ In Andrew's format for **#submissions**: your name (solo), the project name with
 
 **Name:** [your name] (solo)
 
-**Project:** Faraday, an offline AI home guard. It greets visitors at the door, passes on your instructions, warns off people who loiter and raises the alarm, and tells a blind owner who's at the door while captioning everything for a deaf one. It all runs on one Mac mini with the Wi-Fi off: a small object detector, Bonsai 2 (9B and 2B) in LM Studio, Argmax speech, and a Flipper Zero for the 433 MHz sensors and lights. Plain code makes sure the AI can never disarm.
+**Project:** Faraday, an offline AI home guard on one Mac mini with the Wi-Fi off. It answers the door, warns off loiterers, tells blind owners who's there and captions everything for deaf ones. Bonsai 2, Argmax and a Flipper Zero; plain code means the AI can never disarm.
 
 **Tracks:** Best Overall, Judges Choice, Accessibility
 
