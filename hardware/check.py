@@ -2,6 +2,7 @@
 
     python -m hardware.check camera            # snapshot -> captures/photos + Bonsai description
     python -m hardware.check vision [photo]    # every no-think strategy, 9B + 4B, timed; Dell's brain on 9B/2B
+    python -m hardware.check outlets [N|none]  # the six outlet files: on vs off; guided test on outlet N (2)
     python -m hardware.check say "Hello"       # speaker: TTS for this OS
     python -m hardware.check record 4          # mic: 4 s -> captures/audio/*.wav -> STT (if any)
     python -m hardware.check mute              # mic stays deaf while Faraday talks
@@ -68,6 +69,70 @@ def _downloaded(base_url: str) -> list:
         return []
 
 
+def _loaded(base_url: str):
+    """Ids LM Studio has loaded now, or None if it can't tell (no /api/v0/models;
+    an older LM Studio answers unknown routes with 200 and an "error" body)."""
+    import requests
+    try:
+        data = requests.get(base_url + "/api/v0/models", timeout=5).json().get("data")
+    except Exception:
+        return None
+    if not isinstance(data, list):
+        return None
+    return [m.get("id") for m in data if str(m.get("state", "")).lower() == "loaded"]
+
+
+def _unload(base_url: str, model: str) -> bool:
+    """Unload one model: LM Studio's REST API (0.4+: POST /api/v1/models/unload),
+    checked afterwards, else the lms CLI (`lms unload <key>`)."""
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    import requests
+    try:
+        r = requests.post(base_url + "/api/v1/models/unload", json={"instance_id": model}, timeout=15)
+        try:
+            refused = "error" in r.json()                # 0.3.x: 200 {"error": "Unexpected endpoint"}
+        except ValueError:
+            refused = False
+        if r.status_code < 300 and not refused and model not in (_loaded(base_url) or []):
+            return True
+    except Exception:
+        pass
+    lms = shutil.which("lms")
+    if lms is None and (Path.home() / ".lmstudio" / "bin" / "lms").exists():
+        lms = str(Path.home() / ".lmstudio" / "bin" / "lms")
+    if lms is None:
+        return False
+    try:
+        return subprocess.run([lms, "unload", model], capture_output=True, text=True,
+                              timeout=60).returncode == 0
+    except Exception:
+        return False
+
+
+def unload_test_models(base_url: str, used, before, keep, out=print) -> None:
+    """Owner 2026-11-15: the check left ternary-bonsai-2-4b-mlx loaded. Unload every
+    model it used that wasn't loaded before it ran, except the ones Faraday runs on
+    (keep: the profile's model, fast_model and llm.vision_model)."""
+    if before is None:
+        return                                     # can't tell what was loaded: touch nothing
+    for m in used:
+        if m in keep:
+            continue
+        if m in before:                            # left loaded earlier (an older check?)
+            out(f"{m} was already loaded before this check: eject it in LM Studio (or: lms unload {m}) "
+                "unless you use it. Only the 9B and the 2B should be loaded.")
+            continue
+        _unload(base_url, m)
+        if m in (_loaded(base_url) or []):
+            out(f"{m} is still loaded: eject it in LM Studio (or: lms unload {m}). "
+                "Only the 9B and the 2B should be loaded.")
+        else:
+            out(f"Unloaded {m}: the check loaded it only to time it.")
+
+
 def vision(settings, photo=None) -> int:
     """Every no-think strategy on the vision model (and the 4B if downloaded), timed,
     on the newest photo. Picks the vision model's first working strategy (the 4B
@@ -89,84 +154,89 @@ def vision(settings, photo=None) -> int:
     four_b = "ternary-bonsai-2-4b-mlx"
     if four_b != v.model and four_b in _downloaded(v.base_url):
         models.append(four_b)                       # the owner: measure the 4B too
-    for m in models:
-        print(f"LM Studio {m}: {_model_info(v.base_url, m)}")
-    if photo:
-        path = Path(photo)
-    else:
-        photos = sorted((REPO_ROOT / settings.get("paths", {}).get("captures", "captures") / "photos")
-                        .glob("*.jpg"), key=lambda p: p.stat().st_mtime)
-        path = photos[-1] if photos else None
-    b64 = encode_image(path) if path else test_image()
-    print(f"photo: {path or 'a small test image (no photo in captures/photos yet)'}")
-    prompt = PROMPT
+    loaded_before = _loaded(v.base_url)             # what the check loads, it unloads at the end
+    keep = {prof.get("model"), prof.get("fast_model"), llm.get("vision_model")}
     try:
-        import cv2
-        from hardware.detect import Detector, hint
-        det = Detector.from_settings(settings)
-        frame = cv2.imread(str(path)) if path else None
-        if det is not None and frame is not None:
-            info = det.analyse(frame)
-            if info is not None:
-                print(f"detector ({det.engine}, {det.last_ms:.0f} ms): {hint(info)}")
-                if info["detections"]:
-                    prompt += f" Hint: {hint(info)}"
-    except Exception as e:
-        print(f"detector unavailable: {e!r}")
-    print()
-    print(f"{'model':28} {'strategy':9} {'time':>6}  {'result':9} answer")
-    picks = {}                                       # model -> (strategy, seconds)
-    seen = []                                        # every reply, for the verdict
-    for m in models:
-        try:                                         # load it first: no row's time includes loading
-            Vision(v.base_url, m, 120.0, v.reasoning_effort, 1, use_cache=False)._ask(
-                b64, prompt, "prefill", 120.0)
-        except Exception:
-            pass                                     # the rows show the error
-        vm = Vision(v.base_url, m, v.timeout_s, v.reasoning_effort, v.max_tokens, use_cache=False)
-        rows = []
-        for s in STRATEGIES:
-            try:
-                r = vm._ask(b64, prompt, s, v.timeout_s)
-            except Exception as e:
-                print(f"{m:28} {s:9} {'-':>6}  ERROR     {e!r}"[:200])
-                continue
-            ok = bool(r["answer"]) and not r["thinks"]
-            result = ("ok" if ok else "thinks+ok" if r["answer"] else "THINKS" if r["thinks"]
-                      else "TOO LONG" if r.get("too_long") else "empty")
-            shown = r["answer"] or f"(finish={r['finish']}, reasoning={r['reasoning_chars']} chars)"
-            print(f"{m:28} {s:9} {r['seconds']:5.1f}s  {result:9} {shown}"[:240])
-            rows.append(r)
-            seen.append(r)
-        clean = [r for r in rows if r["answer"] and not r["thinks"]]
-        answered = [r for r in rows if r["answer"]]
-        if clean or answered:                        # the app's order; else the fastest that answered
-            r = clean[0] if clean else min(answered, key=lambda x: x["seconds"])
-            picks[m] = (r["strategy"], r["seconds"])
-    print()
-    choice = pick_model(picks, v.model)
-    long_only = bool(seen) and all(r.get("too_long") and not r.get("thinks") for r in seen)
-    if choice is None and long_only:
-        print("The model doesn't think, but every answer ran past the token cap with no whole "
-              "sentence. Try \"vision_max_tokens\": 160 under \"llm\", then run this again.")
-        code = 1
-    elif choice is None:
-        print("NO strategy stops the thinking on this server. Photos will be described by the "
-              f"object detector until it's fixed: {FIX_HINT}. Then run this again.")
-        code = 1
-    else:
-        s, secs = picks[choice]
-        print(f"USE: {choice} with '{s}' ({secs:.1f} s, {'under' if secs < 5 else 'OVER'} the 5 s target).")
-        if choice != v.model:
-            print(f'  In config/settings.json under "llm" add:  "vision_model": "{choice}",')
-            print("  (start_mac.sh then loads it next to the 9B and the 2B)")
-        for m, (s2, _secs) in picks.items():
-            _save_cache(f"{v.base_url}|{m}", s2)     # the app skips the probe from its next start
-        print("  Saved: the app uses it from its next start (cache/vision_mode.json).")
-        code = 0
-    print()
-    _brain_check(settings, prof)
-    return code
+        for m in models:
+            print(f"LM Studio {m}: {_model_info(v.base_url, m)}")
+        if photo:
+            path = Path(photo)
+        else:
+            photos = sorted((REPO_ROOT / settings.get("paths", {}).get("captures", "captures") / "photos")
+                            .glob("*.jpg"), key=lambda p: p.stat().st_mtime)
+            path = photos[-1] if photos else None
+        b64 = encode_image(path) if path else test_image()
+        print(f"photo: {path or 'a small test image (no photo in captures/photos yet)'}")
+        prompt = PROMPT
+        try:
+            import cv2
+            from hardware.detect import Detector, hint
+            det = Detector.from_settings(settings)
+            frame = cv2.imread(str(path)) if path else None
+            if det is not None and frame is not None:
+                info = det.analyse(frame)
+                if info is not None:
+                    print(f"detector ({det.engine}, {det.last_ms:.0f} ms): {hint(info)}")
+                    if info["detections"]:
+                        prompt += f" Hint: {hint(info)}"
+        except Exception as e:
+            print(f"detector unavailable: {e!r}")
+        print()
+        print(f"{'model':28} {'strategy':9} {'time':>6}  {'result':9} answer")
+        picks = {}                                       # model -> (strategy, seconds)
+        seen = []                                        # every reply, for the verdict
+        for m in models:
+            try:                                         # load it first: no row's time includes loading
+                Vision(v.base_url, m, 120.0, v.reasoning_effort, 1, use_cache=False)._ask(
+                    b64, prompt, "prefill", 120.0)
+            except Exception:
+                pass                                     # the rows show the error
+            vm = Vision(v.base_url, m, v.timeout_s, v.reasoning_effort, v.max_tokens, use_cache=False)
+            rows = []
+            for s in STRATEGIES:
+                try:
+                    r = vm._ask(b64, prompt, s, v.timeout_s)
+                except Exception as e:
+                    print(f"{m:28} {s:9} {'-':>6}  ERROR     {e!r}"[:200])
+                    continue
+                ok = bool(r["answer"]) and not r["thinks"]
+                result = ("ok" if ok else "thinks+ok" if r["answer"] else "THINKS" if r["thinks"]
+                          else "TOO LONG" if r.get("too_long") else "empty")
+                shown = r["answer"] or f"(finish={r['finish']}, reasoning={r['reasoning_chars']} chars)"
+                print(f"{m:28} {s:9} {r['seconds']:5.1f}s  {result:9} {shown}"[:240])
+                rows.append(r)
+                seen.append(r)
+            clean = [r for r in rows if r["answer"] and not r["thinks"]]
+            answered = [r for r in rows if r["answer"]]
+            if clean or answered:                        # the app's order; else the fastest that answered
+                r = clean[0] if clean else min(answered, key=lambda x: x["seconds"])
+                picks[m] = (r["strategy"], r["seconds"])
+        print()
+        choice = pick_model(picks, v.model)
+        long_only = bool(seen) and all(r.get("too_long") and not r.get("thinks") for r in seen)
+        if choice is None and long_only:
+            print("The model doesn't think, but every answer ran past the token cap with no whole "
+                  "sentence. Try \"vision_max_tokens\": 160 under \"llm\", then run this again.")
+            code = 1
+        elif choice is None:
+            print("NO strategy stops the thinking on this server. Photos will be described by the "
+                  f"object detector until it's fixed: {FIX_HINT}. Then run this again.")
+            code = 1
+        else:
+            s, secs = picks[choice]
+            print(f"USE: {choice} with '{s}' ({secs:.1f} s, {'under' if secs < 5 else 'OVER'} the 5 s target).")
+            if choice != v.model:
+                print(f'  In config/settings.json under "llm" add:  "vision_model": "{choice}",')
+                print("  (start_mac.sh then loads it next to the 9B and the 2B)")
+            for m, (s2, _secs) in picks.items():
+                _save_cache(f"{v.base_url}|{m}", s2)     # the app skips the probe from its next start
+            print("  Saved: the app uses it from its next start (cache/vision_mode.json).")
+            code = 0
+        print()
+        _brain_check(settings, prof)
+        return code
+    finally:
+        unload_test_models(v.base_url, models, loaded_before, keep)   # also after Ctrl+C
 
 
 def pick_model(picks, preferred, target_s: float = 5.0):
@@ -219,6 +289,115 @@ def _brain_check(settings, prof) -> None:
         print(f"brain {m}: {verdict}. {took:.1f} s, reply {reply[:30]!r}")
         for n in notes:
             print(f"    {n}")
+
+
+def _yes_no(ask, prompt: str):
+    """True / False from y/n (also on/off), None for q (stop)."""
+    while True:
+        r = str(ask(prompt)).strip().lower()
+        if r in ("y", "yes", "on"):
+            return True
+        if r in ("n", "no", "off"):
+            return False
+        if r in ("q", "quit", "stop"):
+            return None
+
+
+def outlets(settings, arg=None, ask=input, conn=None) -> int:
+    """The six outlet files read over the Flipper CLI, on vs off compared per
+    outlet; then a guided test on outlet `arg` (a number or name, default 2, the
+    living room lamp; "none" skips it): OFF, OFF, ON, ON, OFF, asking after each
+    send whether the lamp is on. Faraday must be stopped: it holds the Flipper."""
+    from hardware.flipper.connection import FlipperSerial
+    from hardware.flipper.device import ERROR_WORDS
+    from hardware.flipper.outlets import (STEPS, SUBGHZ_DIR, compare, parse_sub, rerecord_steps,
+                                          signal_of, swap_steps, verdict)
+    from hardware.settings import for_os
+    fs = settings["flipper"]
+    if conn is None:
+        conn = FlipperSerial(for_os(fs["serial_port"]), fs.get("baud", 230400))
+        if not conn.open() or not conn.get_prompt():
+            print("Can't reach the Flipper's CLI. Quit Faraday first (it holds the port), close any "
+                  "app open on the Flipper, and check the USB cable.")
+            conn.close()
+            return 1
+    try:
+        table, numbers = {}, {}
+        print(f"{'outlet':22} {'file':14} signal")
+        for name, cfg in settings["outlets"].items():
+            files = {}
+            for which in ("on", "off"):
+                ok, lines = conn.run(f"storage read {SUBGHZ_DIR}/{cfg[which]}.sub", 10.0)
+                if not ok:
+                    conn.get_prompt()           # late output must not become the next answer
+                files[which] = parse_sub(lines) if ok else {"error": "no answer from the Flipper"}
+                info = files[which]
+                print(f"{name + ' (' + str(cfg.get('number')) + ')':22} {cfg[which]:14} "
+                      f"{signal_of(info) or info.get('error') or 'unreadable'}")
+            kind, text = compare(files["on"], files["off"])
+            print(f"{'':22} {'':14} -> {text}")
+            table[name] = (kind, cfg, files)
+            numbers[str(cfg.get("number"))] = name
+        target = str(arg or "2").strip()
+        if target.lower() in ("none", "no", "skip"):
+            return 0 if all(t[0] == "different" for t in table.values()) else 1
+        name = numbers.get(target) or (target if target in table else None)
+        if name is None:
+            print(f"No outlet {target!r}: use one of {', '.join(sorted(numbers))} or a name.")
+            return 1
+        files_kind, cfg, files = table[name]
+        num = cfg.get("number")
+        print()
+        print(f"Guided test: {name} (outlet {num}). Watch the lamp. Answer y or n; q stops.")
+        before = _yes_no(ask, f"Is the {name.replace('_', ' ')} on right now? [y/n] ")
+        after = []
+        unknown_now = False                      # stopped after a send, before saying the lamp's state
+        while before is not None and len(after) < len(STEPS):
+            step = STEPS[len(after)]
+            again = " again" if len(after) and STEPS[len(after) - 1] == step else ""
+            if str(ask(f"Press Enter to send {step.upper()}{again} ({cfg[step]}), q to stop: ")).strip().lower() == "q":
+                break
+            # tx_from_file replays a file 10 times: a long RAW recording takes a while
+            raw_s = sum(abs(d) for d in files[step].get("raw", [])) / 1e6
+            ok, out = conn.run(fs["tx_command"].format(name=cfg[step]), max(15.0, 12 * raw_s + 5))
+            if not ok or any(w in ln.lower() for ln in out for w in ERROR_WORDS):
+                print(f"  the send FAILED: {out[-2:]}")
+                if not ok:
+                    conn.get_prompt()
+                unknown_now = True
+                break
+            state = _yes_no(ask, "  Is the lamp on now? [y/n] ")
+            if state is None:
+                unknown_now = True
+                break
+            after.append(state)
+        if before is None:
+            return 1
+        kind, text = verdict(before, after)
+        print()
+        print(f"Result, {name} (outlet {num}): {text}.")
+        if kind == "works":
+            print('Good. Faraday can switch it: you can set "lights_off_at_start": true again '
+                  'under "integration" in config/settings.json.')
+        elif kind == "swapped":
+            print("\n".join(swap_steps(cfg["on"], cfg["off"])))
+        elif kind == "toggles" and files_kind == "different":
+            print("The two files hold different signals, but the outlet flips on each one: it was "
+                  "paired to a single button. Re-pair it with the keyfob's ON and OFF buttons (see "
+                  "its manual: usually hold the outlet's button until its light blinks, then press "
+                  "the keyfob's ON button), then run this again.")
+            print('Until then keep "lights_off_at_start": false.')
+        elif kind in ("toggles", "deaf", "mixed", "missed"):
+            if kind in ("deaf", "missed"):
+                print("Check that the outlet is plugged in and move the Flipper closer, then run this "
+                      "again. If it still misses:")
+            print("\n".join(rerecord_steps(num, cfg["on"], cfg["off"])))
+            print('Until it works keep "lights_off_at_start": false.')
+        if after and not unknown_now:
+            print(f"The lamp is {'ON' if after[-1] else 'OFF'} now.")
+        return 0 if kind == "works" else 1
+    finally:
+        conn.close()
 
 
 def say(settings, text: str) -> int:
@@ -288,7 +467,7 @@ def devices(settings) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m hardware.check")
-    ap.add_argument("what", choices=["camera", "vision", "say", "record", "mute", "devices"])
+    ap.add_argument("what", choices=["camera", "vision", "outlets", "say", "record", "mute", "devices"])
     ap.add_argument("arg", nargs="?", default=None)
     a = ap.parse_args(argv)
     s = load_settings()
@@ -296,6 +475,8 @@ def main(argv=None) -> int:
         return camera(s)
     if a.what == "vision":
         return vision(s, a.arg)
+    if a.what == "outlets":
+        return outlets(s, a.arg)
     if a.what == "say":
         return say(s, a.arg or "Hello, I'm Faraday. Away mode on.")
     if a.what == "record":
