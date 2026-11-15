@@ -42,11 +42,11 @@ class Router(unittest.TestCase):
     def test_keywords_without_a_model(self):
         r = OwnerRouter(None, log=lambda _m: None)
         cases = {
+            # No model configured at all: plainly leaving or bedtime words arm (nothing to
+            # override). "Leaving it by the side door" never does (owner, Mac).
             "I'm heading out.": owner.ARM_AWAY,
             "Goodnight, I'm going to bed.": owner.ARM_NIGHT,
-            "Goodnight, I'm off to bed.": owner.ARM_NIGHT,
-            "Night night, heading to bed now.": owner.ARM_NIGHT,
-            "I'm off to work.": owner.ARM_AWAY,
+            "Actually cancel that leaving it by the side door, make it the main door.": owner.UNCLEAR,
             "Who's at the door?": owner.LOOK,
             "What happened while I was out?": owner.SUMMARY,
             "Turn off the porch light.": owner.LIGHT,
@@ -96,9 +96,13 @@ class Router(unittest.TestCase):
         # nothing in the words for it
         self.assertEqual(route("A piece of paper.", owner.ADD_INSTRUCTION).intent, owner.UNCLEAR)
         self.assertEqual(route("A piece of paper.", owner.SUMMARY).intent, owner.UNCLEAR)
-        # clear words win over the model
+        # arming only when the model picks it and the words plainly say so (owner, Mac)
         got = route("I'm heading out, see you later", owner.ARM_NIGHT)
-        self.assertEqual((got.intent, got.via), (owner.ARM_AWAY, "code"))
+        self.assertEqual(got.intent, owner.UNCLEAR)
+        got = route("I'm heading out, see you later", owner.ARM_AWAY)
+        self.assertEqual((got.intent, got.via), (owner.ARM_AWAY, "bonsai"))
+        got = route("Actually cancel that leaving it by the side door, make it the main door", owner.ARM_AWAY)
+        self.assertNotEqual(got.intent, owner.ARM_AWAY)
         # the model's paraphrase is accepted when the words back it
         self.assertEqual(route("Anything going on at the door right now?", owner.LOOK).intent, owner.LOOK)
 
@@ -106,7 +110,7 @@ class Router(unittest.TestCase):
         got = OwnerRouter(FakeClient(RuntimeError("down")), log=lambda _m: None).route("Who's at the door?")
         self.assertEqual((got.intent, got.via), (owner.LOOK, "rules"))
         got = OwnerRouter(FakeClient({"content": "hmm"}), log=lambda _m: None).route("I'm heading out")
-        self.assertEqual(got.intent, owner.ARM_AWAY)
+        self.assertEqual(got.intent, owner.UNCLEAR)          # never armed by a keyword (owner, Mac)
 
     def test_who_is_the_owner(self):
         self.assertTrue(owner.is_owner_speech(events.speech("hi", "owner"), Mode.AWAY))
@@ -193,6 +197,7 @@ class ThroughThePipeline(unittest.TestCase):
         self.assertEqual(len(self.p.instructions.all()), 1)
         r = self.owner("What happened today?")
         self.assertIn(ActionType.SUMMARIZE_LOG, kinds(r.actions))
+        self.p.router.client = FakeClient(route_reply(owner.ARM_AWAY))   # the model picks arming
         r = self.owner("I'm heading out.")
         self.assertEqual(said(r.actions)[0], lines.AWAY_ON)
         self.assertEqual(self.p.modes.mode, Mode.AWAY)

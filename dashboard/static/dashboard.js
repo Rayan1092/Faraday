@@ -247,25 +247,33 @@
   }
 
   let lastTalk = [];
-  const TALK_MAX = 3;
+  const TALK_MAX = 8;
+  const SPEAKER = { owner: "You", visitor: "Visitor" };
 
+  // Live captions, both sides (owner, Mac: only Faraday's lines were left once a long reply
+  // pushed the oldest entries out). Nothing is dropped: the list scrolls, and the newest
+  // thing said to Faraday stays in view with Faraday's answer below it.
   function renderTalk(talk) {
     lastTalk = talk;
     const list = $("talk");
     list.replaceChildren();
     if (!talk.length) list.append(el("li", "empty", "Nothing yet."));
+    let lastHeard = null;
     for (const t of talk.slice(-TALK_MAX)) {
-      const li = el("li", t.who);
-      const who = el("div", "who", t.who === "heard" ? "Heard" : "Faraday");
+      const li = el("li", t.who + (t.speaker ? " " + t.speaker : ""));
+      const label = t.who === "heard" ? (SPEAKER[t.speaker] || "Heard") : "Faraday";
+      const who = el("div", "who", label);
       who.append(el("time", "", t.time));
       if (t.voice) who.append(el("span", "voice " + t.voice, t.voice === "owner" ? "Owner's voice" : "Another voice"));
       li.append(icon(t.who === "heard" ? "mic" : "speaker"), who, el("div", "line", t.text));
       list.append(li);
+      if (t.who === "heard") lastHeard = li;
     }
-    // Only whole entries: drop the oldest until the rest fit, so nothing is cut in half.
-    while (list.children.length > 1 && list.scrollHeight > list.clientHeight + 1) {
-      list.firstElementChild.remove();
-    }
+    const first = list.firstElementChild;
+    const below = lastHeard ? list.scrollHeight - (lastHeard.offsetTop - first.offsetTop) : 0;
+    list.scrollTop = lastHeard && below > list.clientHeight
+      ? lastHeard.offsetTop - first.offsetTop        // the question at the top, the answer below
+      : list.scrollHeight;                           // otherwise the newest at the bottom
   }
   window.addEventListener("resize", () => renderTalk(lastTalk));
 

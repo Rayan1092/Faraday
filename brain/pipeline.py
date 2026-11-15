@@ -155,6 +155,8 @@ class Pipeline:
         router = callbacks.pop("router", None) or owner.OwnerRouter(
             brain.fast_client if use_llm else None, brain.fast_model, log=say)
         router.tasks_mode = True
+        if use_llm and router.confirm_client is None:
+            router.confirm_client = brain.client      # the 9B must agree before the house arms
         if use_llm:
             brain.warm_up(getattr(assessor, "client", None))
         pipeline = cls(brain, modes, log or EventLog.from_settings(settings), rules=rules,
