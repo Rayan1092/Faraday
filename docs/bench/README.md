@@ -1,6 +1,24 @@
 # Bonsai benchmark results
 
-Made with `python -m brain.bench` (see `brain/bench.py`). Each scripted moment that asks Bonsai is run 10 times. Times are the Bonsai call only. On the Mac mini, rerun with `python -m brain.bench --profile mac` and add the file here.
+Made with `python -m brain.bench` (see `brain/bench.py`). Each scripted moment that asks Bonsai is run 10 times. Times are the Bonsai call only.
+
+## Mac mini, 9B + 2B, 2026-11-15 (second full-system test)
+
+`python -m brain.bench --profile mac`: `ternary-bonsai-2-9b-mlx` (smart) and `ternary-bonsai-2-2b-mlx` (fast), `9b` prompts, 39 cases, 10 runs each. The 9B thinks anyway, so the startup probe gave it the no-think prompts; the 2B answered without thinking.
+
+| | Result |
+|---|---|
+| Bonsai alone right | 227/370 (61%) |
+| Final right (after code checks, fix-ups and fallback) | **374/390 (95%)** |
+| Unsafe actions that got through | **0** |
+| Average / worst Bonsai time | **0.7 s / 3.0 s** |
+| By model | fast (2B) **0.38 s** (219 calls), smart (9B) **1.41 s** (90 calls) |
+
+**What the misses were, and what changed after this run:**
+- **Delivery label:** "person with a box who rang" 0/10 and "courier with a box" 6/10 final. The 2B said visitor, and code accepted it. Now code makes it a delivery whenever the description shows a box or a courier, or the visitor says package, parcel, delivery or courier, and the 2B prompt is clearer. On the 4B here, both cases went to 5/5 for the model alone.
+- **Summary:** 8/10. Bonsai now gets the events with no times or counts, and code appends every time and count from the log. If Bonsai's wording has a number of its own, code's summary is spoken instead.
+- **Model misses that code already fixed:** the 2B's legacy owner-command path at Home (`goodnight`, `porch_light`, the variants) always fell back to code. In the product those requests go through the owner router, which was right 10/10 on every owner case. Rules and "unclear" cases were decided by code, as designed.
+- **Owner instructions** in seven new phrasings (`o_ins_*`): on the 4B here, all 20 owner cases are right in the end (60/60).
 
 ## 4B q2_0 on the NV laptop (Windows), 2026-11-14
 
@@ -71,7 +89,7 @@ Owner's list, item 6. The label now reads NV's detector (people, faces, objects)
 
 ## Fast vs smart model (sustainability line)
 
-The small Bonsai (2B) handles quick owner commands and the threat label, and the 9B handles visitor conversation, the confrontation, the summary and vision (`fast_model` / `model` in settings). The table's **Model** column says which one answered each case. To measure the difference, run on the Mac mini:
+The small Bonsai (2B) handles quick owner commands and the threat label, and the 9B handles visitor conversation, the summary and vision (`fast_model` / `model` in settings). The table's **Model** column says which one answered each case. To measure the difference, run on the Mac mini:
 
 ```
 python -m brain.bench --profile mac                 # normal routing: fast + smart

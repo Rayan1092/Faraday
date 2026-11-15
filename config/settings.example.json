@@ -51,7 +51,7 @@
 
   "llm": {
     "_note": "Bonsai 2 via LM Studio OpenAI-compatible server only. Pick a profile; NV laptop uses nv_backup.",
-    "_models": "model = the smart Bonsai (9B: visitor conversation, confrontation, summary, vision). fast_model = the small Bonsai (2B: threat label, quick owner commands). On Windows the 4B stands in for both.",
+    "_models": "model = the smart Bonsai (9B: visitor conversation, summary wording, vision). fast_model = the small Bonsai (2B: threat label, quick owner commands). On Windows the 4B stands in for both.",
     "profile": "mac",
     "profiles": {
       "mac": {

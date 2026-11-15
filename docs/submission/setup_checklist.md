@@ -39,7 +39,7 @@ Print this or keep it open on a phone. Do it top to bottom. Anything marked **[T
 - [ ] Wave at the motion sensor. You should see one motion event (about 17 packets).
 - [ ] Click Away on the dashboard and wave. The porch light turns on and the dashboard turns amber. The Flipper's LED stays off, because it only lights up on an alarm.
 - [ ] Say "Faraday, disarm". It refuses.
-- [ ] Say "Hey Faraday, who's at the door?" It says "Checking the camera." and then what the camera sees.
+- [ ] Say "Hey Faraday, who's at the door?" It says "Checking the camera." and then how many people are there and the label ("One person is at the front door. It looks like a visitor.").
 - [ ] Open **Controls**: hold Talk and say "hello". It plays on the door speaker. Press **Snapshot**: a photo and its description appear.
 - [ ] Type the passphrase in the dashboard's Home box. It goes green.
 - [ ] Clear the rules and any instructions on the dashboard (✕).

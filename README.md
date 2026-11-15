@@ -6,7 +6,7 @@ It answers the door, tells you who's there, takes messages, passes on your instr
 
 I built it, solo, for the Cornell Local AI Hackathon.
 
-> Status: more than 600 automated tests, and none of them need hardware: they replay real radio captures and use stand-in devices. **The whole app has run on real hardware**: first on a Windows laptop (real doorbell and motion sensors through the Flipper, the real lamps, the alarm), then a full-system test on the Mac mini with the 9B, the 2B, Argmax speech and the camera. Everything that test found is fixed, and the re-test on the Mac mini is next. Anything marked **[TBD]** hasn't been proven on the Mac mini yet.
+> Status: more than 600 automated tests, and none of them need hardware: they replay real radio captures and use stand-in devices. **The whole app has run on real hardware**: first on a Windows laptop (real doorbell and motion sensors through the Flipper, the real lamps, the alarm), then two full-system tests on the Mac mini with the 9B, the 2B, Argmax speech and the camera. Everything the second test found is fixed, and a final re-test on the Mac mini is next. Anything marked **[TBD]** hasn't been proven on the Mac mini yet.
 
 ## Why offline
 
@@ -38,16 +38,17 @@ Faraday does all of it on one computer in your house: the radio, the object dete
 - **Describes: Bonsai 9B** writes one or two factual sentences about each photo: how many people, what they hold, whether the face is visible, what they're doing. It gets the detector's counts as a hint. I checked that Bonsai really looks at images: given a test picture of a green triangle on black, the 4B said exactly that, and asked the same thing with no image, it made something up.
 - **Judges: Bonsai 2B** labels each photo delivery, visitor, suspicious or nobody, from the description, the detector, the mode and the doorbell and motion history. Code keeps it honest:
   - zero people detected is always "nobody";
-  - if vision failed, the label is "unknown: couldn't analyse the photo", never a guess;
+  - if vision failed, the label comes from the detector's facts and the context (rang or not, the mode); "unknown" only if the detector failed too, never a guess;
+  - a visitor who says package, parcel, delivery or courier is a delivery, because the detector can't see boxes;
   - someone who walked up and rang with a plain face is a visitor or a delivery;
   - someone who stayed at the door without ringing while armed is suspicious;
   - the reason must name what was seen ("1 person, holding a box", "face covered") or the context ("stayed at the door without ringing while armed"), or code writes it from the facts.
-- **Picks the owner's request: Bonsai 2B.** After "Hey Faraday", the 2B chooses one of a fixed set: arm Away or Night, a light on or off, "who's at the door?", "what happened?", a new rule or an instruction for visitors. Code checks the choice against the words. Anything else gets "Sorry, I didn't catch that." Disarming is never the AI's choice: only the passphrase does that, checked in plain code before any model sees the words.
-- **Talks: Bonsai 9B** replies to what a visitor says, passes on your instructions, writes one line to an intruder about what it sees, and sums up the day.
+- **Picks the owner's request: Bonsai 2B.** After "Hey Faraday", the 2B chooses one of a fixed set: arm Away or Night, a light on or off, "who's at the door?", "what happened?", a new rule or an instruction for visitors. Code checks the choice against the words. Anything else gets "Sorry, I can't help with that. You can ask who's at the door, what happened, or arm the house." Instructions can be said any way: when the keywords can't read one, the 2B pulls it out and code checks that it's made of the owner's own words. Disarming is never the AI's choice: only the passphrase does that, checked in plain code before any model sees the words.
+- **Talks: Bonsai 9B** replies to what a visitor says and phrases the day's summary. It never describes the person at the door: on the Mac it once told someone to leave "with your bag", and there was no bag. Anything said about a visitor comes from code.
 - **Hears and speaks: Argmax.** Speech-to-text after the wake phrase and after the doorbell, voice counting for visitors **[TBD: voice counting on the Mac mini]**, and text-to-speech in one calm, professional voice. Fixed lines are rendered once at startup, so they play instantly.
 - **Guarantees safety: plain code.** Modes, alerts, lights, photos and the passphrase are all plain code, and so is the check on every model answer. Details below.
 
-On the Mac mini the models are `ternary-bonsai-2-9b-mlx` and `ternary-bonsai-2-2b-mlx` in LM Studio. The 9B MLX build thinks before answering even when told not to, so Faraday checks every model once at startup and uses prompts that can't think when needed. **[TBD: speed of each on the Mac mini]**
+On the Mac mini the models are `ternary-bonsai-2-9b-mlx` and `ternary-bonsai-2-2b-mlx` in LM Studio. The 9B MLX build thinks before answering even when told not to, so Faraday checks every model once at startup and uses prompts that can't think when needed. On the Mac mini a 2B call takes 0.38 s and a 9B call 1.41 s on average.
 
 ### The radio
 
@@ -70,18 +71,18 @@ Faraday is in Home, Away or Night. What always happens is written in plain code:
 | Doorbell | "Someone is at the front door." | one fixed greeting at once ("Hello. No one can come to the door right now. I can take a message or help with a delivery."), a photo, then a reply to whatever the visitor says | porch light, photo, no sound |
 | Motion | nothing | porch light at once, then 15 seconds for a doorbell | same as Away |
 | No doorbell within those 15 s | | warning line, photo, the label, alert to WARNING | same as Away |
-| Motion again 8 to 60 s after the warning, nobody rang | | ALARM: both lights, photo, the alarm line, a line about what the camera sees, a recording | same as Away |
+| Motion again 8 to 60 s after the warning, nobody rang | | ALARM: both lights, photo, the alarm line, a recording | same as Away |
 
-A visitor who walks up and rings is never warned or alarmed. When you come home and say the passphrase, the lights Faraday turned on, or that you asked it to turn on, go off again; lights you switched on from the dashboard stay on.
+The 15 seconds count from the sensor's first signal, and a timer ends them by itself. A visitor who walks up and rings is never warned or alarmed, and their moving about stays quiet for a minute. When you come home and say the passphrase, the lights Faraday turned on, or that you asked it to turn on, go off again; lights you switched on from the dashboard stay on.
 
 ### What you can say
 
 Start with **"Hey Faraday"**:
 - **"I'm heading out." / "Goodnight."** arms the house in Away or Night.
-- **"Who's at the door?"** Faraday says "Checking the camera.", takes a fresh photo and tells you what it sees, plus the label: "A courier holding a box at the front door. It looks like a delivery." If the camera fails or nothing can describe the photo, it says "I can't see the door right now."; if only the vision model fails, it says what the detector saw.
-- **"If a delivery comes, ask them to leave it by the side door."** An instruction for visitors. The next courier who mentions a package hears "Please leave it by the side door." Instructions only change what Faraday *says*; anything about lights, modes, the alarm, locks or codes is refused. They're listed on the dashboard, where you can delete them, or say "forget the delivery instruction".
+- **"Who's at the door?"** Faraday says "Checking the camera.", takes a fresh photo and says how many people are there and what it looks like: "One person is at the front door. It looks like a delivery." The description stays on the dashboard. If the camera fails, it says "I can't see the door right now."
+- **"If a delivery comes, ask them to leave it by the side door."** An instruction for visitors. The next courier who mentions a package hears "Please leave it by the side door. I'll let the owner know it arrived." With no instruction, a courier hears "You can leave it by the door. I'll let the owner know it arrived." Say it any way you like: "I want you to tell him to…" works too. Instructions only change what Faraday *says*; anything about lights, modes, the alarm, locks or codes is refused. They're listed on the dashboard, where you can delete them, or say "forget the delivery instruction".
 - **"When there's motion at night, turn on the living room lamp too."** becomes a rule.
-- **"What happened while I was out?"** gets a short spoken summary.
+- **"What happened while I was out?"** gets a short spoken summary. Bonsai phrases the events, and every time and count in it comes from the log, added by code.
 - **"Turn on the porch light."**
 
 While the house is armed, a "Hey Faraday" request changes nothing: only the passphrase does. "Turn off the alarm" gets "I'm sorry, I can't do that. Only the owner can disarm the system."
@@ -94,10 +95,11 @@ While the house is armed, a "Hey Faraday" request changes nothing: only the pass
 - If a model errors, times out or says something useless, simple keyword rules take over, so the house never stalls.
 - A visitor can only talk and leave a message: no rules, instructions, lights or summary, in any mode. The one exception is by design: while you're home, anyone who says "Hey Faraday" is treated as you, because the owner is assumed to be in. While the house is armed, "Hey Faraday" changes nothing.
 - The threat label can only make Faraday more careful. Owner instructions are words to pass on, never actions.
+- Nothing Faraday says describes the person at the door. Descriptions stay on the dashboard and in the log.
 
 ### Accessibility
 
-- **Eyes at the door, for a blind or low-vision owner.** "Hey Faraday, who's at the door?" gets a spoken description of a fresh photo and the label. A doorbell at home is announced out loud. Everything else works by voice too.
+- **Eyes at the door, for a blind or low-vision owner.** "Hey Faraday, who's at the door?" says, from a fresh photo, how many people are there and whether it looks like a delivery, a visitor or something suspicious. A doorbell at home is announced out loud. Everything else works by voice too.
 - **Captions, for a deaf or hard-of-hearing owner.** Everything heard and said at the door is written out live: under "Heard & said" on the dashboard, and in big text in the **Live captions** card on the Controls page. Doorbells and alarms show as banners, and the label as a coloured pill.
 
 ### The dashboard and the Controls page
@@ -113,7 +115,7 @@ The **Controls** button opens a phone-style page: the live camera, a **Snapshot*
 
 ### Sustainability
 
-One Mac mini, cheap sensors, and small models: a 2B for the quick jobs and a 9B only where it matters. No cloud servers, no subscription, no data center behind your doorbell. **[TBD: Mac mini power draw at idle and during a Bonsai call]**
+One Mac mini, cheap sensors, and small models: a 2B for the quick jobs (0.38 s a call) and a 9B only where it matters (1.41 s). No cloud servers, no subscription, no data center behind your doorbell. **[TBD: Mac mini power draw at idle and during a Bonsai call]**
 
 ## Run it
 
@@ -157,12 +159,9 @@ Being honest about these:
 - **The outlets work the same way.** Someone nearby could replay the "light on" code.
 - **The cheap doorbell is flaky.** It has to be held for a second or two; a quick tap never registers. A new doorbell is going in. **[TBD: new doorbell results]**
 - **The radio goes deaf for a moment.** It can't hear sensors for about 1.2 seconds while it switches an outlet, and about 2.5 seconds during the alarm buzz.
-- **Small models make mistakes.** Before tuning, the 4B picked the right action on its own only 61% of the time. After building a benchmark (`python -m brain.bench`) and tuning the tools and prompts with it, the 4B was right on its own 97% of the time (136 of 140 runs) and 99% after the code checks, with nothing unsafe getting through. Full numbers are in [docs/bench/](docs/bench/README.md). It's still a small model, so code stays the safety net. The latest runs on the 4B:
-  - the owner's requests, 39 of 39 after the code checks;
-  - the threat label, 30 of 30, with every reason naming what was seen;
-  - with thinking left switched on in LM Studio, so the startup probe had to switch to prompts that can't think, 46 of 46;
-  - the owner's delivery instruction, passed on 5 times out of 5 with code, against 1 in 5 for the model alone.
-- **It's not instant.** On a laptop running the 4B, a Bonsai call takes about 3 seconds. Lights, photos, the doorbell greeting and the alarm never wait for the AI. **[TBD: timings on the Mac mini with the 9B and the 2B]**
+- **Small models make mistakes.** On the Mac mini, in the full benchmark (`python -m brain.bench --profile mac`, 39 cases, 10 runs each), the 2B and the 9B were right on their own 61% of the time (227 of 370 runs) and 95% after the code checks (374 of 390), with nothing unsafe getting through. The misses left after the code checks were the delivery label (the detector can't see boxes) and two summaries. Code now decides the delivery label from the description and from what the visitor says, and checks every summary against the log. Full numbers are in [docs/bench/](docs/bench/README.md). It's still a small model, so code stays the safety net.
+- **It's not instant.** On the Mac mini a Bonsai call takes 0.7 s on average and 3.0 s at worst: 0.38 s for the 2B, 1.41 s for the 9B. Lights, photos, the doorbell greeting and the alarm never wait for the AI.
+- **The last moments of the 15 seconds.** The radio reports a doorbell press about 1.5 seconds after it, so a ring in the last moments can arrive after the warning. That visitor still never gets the alarm.
 - **The passphrase is spoken out loud.** Anyone who hears you say it could use it. A typed passphrase works on the dashboard too, and wrong guesses get locked out for 30 seconds after 5 tries.
 - **The owner's voice check is display only.** It shows whether a request sounded like the owner, but it never decides anything: only the passphrase disarms.
 - **Talking from another device needs the Chrome trust step**, and a network. On the Mac itself it just works.
