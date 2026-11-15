@@ -10,7 +10,7 @@ Facts this is built on (owner, 2026-11-14):
 
 ```json
 {
-  "integration": {"fake_flipper": false},
+  "integration": {"fake_flipper": false, "lights_off_at_start": true},
 
   "flipper": {
     "serial_port": {"windows": "COM5", "mac": "/dev/cu.usbmodemflip_*"},
@@ -47,7 +47,9 @@ Facts this is built on (owner, 2026-11-14):
     "temperature": 0.2,
     "timeout_s": 30,
     "recent_log_lines": 8,
-    "reasoning_effort": "none"
+    "reasoning_effort": "none",
+    "vision_timeout_s": 20,
+    "vision_max_tokens": 768
   },
 
   "stt": {
@@ -84,7 +86,8 @@ Facts this is built on (owner, 2026-11-14):
     "wake": {"enabled": true, "phrase": "hey faraday", "silence_s": 0.7, "max_s": 10}
   },
 
-  "camera": {"index": 0, "width": 1280, "height": 720},
+  "camera": {"index": 0, "width": 1280, "height": 720, "alarm_record_s": 10,
+             "detector": {"enabled": true, "model": "hardware/models/yolox_tiny.onnx", "score": 0.35, "fps": 5}},
 
   "security": {"passphrase": "YOUR PASSPHRASE HERE, plain words, no digits"},
 

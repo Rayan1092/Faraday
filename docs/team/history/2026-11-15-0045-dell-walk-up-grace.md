@@ -34,4 +34,4 @@ Owner's required logic fix: a visitor who walks up (motion) and then rings must 
 - "Stayed without ringing" is now always suspicious, which would have brought the early confrontation forward at every warning. The early confrontation now needs warning signs in the photo (mask, forcing the door); otherwise the alarm brings the confrontation, as you laid out.
 - Tests that passed for the wrong reason were fixed: the QUIET checks now assert the outcome, the baseline merge test matches what the pipeline does, and demo step 2 now checks that the doorbell cancelled the grace period.
 
-**NV:** 5 tests in `integration/tests/test_app.py` assumed an instant warning. The patch is ready: `docs/team/patches/nv-test-app-walk-up-grace.patch` (26/26 pass here). PLAN Q33.
+**NV:** 5 tests in `integration/tests/test_app.py` assumed an instant warning. The patch is ready: `docs/team/patches/nv-test-app-walk-up-grace.patch` (26/26 pass here). PLAN Q34.
