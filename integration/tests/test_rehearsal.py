@@ -323,11 +323,16 @@ class Rehearsal(unittest.TestCase):
         self.assertGreater(len(self.said), n_said)
         self.quiet()
 
-        # 7. "Hey Faraday, who's at the door?" -> fresh photo, description spoken
+        # 7. "Hey Faraday, who's at the door?" -> fresh photo, the answer from facts only
+        #    (owner, Mac test: spoken lines never describe the person; the description
+        #    stays on the dashboard)
         n_photos, n_said = len(self.events("photo_described")), len(self.said)
         self.speak(780, 1.4)
         self.step("look photo taken", lambda: len(self.events("photo_described")) > n_photos)
-        self.step("description spoken", lambda: any("box" in line.lower() for line in self.said[n_said:]))
+        self.step("answer spoken", lambda: any("at the front door" in line.lower()
+                                               for line in self.said[n_said:]))
+        self.assertFalse(any("box" in line.lower() or "jacket" in line.lower()
+                             for line in self.said[n_said:]), "the description must not be spoken")
 
         # ---- the seams: valid log, no errors anywhere, dashboard answers -----------------
         for entry in self.log():

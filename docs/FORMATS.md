@@ -161,10 +161,10 @@ Sent by `modes/` after every mode change. The dashboard shows it. The Flipper LE
 Sent by `modes/` when the alert level changes. `source` must be `modes`, and the validator rejects any other value. The AI and rules can't change the alert level, because no action exists for it.
 
 The rule, implemented in `modes/`:
-- Motion while the mode is `away` or `night` and the alert is `normal` starts a grace period (`alerts.motion_grace_s`, 15 s). The porch light goes on at once; no event yet.
-- A `doorbell` within the grace period is a visitor: the pending warning is cancelled and the alert stays `normal`. After a doorbell, motion doesn't raise the alert for `alerts.visitor_quiet_s` (120 s).
+- Motion while the mode is `away` or `night` and the alert is `normal` starts a grace period (`alerts.motion_grace_s`, 15 s), counted from the motion's `timestamp` (the radio's first packet). The porch light goes on at once; no event yet. A timer ends the grace period by itself.
+- A `doorbell` within the grace period is a visitor: the pending warning is cancelled and the alert stays `normal`. After a doorbell, motion doesn't raise the alert for `alerts.visitor_quiet_s` (60 s).
 - No doorbell by the end of the grace period moves the alert from `normal` to `warning` (amber on the dashboard, the LED stays off). `caused_by` is the motion that started it. A `suspicious` threat label while armed does the same at once.
-- Motion at least `alerts.min_gap_s` (8 s) and at most `alerts.alarm_window_s` (60 s) after the warning, with no doorbell in between, moves it from `warning` to `alarm` (red on the dashboard, and the Flipper LED turns red and buzzes three times). Sooner is the same wave and is ignored. Later is a new walk-up: a new grace period, and if nobody rings, the warning steps run again, with no event because the level doesn't change. A doorbell press counts until about 2.5 s after the grace period, because the radio reports it when the burst ends.
+- Motion at least `alerts.min_gap_s` (8 s) and at most `alerts.alarm_window_s` (60 s) after the warning, with no doorbell in between, moves it from `warning` to `alarm` (red on the dashboard, and the Flipper LED turns red and buzzes three times). Sooner is the same wave and is ignored. Later is a new walk-up: a new grace period, and if nobody rings, the warning steps run again, with no event because the level doesn't change. A doorbell counts if it arrives before the grace period ends (no extra margin by default; `alerts.doorbell_settle_s` can add one). The radio reports a press about 1.5 s after it, so a ring in the last moments can arrive after the warning; a doorbell after the warning still means no alarm.
 - Only the passphrase disarm returns the alert to `normal`. That disarm sends `mode_changed` (to `home`, `changed_by: "passphrase"`) and then `alert_changed` (to `normal`), and both have the same `caused_by`. The Flipper LED goes off again.
 - Motion in `home` mode and doorbell presses at home never change the alert level. Switching between `away` and `night` doesn't reset it, but ends a visitor's quiet period and a pending warning.
 
@@ -198,7 +198,7 @@ Sent by `brain/` right after a `photo_described`. It says what the scene at the 
 
 | data key | type | default | notes |
 |---|---|---|---|
-| `category` | string | required | `delivery`, `visitor`, `suspicious`, `nobody`, `unknown`. `nobody` whenever the object detector counted zero people. `unknown` when the photo couldn't be analysed (no description from the vision model): never a guess |
+| `category` | string | required | `delivery`, `visitor`, `suspicious`, `nobody`, `unknown`. `nobody` whenever the object detector counted zero people. If vision failed, the label comes from the detector's facts plus the context (rang or not, the mode). `unknown` only when vision and the detector both failed: never a guess. A visitor who says package, parcel, delivery or courier makes it `delivery` (a later `threat_assessed` for the same photo; it never replaces `suspicious`) |
 | `reason` | string | `""` | one short line, at most 200 characters |
 | `via` | string | `"rules"` | `bonsai` or `rules` |
 | `model` | string or null | `null` | LM Studio model id when `via` is `bonsai` |

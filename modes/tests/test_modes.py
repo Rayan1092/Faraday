@@ -1,5 +1,6 @@
 """Mode changes and alert rules (FORMATS.md alert_changed)."""
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from shared import AlertLevel, ChangedBy, EventType, Mode, Source, validate_event
 
@@ -15,6 +16,17 @@ class Clock:
 
     def __call__(self):
         return self.t
+
+
+EST = timezone(timedelta(hours=-5))
+
+
+class FakeWall:
+    def __init__(self, now):
+        self.now = now
+
+    def __call__(self):
+        return self.now
 
 
 def state(mode=Mode.AWAY, window=60):
@@ -36,7 +48,7 @@ class AlertRules(unittest.TestCase):
         motion = motion or events.motion()
         self.assertEqual(s.on_event(motion), [])
         self.assertEqual(s.last_outcome, MotionOutcome.GRACE)
-        clock.t += 17.5                                            # 15 s grace + 2.5 s radio margin
+        clock.t += 15                                              # the 15 s grace period
         out = s.end_grace()
         self.assertEqual(levels(out), [("normal", "warning")])
         self.assertEqual(s.grace_ended, motion.id)
@@ -50,7 +62,7 @@ class AlertRules(unittest.TestCase):
         clock.t += 20
         self.assertEqual(s.end_grace(), [])
         self.assertEqual(s.alert, AlertLevel.NORMAL)
-        for wait in (10, 30, 30):                                  # they shuffle about while talking
+        for wait in (10, 15, 15):                                  # they shuffle about while talking
             clock.t += wait
             self.assertEqual(s.on_event(events.motion()), [])
             self.assertEqual(s.last_outcome, MotionOutcome.QUIET)
@@ -63,11 +75,11 @@ class AlertRules(unittest.TestCase):
         clock.t += 5
         self.assertEqual(s.on_event(events.motion()), [])          # still pending, not extended
         self.assertEqual(s.last_outcome, MotionOutcome.PENDING)
-        clock.t += 12
+        clock.t += 9.5
         self.assertFalse(s.grace_due())
-        self.assertEqual(s.end_grace(), [])                        # 17 s: not yet
+        self.assertEqual(s.end_grace(), [])                        # 14.5 s: not yet
         self.assertIsNone(s.grace_ended)
-        clock.t += 0.5
+        clock.t += 0.5                                             # 15 s: no extra margin
         out = s.end_grace()
         self.assertEqual(levels(out), [("normal", "warning")])
         self.assertEqual(out[0].caused_by, motion.id)
@@ -132,12 +144,46 @@ class AlertRules(unittest.TestCase):
         self.assertIsNone(s.grace_ended)
         self.assertEqual(s.alert, AlertLevel.WARNING)              # never alarm
 
-    def test_a_press_near_the_end_still_counts(self):
-        """The doorbell radio reports a press about 1.5 s after the burst: a press at
-        14.5 s arrives at about 16.5 s and still means a visitor."""
+    def test_the_grace_counts_from_the_sensors_first_packet(self):
+        """Owner, Mac test: motion at 03:48:52 (the first packet) was reported at 03:48:55,
+        and the warning came at 03:49:13. It must come at 03:49:07: 15 s after the wave."""
+        clock = Clock()
+        wall = FakeWall(datetime(2026, 11, 15, 3, 48, 55, tzinfo=EST))
+        s = ModeState(SECRET, 60, Mode.AWAY, clock, wall=wall)
+        motion = events.motion()
+        motion.timestamp = "2026-11-15T03:48:52.000-05:00"
+        s.on_event(motion)
+        self.assertEqual(s.last_outcome, MotionOutcome.GRACE)
+        self.assertAlmostEqual(s.grace_remaining(), 12.0, places=3)
+        clock.t += 11.9
+        self.assertFalse(s.grace_due())
+        clock.t += 0.2                                             # 03:49:07.1
+        self.assertEqual(levels(s.end_grace()), [("normal", "warning")])
+
+    def test_odd_timestamps_count_as_now(self):
+        clock = Clock()
+        wall = FakeWall(datetime(2026, 11, 15, 3, 48, 55, tzinfo=EST))
+        for ts in ("2026-11-15T03:49:30.000-05:00",               # in the future
+                   "2026-11-15T03:40:00.000-05:00",               # 9 minutes old
+                   "not a time", ""):
+            s = ModeState(SECRET, 60, Mode.AWAY, clock, wall=wall)
+            motion = events.motion()
+            motion.timestamp = ts
+            s.on_event(motion)
+            self.assertAlmostEqual(s.grace_remaining(), 15.0, places=3, msg=ts)
+
+    def test_an_unreadable_timestamp_never_stops_the_motion(self):
+        """Review: a naive pre-1970 timestamp raised OSError on Windows."""
+        s, _ = state(Mode.AWAY)
+        motion = events.motion()
+        motion.timestamp = "1969-12-31T23:59:59"
+        s.on_event(motion)
+        self.assertEqual(s.last_outcome, MotionOutcome.GRACE)
+
+    def test_a_press_that_arrives_in_time_counts(self):
         s, clock = state(Mode.AWAY)
         s.on_event(events.motion())
-        clock.t += 16.5
+        clock.t += 14.9
         self.assertFalse(s.grace_due())
         s.on_event(events.doorbell())
         clock.t += 5
@@ -156,9 +202,46 @@ class AlertRules(unittest.TestCase):
     def test_visitor_quiet_ends(self):
         s, clock = state(Mode.AWAY)
         s.on_event(events.doorbell())
-        clock.t += 121
+        clock.t += 61
         self.assertEqual(s.on_event(events.motion()), [])
         self.assertEqual(s.last_outcome, MotionOutcome.GRACE)      # a new visit: grace again
+
+    def test_visitor_quiet_is_60_s(self):
+        """Owner, Mac test: waves 80 and 117 s after a doorbell were swallowed."""
+        for after, outcome in ((50, MotionOutcome.QUIET), (80, MotionOutcome.GRACE),
+                               (117, MotionOutcome.GRACE)):
+            s, clock = state(Mode.AWAY)
+            s.on_event(events.doorbell())
+            clock.t += after
+            s.on_event(events.motion())
+            self.assertEqual(s.last_outcome, outcome, after)
+
+    def test_every_motion_says_why(self):
+        """Owner, Mac test: a console line whenever motion is ignored, and why."""
+        s, clock = state(Mode.HOME)
+        s.on_event(events.motion())
+        self.assertIn("Home mode", s.last_reason)
+        s, clock = state(Mode.AWAY)
+        s.on_event(events.motion())
+        self.assertIn("warning in 15 s unless the doorbell rings", s.last_reason)
+        clock.t += 5
+        s.on_event(events.motion())
+        self.assertIn("ignored: already waiting for a doorbell (warning in 10 s)", s.last_reason)
+        clock.t += 10
+        s.end_grace()
+        clock.t += 3
+        s.on_event(events.motion())
+        self.assertIn("ignored: the same wave, 3 s after the warning", s.last_reason)
+        clock.t += 6
+        s.on_event(events.motion())
+        self.assertEqual(s.last_reason, "ALARM: motion again 9 s after the warning")
+        s.on_event(events.motion())
+        self.assertEqual(s.last_reason, "ignored: the alarm is already on")
+        s, clock = state(Mode.AWAY)
+        s.on_event(events.doorbell())
+        clock.t += 20
+        s.on_event(events.motion())
+        self.assertIn("ignored: a visitor rang 20 s ago (motion stays quiet for 60 s", s.last_reason)
 
     def test_a_mode_change_is_a_new_visit(self):
         s, clock = state(Mode.AWAY)
