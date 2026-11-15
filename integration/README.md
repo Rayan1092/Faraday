@@ -34,8 +34,8 @@ Nothing slow runs inside the pipeline callbacks: `on_action` can come from dashb
 ## On the Mac mini
 
 ```
-integration/start_mac.sh            # checks LM Studio + Argmax answer, then python3 -m integration
-integration/start_mac.sh --no-fresh # keep the old log; other args go to the app
+integration/start_mac.sh            # one command: brings LM Studio + argmax-cli serve up, checks everything, starts with --fresh
+integration/start_mac.sh --no-fresh # keep the old log; other args go to the app (real options only)
 ```
 
 The script creates `config/settings.json` from the example with `llm.profile: "mac"` if it's missing. It **fails** if LM Studio doesn't answer or lacks the model, or if `argmax-cli serve` doesn't answer. It **warns** about Wi-Fi on, a missing `argmax-cli`, a missing Flipper port, or the example passphrase.
