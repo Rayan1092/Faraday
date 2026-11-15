@@ -54,6 +54,19 @@ TOOL = {"type": "function", "function": {
         "outlet": {"type": "string", "enum": sorted(Outlet.ALL)},
         "on": {"type": "boolean"}}, "required": ["intent"]}}}
 
+# When the keyword parser can't read an instruction, the 2B pulls it out; code checks
+# it (rules/instructions.from_model). Owner, Mac test: "any phrasing".
+EXTRACT_PROMPT = (
+    "Pull the owner's instruction for visitors out of what they said. Call instruction once. "
+    "audience: delivery (couriers, packages, parcels), visitor (guests, friends, neighbours) or "
+    "anyone. request: what to tell them, in the owner's own words, starting with the verb, "
+    "for example 'leave the package by the side door' or 'come back after six'.")
+EXTRACT_TOOL = {"type": "function", "function": {
+    "name": "instruction", "description": "Who the instruction is for, and what to tell them.",
+    "parameters": {"type": "object", "properties": {
+        "audience": {"type": "string", "enum": list(oi.AUDIENCES)},
+        "request": {"type": "string"}}, "required": ["audience", "request"]}}}
+
 # Words that back each intent. Weak evidence: enough to accept the model's pick.
 _WEAK = {
     ARM_AWAY: re.compile(r"\b(heading out|leaving|leave|going out|off to|i'?m off|out for|bye|"
@@ -65,9 +78,10 @@ _WEAK = {
                         r"anyone (come|came|stop\w*|ring|rang)|news|log|while i was)\b", re.I),
     LOOK: re.compile(r"\b(door|outside|porch|camera|see|look)\b", re.I),
     ADD_RULE: re.compile(r"\b(when(ever)?|every time|each time|from now on)\b", re.I),
-    ADD_INSTRUCTION: re.compile(r"\b(if|when(ever)?)\b.*\b(deliver\w*|courier|parcel|package|visitor|"
-                                r"someone|anyone|somebody|guest|friend)\b|\b(tell|ask|let)\b.*\b"
-                                r"(them|visitors?|deliver\w*|courier)\b", re.I),
+    ADD_INSTRUCTION: re.compile(r"\b(if|when(ever)?)\b.*\b(deliver\w*|couriers?|parcels?|packages?|visitors?|"
+                                r"someone|anyone|somebody|guests?|friends?|amazon|fedex|ups|dhl|usps|drivers?)\b"
+                                r"|\b(tell|ask|let)\b.*\b(them|him|her|visitors?|deliver\w*|couriers?|drivers?|"
+                                r"anyone|everyone|guests?)\b", re.I),
     LIGHT: re.compile(r"\b(lights?|lamp|porch|outlet)\b", re.I),
 }
 _RULE_EVENT = re.compile(r"\b(motion|movement|moves?|door ?bell|rings?|knocks?)\b", re.I)
@@ -216,17 +230,52 @@ class OwnerRouter:
             via = "bonsai" if intent == model_intent else "code"
         r = Route(intent, via, model_intent, elapsed_s=elapsed, note=note)
         self._fill(r, text, args)
+        if (r.intent == UNCLEAR and not cut_off(text) and self.client is not None
+                and ((model_intent == ADD_INSTRUCTION or clear == ADD_INSTRUCTION)
+                     and (oi.names_audience(text) or _TELL.search(text))
+                     or (_WEAK[ADD_INSTRUCTION].search(text) and _TELL.search(text)))):
+            # The keywords couldn't read it, but it isn't cut off: the 2B pulls it out.
+            ins = self.extract_instruction(text)
+            if ins is not None:
+                r.intent, r.instruction, r.cut_off = ADD_INSTRUCTION, ins, False
+                r.note = "the 2B wrote the instruction, code checked it"
         self.log(f"[owner] {text!r} -> {r.intent}" + (f" (2B said {model_intent})" if model_intent
                                                       and model_intent != r.intent else "")
                  + (f", {elapsed:.2f}s" if elapsed is not None else "") + (f": {r.note}" if r.note else ""))
         return r
 
+    def extract_instruction(self, text: str) -> Optional[Dict[str, str]]:
+        """{"audience", "verb", "form", "request"} from natural speech via the 2B, checked
+        by code (rules/instructions.from_model), or None."""
+        try:
+            reply = self.client.chat([{"role": "system", "content": EXTRACT_PROMPT},
+                                      {"role": "user", "content": f'Owner said: "{text}"'}], [EXTRACT_TOOL])
+        except Exception as e:
+            self.log(f"[owner] instruction extraction failed: {e}")
+            return None
+        args: Dict[str, Any] = {}
+        for call in (reply or {}).get("tool_calls") or [] if isinstance(reply, dict) else []:
+            fn = call.get("function") if isinstance(call, dict) else None
+            raw = fn.get("arguments") if isinstance(fn, dict) else None
+            try:
+                args = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            except ValueError:
+                args = {}
+            if args:
+                break
+        ins = oi.from_model(args, text)
+        self.log(f"[owner] instruction from the 2B: {ins}" if ins
+                 else f"[owner] the 2B's instruction didn't hold: {args}")
+        return ins
+
     @staticmethod
     def _check(text: str, clear: Optional[str], model: Optional[str]) -> tuple:
         if model == UNCLEAR and clear is None:
             return UNCLEAR, ""
-        if clear is not None and model != clear:
-            return clear, (f"code: the words say {clear}" if model else "")
+        if clear is not None:
+            # The words make it plain; the 2B agreeing needs nothing more (bench: "Could you
+            # tell any couriers..." was rejected because the weak words missed "couriers").
+            return clear, (f"code: the words say {clear}" if model and model != clear else "")
         if model is not None and model != UNCLEAR and backed(model, text):
             return model, ""
         if model is not None and model != UNCLEAR:
