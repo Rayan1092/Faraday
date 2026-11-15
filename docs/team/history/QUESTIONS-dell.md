@@ -15,3 +15,15 @@ Named `QUESTIONS-dell.md`, because NV's open PRs add their own `QUESTIONS.md`. T
 9. ✅ **OpenCV wasn't installed on this laptop, and installing it was blocked** (the auto-mode classifier denied the pip install). `describe_photo` shrinks photos with OpenCV only if it's there. That path is tested with a stand-in module but hasn't been run for real. *Default:* fine, because `requirements.txt` already lists `opencv-python`. Just run `pip install -r requirements.txt` on the Mac.
 10. ✅ **Vision is built twice.** NV's PR #7 does camera → Bonsai vision → `photo_described` in `hardware/vision.py` (shrinks to 512 px, live-tested at 3.3 s), already wired into `py -m integration`. I wrote the same seam as `brain/vision.py` (PLAN.md seam 4) before seeing that. *Default:* integration uses NV's. `brain/vision.py` stays as an unused duplicate for now, and one of them gets deleted after the demo. The seams note says so.
 11. ✅ **Push-to-talk button (NV's question 3).** Added a "Talk" button to the dashboard. It calls `board.talk_hook()` if integration sets one, and stays hidden otherwise. *Default:* one press calls the hook, and integration decides whether that starts or stops recording.
+
+
+## Round 2: after the Mac full-system test (2026-11-14 night, owner away)
+
+Each one has the default I used. Answer inline and I'll adjust.
+
+12. **What may an owner ask for while the house is armed?** You said wake requests change nothing except through the passphrase. *Default:*
+    - At **Night**, "who's at the door?" still answers, because it changes nothing and the owner may be inside.
+    - At **Away**, nothing does: anyone at the door can say "Hey Faraday", so not even the summary (it would read the house log to a stranger).
+    - Everything else gets "The system is armed. Say the passphrase to make changes." "Disarm" gets "Please say the passphrase to disarm."
+13. **Typed text (`channel: null`)** keeps the old meaning: the owner at Home, a visitor while armed. *Default:* yes, so the dashboard text box and the sim behave as before.
+14. **"If a delivery comes, leave it by the side door"** (no "ask them to") is now accepted as an instruction, the same as "ask them to leave it...". A request that stops on a dangling word ("tell visitors that") is refused and the owner is asked to repeat. *Default:* on.

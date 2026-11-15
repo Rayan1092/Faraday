@@ -30,8 +30,9 @@ def _outlet(on: bool, outlet: str) -> RawItem:
             "args": {"outlet": outlet}}
 
 
-_LEAVING = re.compile(r"\b(heading out|leaving|going out|i'?m off|away mode|bye)\b", re.I)
-_BED = re.compile(r"\b(good ?night|going to (bed|sleep)|night mode|bedtime)\b", re.I)
+_LEAVING = re.compile(r"\b(heading out|leaving|going out|i'?m off(?! to (bed|sleep))|away mode|bye)\b", re.I)
+_BED = re.compile(r"\b(good ?night|night night|(going|heading|off|go) to (bed|sleep)|night mode|bed ?time|"
+                  r"turning in|time for bed)\b", re.I)
 _SUMMARY = re.compile(r"\b(what happened|while i was (out|away)|summar\w*|any (news|visitors))\b", re.I)
 _LIGHT = re.compile(r"\bturn (on|off) (the )?(porch( light)?|living room( lamp)?|lamp|lights?)\b"
                     r"|\b(porch( light)?|living room( lamp)?|lamp|lights?) (on|off)\b", re.I)

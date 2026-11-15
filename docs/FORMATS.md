@@ -114,7 +114,11 @@ A camera snapshot plus a short description from Bonsai vision. `caused_by` is th
 |---|---|---|---|
 | `photo_path` | string | required | `captures/photos/....jpg` |
 | `description` | string | required | one or two short sentences |
-| `model` | string or null | `null` | LM Studio model id used |
+| `model` | string or null | `null` | LM Studio model id used (only when `described_by` is `"bonsai"`) |
+| `described_by` | string or null | `null` | `"bonsai"`: the vision LLM wrote `description`. `"detector"`: vision failed, so `description` comes from the object detector alone ("One person is at the door.", "Nobody is there."). `null`: no description ("Photo saved." / "Camera unavailable.", source `camera`) (PLAN Q30) |
+| `people` | int or null | `null` | people the object detector (YOLOX-tiny, no LLM) counted in the photo |
+| `faces` | int or null | `null` | faces visible to the camera (face detector). Fewer faces than close people = a face covered or turned away |
+| `detections` | list or null | `null` | what the object detector saw: `[{"label": "person", "count": 1, "confidence": 0.91}, {"label": "backpack", "count": 1, "confidence": 0.55}]`, most confident first. `label` is a COCO class name, `count` >= 1, `confidence` 0 to 1 (the best box of that class) |
 
 ```json
 {

@@ -68,8 +68,8 @@ class Pipe(unittest.TestCase):
                           say=lambda _m: None)
         return self.p
 
-    def ask(self, text="Who's at the door?"):
-        r = self.p.handle(events.speech(text))
+    def ask(self, text="Who's at the door?", channel=None):
+        r = self.p.handle(events.speech(text, channel))
         takes = [a for a in r.actions if a.type == ActionType.TAKE_PHOTO]
         return r, takes
 
@@ -86,7 +86,7 @@ class Pipe(unittest.TestCase):
 
     def test_works_at_night_too(self):
         self.make(Mode.NIGHT)
-        _, [take] = self.ask("Faraday, is anyone outside?")
+        _, [take] = self.ask("Faraday, is anyone outside?", "owner")
         self.assertTrue(said(self.p.handle(photo(take.id, "An empty porch.")).actions)[0].startswith("An empty porch."))
 
     def test_not_while_away(self):

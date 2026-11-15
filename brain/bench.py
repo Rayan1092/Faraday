@@ -31,7 +31,7 @@ from shared import Action, ActionType, EventType, Mode, Source, make_action, mak
 
 from sim import events
 
-from . import threat
+from . import owner, threat
 from .core import Brain, Decision
 from rules import instructions as owner_instructions
 from .threat import ThreatAssessor
@@ -300,20 +300,72 @@ def _unsafe(actions: List[Action], mode: str) -> bool:
     return False
 
 
+# ---- owner requests ("Hey Faraday, ..."): the 2B picks an intent, code checks it ----
+
+def _route(text: str):
+    def run(router: owner.OwnerRouter) -> Tuple[Optional[Decision], Any, float]:
+        r = router.route(text)
+        return None, r, r.elapsed_s or 0.0
+    return run
+
+
+def _intent(want: str, cut: Optional[bool] = None) -> Callable[[Any], bool]:
+    def check(intent: Any) -> bool:
+        return intent == want
+    check.cut = cut  # type: ignore[attr-defined]
+    return check
+
+
+OWNER_CASES = [
+    ("o_heading_out", "I'm heading out, see you later.", owner.ARM_AWAY, None),
+    ("o_bed", "Goodnight, I'm off to bed.", owner.ARM_NIGHT, None),
+    ("o_who", "Who's at the door?", owner.LOOK, None),
+    ("o_anyone", "Is there anybody outside right now?", owner.LOOK, None),
+    ("o_summary", "What happened while I was out?", owner.SUMMARY, None),
+    ("o_light_on", "Switch the living room lamp on.", owner.LIGHT, None),
+    ("o_light_off", "Porch light off please.", owner.LIGHT, None),
+    ("o_rule", "Whenever the doorbell rings at night, turn on the porch light.", owner.ADD_RULE, None),
+    ("o_instruction", "If a delivery comes, ask them to leave it by the side door.", owner.ADD_INSTRUCTION, None),
+    ("o_disarm", "Disarm the system.", owner.PASSPHRASE, None),
+    ("o_paper", "A piece of paper.", owner.UNCLEAR, False),
+    ("o_cut_off", "If a delivery comes, ask them to", owner.UNCLEAR, True),
+    ("o_weather", "What's the weather like tomorrow?", owner.UNCLEAR, False),
+]
+
+
+def owner_cases() -> List[Case]:
+    return [Case(name, f'Owner: "Hey Faraday, {text}" -> {want}' + (" (ask to repeat)" if cut else ""),
+                 Mode.HOME, _route(text), _intent(want, cut), _intent(want, cut))
+            for name, text, want, cut in OWNER_CASES]
+
+
 def run_bench(brain: Brain, runs: int, only: Optional[List[str]] = None,
               progress: Callable[[str], None] = print,
-              assessor: Optional[ThreatAssessor] = None) -> Dict[str, Any]:
+              assessor: Optional[ThreatAssessor] = None,
+              router: Optional[owner.OwnerRouter] = None) -> Dict[str, Any]:
     results = []
     assessor = assessor or ThreatAssessor(brain.client, getattr(brain.client, "model", None),
                                           log=lambda _m: None)
-    for case in cases():
+    router = router or owner.OwnerRouter(brain.fast_client, brain.fast_model, log=lambda _m: None)
+    for case in cases() + owner_cases():
         if only and case.name not in only:
             continue
         rows = []
         for i in range(runs):
-            decision, text, took = case.run(assessor if case.name.startswith("t_") else brain)
+            target = assessor if case.name.startswith("t_") else router if case.name.startswith("o_") else brain
+            decision, text, took = case.run(target)
             role = None
-            if isinstance(text, threat.Assessment):
+            if isinstance(text, owner.Route):
+                r = text
+                role = "smart" if brain.force_role == "smart" else "fast"
+                cut = getattr(case.final_check, "cut", None)
+                cut_ok = cut is None or r.cut_off == cut
+                model_ok = r.via == "bonsai" and case.model_check(r.model_intent) and cut_ok
+                final_ok = case.final_check(r.intent) and cut_ok
+                unsafe, fallback = False, r.model_intent is None
+                sample = f"{r.intent} (2B: {r.model_intent})" + (" cut off" if r.cut_off else "")
+                dropped = [r.note] if r.note else []
+            elif isinstance(text, threat.Assessment):
                 # Threat label: "model right" only if Bonsai answered and code didn't override.
                 a = text
                 role = "smart" if brain.force_role == "smart" else "fast"
@@ -366,6 +418,9 @@ def to_markdown(report: Dict[str, Any]) -> str:
              + (f", **everything forced to {meta['force']}**" if meta.get("force") else "") + ")",
              f"- Machine: {meta['machine']}",
              f"- Runs per case: {meta['runs']}",
+             *[f"- Thinking: `{t['model']}` used **{t['uses']}** (no_think `{t['no_think']}`, probe "
+               f"said {t['probe'] or '-'}; chat replies with thinking: {t['thinking_seen']})"
+               for t in meta.get("thinking", [])],
              f"- Command: `{meta['command']}`", "",
              "**Model right** = Bonsai itself returned the right action, with no code correction. "
              "**Final right** = what Faraday actually does after the code checks, fix-ups and fallback rules. "
@@ -414,6 +469,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--prompts", help="prompt profile: small or 9b (default: picked from the model id)")
     parser.add_argument("--force", choices=("fast", "smart"),
                         help="run every case on one model, to compare fast and smart times")
+    parser.add_argument("--no-think", choices=("auto", "raw", "chat"),
+                        help="what to do when the model thinks anyway (default: llm.no_think or auto)")
+    parser.add_argument("--reasoning-effort",
+                        help="override llm.reasoning_effort; \"off\" sends none at all (makes the 4B "
+                             "think like the Mac's MLX 9B)")
     parser.add_argument("--out", default="docs/bench", help="folder for the .md and .json results")
     parser.add_argument("--no-save", action="store_true")
     args = parser.parse_args(argv)
@@ -423,6 +483,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         settings["llm"]["profile"] = args.profile
     if args.model:
         settings["llm"]["profiles"][settings["llm"]["profile"]]["model"] = args.model
+    if args.no_think:
+        settings["llm"]["no_think"] = args.no_think
+        settings["llm"]["profiles"][settings["llm"]["profile"]].pop("no_think", None)
+    if args.reasoning_effort:
+        settings["llm"]["reasoning_effort"] = None if args.reasoning_effort == "off" else args.reasoning_effort
     cfg = llm_config(settings)
     brain = Brain.from_settings(settings, log=lambda _m: None)
     if args.prompts:
@@ -435,13 +500,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         assessor = ThreatAssessor(brain.client, cfg["model"], log=lambda _m: None)
     elif args.force == "fast":  # and the confrontation / summary normally on the smart one
         brain.client = brain.fast_client
-    report = run_bench(brain, args.runs, only, assessor=assessor)
+    for client in {id(c): c for c in (brain.client, brain.fast_client, assessor.client) if c}.values():
+        if getattr(client, "no_think", None) == "auto":
+            client.probe()     # decide chat or raw before any timing starts
+    router = owner.OwnerRouter(brain.client if args.force == "smart" else brain.fast_client,
+                               cfg["model"] if args.force == "smart" else brain.fast_model, log=lambda _m: None)
+    report = run_bench(brain, args.runs, only, assessor=assessor, router=router)
     report["meta"] = {
         "date": datetime.now().astimezone().isoformat(timespec="minutes"),
         "model": cfg["model"], "fast_model": cfg.get("fast_model") or cfg["model"],
         "force": args.force, "profile": cfg["profile"],
         "reasoning_effort": cfg.get("reasoning_effort"), "prompts": brain.prompt_profile,
         "machine": f"{platform.system()} {platform.release()} ({platform.machine()})",
+        "thinking": brain.thinking_report(assessor.client),
         "runs": args.runs, "command": "python -m brain.bench " + " ".join(argv or sys.argv[1:]),
     }
     md = to_markdown(report)
@@ -452,7 +523,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         out.mkdir(parents=True, exist_ok=True)
         model_slug = re.sub(r'[^a-z0-9]+', '-', cfg['model'].lower()).strip('-')
         stem = f"{datetime.now():%Y-%m-%d-%H%M}-{model_slug}-prompts-{brain.prompt_profile}" + (
-            f"-force-{args.force}" if args.force else "")
+            f"-force-{args.force}" if args.force else "") + (
+            f"-nothink-{args.no_think}" if args.no_think else "") + (
+            f"-effort-{args.reasoning_effort}" if args.reasoning_effort else "")
         (out / f"{stem}.md").write_text(md, encoding="utf-8")
         (out / f"{stem}.json").write_text(json.dumps(report, indent=1, ensure_ascii=False), encoding="utf-8")
         print(f"Saved {out / stem}.md and .json")

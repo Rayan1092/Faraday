@@ -470,7 +470,8 @@ class BuiltApp(unittest.TestCase):
         args = argparse.Namespace(fake=True, log=str(tmp / "events.jsonl"), standin_camera=True,
                                   print_speech=True, offline=True, mode=Mode.HOME,
                                   no_dashboard=False, port=0, no_mic=False, no_wake=True,
-                                  no_controls=True, controls_port=None, fresh=False)
+                                  no_controls=True, controls_port=None, fresh=False,
+                                  no_detect=True)
         app = build_app(args, s)
         board = app.board
         self.assertIsNotNone(board.listening_hook)
