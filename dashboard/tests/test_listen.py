@@ -1,5 +1,6 @@
-"""Listen button (replaces push-to-talk): one tap opens one listening window through
-integration's listen_hook, and a subtle indicator shows while the mic is open."""
+"""The mic indicator: a small green mic while integration's listening window is open.
+There is no Listen button (owner 2026-11-14/15: "Hey Faraday" and the doorbell open
+the mic), so /api/listen and /api/talk are gone."""
 import json
 import tempfile
 import unittest
@@ -17,7 +18,7 @@ from modes import ModeState
 SECRET = "silver otter lantern"
 
 
-class Listen(unittest.TestCase):
+class MicIndicator(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         p = Pipeline(Brain(None, SECRET, log=lambda _m: None), ModeState(SECRET),
@@ -34,36 +35,16 @@ class Listen(unittest.TestCase):
                                      headers={"Content-Type": "application/json", "X-Faraday": "1"})
         try:
             with urllib.request.urlopen(req, timeout=5) as r:
-                return r.status, json.loads(r.read())
+                return r.status
         except urllib.error.HTTPError as e:
-            return e.code, json.loads(e.read())
+            return e.code
 
-    def test_hidden_and_refused_without_the_hook(self):
+    def test_listen_routes_are_gone(self):
+        self.assertEqual((self.post("/api/listen"), self.post("/api/talk")), (404, 404))
         s = self.board.state()
-        self.assertEqual((s["listen_available"], s["listening"]), (False, None))
-        self.assertEqual(self.post("/api/listen")[0], 503)
-
-    def test_one_tap_opens_one_window(self):
-        windows = []
-
-        def listen_once():
-            if windows:
-                return False          # NV's hook: False while a window is already open
-            windows.append(1)
-            return True
-        self.board.listen_hook = listen_once
-        self.assertTrue(self.board.state()["listen_available"])
-        self.assertEqual(self.post("/api/listen"), (200, {"ok": True, "opened": True}))
-        self.assertEqual(self.post("/api/listen"), (200, {"ok": True, "opened": False}))
-        self.assertEqual(windows, [1])
-
-    def test_old_talk_route_and_hook_still_work(self):
-        calls = []
-        self.board.talk_hook = lambda: calls.append(1)      # returns None: counts as opened
-        self.assertTrue(self.board.state()["talk_available"])
-        self.assertEqual(self.post("/api/talk"), (200, {"ok": True, "opened": True}))
-        self.assertEqual(self.post("/api/listen")[1]["opened"], True)
-        self.assertEqual(calls, [1, 1])
+        self.assertNotIn("listen_available", s)
+        self.assertIsNone(s["listening"])                    # no hook: unknown, indicator off
+        self.assertIsNone(self.board.listen_hook)            # NV's test checks it stays unset
 
     def test_mic_open_follows_integration(self):
         mic = {"open": False}
@@ -79,14 +60,13 @@ class Listen(unittest.TestCase):
 
 
 class Page(unittest.TestCase):
-    def test_listen_replaces_push_to_talk(self):
+    def test_no_listen_button_and_the_indicator_never_guesses(self):
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         js = (STATIC_DIR / "dashboard.js").read_text(encoding="utf-8")
-        self.assertIn('id="btn-listen"', html)
-        self.assertNotIn("btn-talk", html + js)
+        for gone in ("btn-listen", "btn-talk", "/api/listen", "/api/talk"):
+            self.assertNotIn(gone, html + js)
         self.assertIn('id="mic-open"', html)
-        self.assertIn('post("/api/listen"', js)
-        self.assertIn("s.listening === true", js)
+        self.assertIn("s.listening !== true", js)
 
 
 if __name__ == "__main__":

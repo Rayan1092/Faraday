@@ -1,0 +1,482 @@
+{
+ "cases": [
+  {
+   "name": "t_delivery",
+   "title": "Threat, away doorbell: courier with a box",
+   "runs": 3,
+   "model_right": 3,
+   "model_runs": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 3.23,
+   "worst_s": 4.35,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 4.35,
+     "role": "fast",
+     "result": "delivery: 1 person, holding a box",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.65,
+     "role": "fast",
+     "result": "delivery: 1 person, holding a box",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.7,
+     "role": "fast",
+     "result": "delivery: 1 person, holding a box",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "t_visitor",
+   "title": "Threat, away doorbell: woman waving, no package",
+   "runs": 3,
+   "model_right": 3,
+   "model_runs": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 3.03,
+   "worst_s": 3.67,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.67,
+     "role": "fast",
+     "result": "visitor: woman waving and smiling at the doorbell",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.62,
+     "role": "fast",
+     "result": "visitor: woman waving from outside door",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.8,
+     "role": "fast",
+     "result": "visitor: woman waving at camera, doorbell rang recently",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "t_masked",
+   "title": "Threat, night motion: masked man trying the handle",
+   "runs": 3,
+   "model_right": 3,
+   "model_runs": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 3.21,
+   "worst_s": 3.76,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.76,
+     "role": "fast",
+     "result": "suspicious: man wearing ski mask trying door handle",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.99,
+     "role": "fast",
+     "result": "suspicious: man in ski mask trying door handle, no bell rung",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.87,
+     "role": "fast",
+     "result": "suspicious: man hiding with ski mask trying door handle at night",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "t_prowler",
+   "title": "Threat, night motion: man lingering by the window, no ring",
+   "runs": 3,
+   "model_right": 3,
+   "model_runs": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 3.32,
+   "worst_s": 3.97,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.97,
+     "role": "fast",
+     "result": "suspicious: person hiding beside window, motion detected but no doorbell ring",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.91,
+     "role": "fast",
+     "result": "suspicious: person hiding beside window without ringing doorbell at night",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.07,
+     "role": "fast",
+     "result": "suspicious: person hiding, standing still beside window at night without ringing doorbell",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "t_nobody",
+   "title": "Threat, away motion: empty porch",
+   "runs": 3,
+   "model_right": 3,
+   "model_runs": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 3.03,
+   "worst_s": 3.84,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.84,
+     "role": "fast",
+     "result": "nobody: no person in view",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.6,
+     "role": "fast",
+     "result": "nobody: no person in view",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.66,
+     "role": "fast",
+     "result": "nobody: no person in view",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "t_empty_doorway",
+   "title": "Honest label: empty doorway (detector: 0 people)",
+   "runs": 3,
+   "model_right": 0,
+   "model_runs": 0,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 0.0,
+   "worst_s": 0.0,
+   "role": "code",
+   "samples": [
+    {
+     "model_ok": null,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 0.0,
+     "role": "code",
+     "result": "nobody: No person detected.",
+     "dropped": []
+    },
+    {
+     "model_ok": null,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 0.0,
+     "role": "code",
+     "result": "nobody: No person detected.",
+     "dropped": []
+    },
+    {
+     "model_ok": null,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 0.0,
+     "role": "code",
+     "result": "nobody: No person detected.",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "t_box_person",
+   "title": "Honest label: person with a box who rang",
+   "runs": 3,
+   "model_right": 3,
+   "model_runs": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 3.24,
+   "worst_s": 3.97,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.97,
+     "role": "fast",
+     "result": "delivery: One person holding a cardboard box at the front door",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.8,
+     "role": "fast",
+     "result": "delivery: One person holding a cardboard box at the front door",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.94,
+     "role": "fast",
+     "result": "delivery: One person holding a cardboard box at the front door",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "t_plain_visitor",
+   "title": "Honest label: plain visitor who rang",
+   "runs": 3,
+   "model_right": 3,
+   "model_runs": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 3.26,
+   "worst_s": 4.06,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 4.06,
+     "role": "fast",
+     "result": "visitor: rang the doorbell and waved at the camera",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.82,
+     "role": "fast",
+     "result": "visitor: rang the doorbell and waved at the camera",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.9,
+     "role": "fast",
+     "result": "visitor: rang the doorbell and waved at the camera",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "t_hood_covered",
+   "title": "Honest label: hood up, face covered, no ring (night)",
+   "runs": 3,
+   "model_right": 3,
+   "model_runs": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 3.51,
+   "worst_s": 4.42,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 4.42,
+     "role": "fast",
+     "result": "suspicious: face covered, hood up, standing close to door at night without ringing",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.03,
+     "role": "fast",
+     "result": "suspicious: face covered, hood up, standing close to door at night",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.09,
+     "role": "fast",
+     "result": "suspicious: face covered, hood up, standing close to door at night",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "t_vision_failed",
+   "title": "Honest label: vision failed (detector text only)",
+   "runs": 3,
+   "model_right": 0,
+   "model_runs": 0,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 0.0,
+   "worst_s": 0.0,
+   "role": "code",
+   "samples": [
+    {
+     "model_ok": null,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 0.0,
+     "role": "code",
+     "result": "unknown: Couldn't analyse the photo, the detector saw 1 person.",
+     "dropped": []
+    },
+    {
+     "model_ok": null,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 0.0,
+     "role": "code",
+     "result": "unknown: Couldn't analyse the photo, the detector saw 1 person.",
+     "dropped": []
+    },
+    {
+     "model_ok": null,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 0.0,
+     "role": "code",
+     "result": "unknown: Couldn't analyse the photo, the detector saw 1 person.",
+     "dropped": []
+    }
+   ]
+  }
+ ],
+ "meta": {
+  "date": "2026-11-15T02:21-05:00",
+  "model": "ternary-bonsai-2-4b@q2_0",
+  "fast_model": "ternary-bonsai-2-4b@q2_0",
+  "force": null,
+  "profile": "nv_backup",
+  "reasoning_effort": "none",
+  "prompts": "small",
+  "machine": "Windows 11 (AMD64)",
+  "thinking": [
+   {
+    "model": "ternary-bonsai-2-4b@q2_0",
+    "no_think": "auto",
+    "uses": "chat",
+    "probe": "chat",
+    "thinking_seen": 0
+   },
+   {
+    "model": "ternary-bonsai-2-4b@q2_0",
+    "no_think": "auto",
+    "uses": "chat",
+    "probe": "chat",
+    "thinking_seen": 0
+   }
+  ],
+  "runs": 3,
+  "command": "python -m brain.bench --runs 3 --only t_empty_doorway,t_box_person,t_plain_visitor,t_hood_covered,t_vision_failed,t_delivery,t_visitor,t_masked,t_prowler,t_nobody"
+ }
+}

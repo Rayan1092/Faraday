@@ -1,4 +1,4 @@
-"""Real photos appear as soon as they're saved; stage-backup sensor buttons."""
+"""Real photos appear as soon as they're saved; no demo-only buttons on the page."""
 import json
 import os
 import tempfile
@@ -14,6 +14,7 @@ from shared import ActionType, Source, make_action
 from brain import Brain
 from brain.pipeline import Pipeline
 from dashboard import Dashboard
+from dashboard.server import STATIC_DIR
 from dashboard.photos import PhotoWatcher
 from dashboard.state import build_state
 from log import EventLog
@@ -77,47 +78,40 @@ class Watcher(unittest.TestCase):
         self.assertIsNone(missing.newest())
 
 
-class SensorButtons(unittest.TestCase):
+class NoDemoButtons(unittest.TestCase):
+    """Owner 2026-11-15: the real product, not a demo build. No "Ring doorbell", "Motion"
+    or typed-speech buttons, no menu holding them, and no routes behind them."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         d = Path(self.tmp.name)
         brain = Brain(None, SECRET, log=lambda _m: None)
         self.pipeline = Pipeline(brain, ModeState(SECRET), EventLog(d / "e.jsonl", SECRET),
-                                 say=lambda _m: None, rules=RuleStore(d / "r.json"))
+                                 say=lambda _m: None)
         self.board = Dashboard(self.pipeline, "127.0.0.1", 0).start()
+        self.base = self.board.url.rstrip("/")
 
     def tearDown(self):
         self.board.stop()
         self.tmp.cleanup()
 
-    def post(self, body):
-        req = urllib.request.Request(self.board.url + "api/sensor", data=json.dumps(body).encode(),
-                                     method="POST", headers={"X-Faraday": "1"})
-        try:
-            with urllib.request.urlopen(req, timeout=5) as r:
-                return r.status
-        except urllib.error.HTTPError as e:
-            return e.code
+    def test_routes_are_gone(self):
+        for path, body in (("/api/sensor", {"type": "doorbell"}), ("/api/sensor", {"type": "motion"}),
+                           ("/api/say", {"text": "Faraday, disarm"})):
+            req = urllib.request.Request(self.base + path, data=json.dumps(body).encode(), method="POST",
+                                         headers={"Content-Type": "application/json", "X-Faraday": "1"})
+            with self.assertRaises(urllib.error.HTTPError, msg=path) as ctx:
+                urllib.request.urlopen(req, timeout=5)
+            self.assertEqual(ctx.exception.code, 404, path)
+        self.assertEqual(self.pipeline.log.recent(10), [])    # nothing reached the pipeline
 
-    def wait_for(self, kind):
-        for _ in range(60):
-            found = [e for e in self.pipeline.log.recent(50) if e["type"] == kind]
-            if found:
-                return found
-            time.sleep(0.05)
-        return []
+    def test_page_has_no_demo_controls(self):
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        js = (STATIC_DIR / "dashboard.js").read_text(encoding="utf-8")
+        for gone in ("btn-ring", "btn-motion", "say-form", "btn-backup", "Stage backup", "/api/sensor",
+                     "/api/say", 'id="net"', "ONLINE", "OFFLINE"):
+            self.assertNotIn(gone, html + js, gone)
 
-    def test_doorbell_and_motion_buttons(self):
-        self.pipeline.owner_set_mode("away")
-        self.assertEqual(self.post({"type": "motion"}), 202)
-        self.assertTrue(self.wait_for("motion"))                     # same path as the radio
-        self.pipeline.tick(force=True)                               # no doorbell: the warning
-        self.assertTrue(self.wait_for("alert_changed"))
-        self.assertEqual(self.post({"type": "doorbell"}), 202)
-        bell = self.wait_for("doorbell")
-        self.assertEqual(bell[0]["source"], Source.DASHBOARD)        # honest in the log
-        self.assertEqual(bell[0]["data"]["key"], "0x00DEC608")
-        self.assertEqual(self.post({"type": "disarm"}), 400)
 
 if __name__ == "__main__":
     unittest.main()

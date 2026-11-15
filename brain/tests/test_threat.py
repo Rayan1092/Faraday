@@ -34,6 +34,143 @@ def classify(category, reason="because"):
     return tool_calls(("classify", {"category": category, "reason": reason}))
 
 
+PERSON1 = [{"label": "person", "count": 1, "confidence": 0.92}]
+
+
+def seen(description, cause="doorbell", doorbells=1, people=1, faces=1, detections=None,
+         vision_ok=True, mode=Mode.AWAY):
+    """A context like NV's camera gives: the 9B's description plus the detector's counts."""
+    return threat.Context(description, mode, cause=cause, doorbells=doorbells,
+                          when=datetime(2026, 11, 14, 15, 0), people=people, faces=faces,
+                          detections=PERSON1 if detections is None else detections, vision_ok=vision_ok)
+
+
+class Honest(unittest.TestCase):
+    """Owner 2026-11-15: grounded and honest. Zero people detected is always nobody, a
+    failed vision is "unknown" (never a guess), and the reason names what was seen."""
+
+    def test_the_four_bench_scenes(self):
+        empty = seen("Nobody is there.", cause="motion", doorbells=0, people=0, faces=0, detections=[])
+        box = seen("One person holding a cardboard box at the door.")
+        plain = seen("A woman in a red coat waving at the camera.")
+        hood = seen("A person with the hood up and face covered standing at the door.", cause="motion",
+                    doorbells=0, faces=0, detections=PERSON1 + [{"label": "backpack", "count": 1, "confidence": 0.5}])
+        self.assertEqual(threat.rules(empty), (C.NOBODY, "No person detected."))
+        self.assertEqual(threat.rules(box), (C.DELIVERY, "1 person, holding a box, rang the doorbell."))
+        self.assertEqual(threat.rules(plain), (C.VISITOR, "1 person, rang the doorbell."))
+        self.assertEqual(threat.rules(hood), (C.SUSPICIOUS, "1 person, backpack, face covered."))
+
+    def test_zero_people_is_nobody_whatever_the_words_and_no_model(self):
+        client = FakeClient(classify("visitor", "a man at the door"))
+        a = threat.ThreatAssessor(client, "fast", log=lambda _m: None).assess(
+            seen("A man in a hoodie at the door.", people=0, faces=0,
+                 detections=[{"label": "car", "count": 1, "confidence": 0.7}]))
+        self.assertEqual((a.category, a.via, client.calls), (C.NOBODY, "rules", []))
+        self.assertEqual(a.reason, "No person detected, car in view.")
+
+    def test_vision_failed_is_unknown_never_a_guess(self):
+        client = FakeClient(classify("visitor", "someone"))
+        a = threat.ThreatAssessor(client, "fast", log=lambda _m: None).assess(
+            seen("One person is at the door.", vision_ok=False))
+        self.assertEqual((a.category, a.via, client.calls), (C.UNKNOWN, "rules", []))
+        self.assertEqual(a.reason, "Couldn't analyse the photo, the detector saw 1 person.")
+        self.assertEqual(threat.rules(seen("Photo saved.", people=None, detections=[], vision_ok=False))[0],
+                         C.UNKNOWN)
+
+    def test_from_the_real_event(self):
+        """context_for reads NV's fields; "detector" and a bare camera photo mean vision failed."""
+        from shared.events import PhotoDescribedData
+        bell = events.doorbell()
+        shot = make_action(ActionType.TAKE_PHOTO, {"reason": "doorbell while away"}, Source.RULES,
+                           caused_by=bell.id)
+        recent = [bell.to_dict(), shot.to_dict()]
+
+        def photo(by, source=Source.VISION, desc="One person is at the door."):
+            return make_event(EventType.PHOTO_DESCRIBED, PhotoDescribedData(
+                photo_path="captures/photos/x.jpg", description=desc, described_by=by, people=1, faces=1,
+                detections=PERSON1), source, caused_by=shot.id)
+        c = threat.context_for(photo("bonsai"), Mode.AWAY, recent)
+        self.assertEqual((c.people, c.faces, c.detections, c.vision_ok), (1, 1, PERSON1, True))
+        self.assertFalse(threat.context_for(photo("detector"), Mode.AWAY, recent).vision_ok)
+        bare = make_event(EventType.PHOTO_DESCRIBED, PhotoDescribedData(photo_path="captures/photos/x.jpg",
+                                                                        description="Photo saved."),
+                          Source.CAMERA, caused_by=shot.id)
+        self.assertEqual(threat.rules(threat.context_for(bare, Mode.AWAY, recent))[0], C.UNKNOWN)
+        self.assertTrue(threat.context_for(events.photo_described(shot.id), Mode.AWAY, recent).vision_ok)
+
+    def test_code_checks_the_model(self):
+        check = lambda cat, why, c: threat.check(cat, why, c)  # noqa: E731
+        box = seen("One person holding a cardboard box at the door.")
+        self.assertEqual(check(C.NOBODY, "empty", box)[0], C.DELIVERY)           # a person is detected
+        self.assertEqual(check(C.UNKNOWN, "can't tell", box)[0], C.DELIVERY)     # unknown is code's alone
+        self.assertEqual(check(C.DELIVERY, "because", box)[1], "1 person, holding a box, rang the doorbell.")
+        self.assertEqual(check(C.DELIVERY, "Holding a parcel, rang the bell", box)[1],
+                         "Holding a parcel, rang the bell")                      # grounded: kept
+        self.assertNotIn("unknown", threat.TOOL["function"]["parameters"]["properties"]["category"]["enum"])
+
+    def test_the_model_sees_the_detector(self):
+        hood = seen("A person with the hood up.", cause="motion", doorbells=0, faces=0)
+        self.assertIn("Object detector: 1 person\n", threat.prompt(hood))     # 0 faces: can't tell
+
+    def test_review_hidden_face_that_rang_is_not_a_plain_visitor(self):
+        for words in ("One person with the hood up, face not visible.", "A man, his face hidden by a scarf.",
+                      "A person with a scarf over their face."):
+            c = seen(words)
+            self.assertEqual(threat.rules(c)[0], C.SUSPICIOUS, words)
+            self.assertEqual(threat.check(C.SUSPICIOUS, "face not visible", c)[0], C.SUSPICIOUS, words)
+        self.assertIsNone(threat.STRONG.search("face not visible"))     # no early confrontation for it
+
+    def test_review_stayed_without_ringing_is_enforced(self):
+        c = seen("A person with the hood up at the door.", cause="motion", doorbells=0)
+        self.assertEqual(threat.check(C.VISITOR, "Visitor at the door", c)[0], C.SUSPICIOUS)
+
+    def test_review_no_invented_facts(self):
+        courier = seen("A courier in a uniform at the door.")
+        self.assertEqual(threat.rules(courier), (C.DELIVERY, "1 person, a courier, rang the doorbell."))
+        plain = seen("A woman in a red coat waving at the camera.")
+        cat, why, note = threat.check(C.DELIVERY, "Likely a delivery", plain)
+        self.assertEqual((cat, why), (C.VISITOR, "1 person, rang the doorbell."))
+        self.assertIn("rules decided", note)
+        self.assertNotIn("package", why)
+
+    def test_review_grounded_means_seen_or_true_context(self):
+        c = seen("One person holding a cardboard box at the door.")
+        for good in ("Holding a box", "Rang the doorbell", "Cardboard box in hand"):
+            self.assertTrue(threat.grounded(good, c), good)
+        for bad in ("The door is closed", "1", "one", "It is night", "camera", "Probably a burglar at the door",
+                    "Stayed without ringing"):
+            self.assertFalse(threat.grounded(bad, c), bad)
+        quiet = seen("A man in a hoodie at the door.", cause="motion", doorbells=0)
+        self.assertTrue(threat.grounded("Stayed without ringing", quiet))
+        self.assertTrue(threat.grounded("No doorbell, lingering while armed", quiet))
+        self.assertFalse(threat.grounded("Rang the bell", quiet))       # no ring happened
+        empty = threat.Context("An empty porch with a doormat. No one is visible.", Mode.AWAY, cause="motion")
+        self.assertTrue(threat.grounded("No one visible.", empty))
+        self.assertFalse(threat.grounded("No one visible.", c))         # a person is there
+
+    def test_review_a_seen_face_is_a_person(self):
+        self.assertEqual(threat.rules(seen("A face at the door.", people=0, faces=1))[0], C.VISITOR)
+
+    def test_review_plurals_and_weapons_first(self):
+        c = seen("x", detections=[{"label": "person", "count": 1, "confidence": 0.9},
+                                  {"label": "backpack", "count": 2, "confidence": 0.8},
+                                  {"label": "umbrella", "count": 1, "confidence": 0.7},
+                                  {"label": "bench", "count": 1, "confidence": 0.6},
+                                  {"label": "knife", "count": 2, "confidence": 0.3}])
+        self.assertEqual(threat.facts(c), "1 person, 2 knives, 2 backpacks, umbrella")
+
+    def test_review_faces_in_the_prompt_only_when_seen(self):
+        self.assertNotIn("faces visible", threat.prompt(seen("A person far away.", faces=0)))
+        self.assertIn("faces visible: 1", threat.prompt(seen("A person close up.", faces=1)))
+
+    def test_unknown_is_a_valid_event_and_shown(self):
+        photo = events.photo_described(None)
+        ev = threat.event_for(threat.Assessment(C.UNKNOWN, "Couldn't analyse the photo.", "rules"), photo)
+        self.assertEqual(validate_event(ev.to_dict()), [])
+        from dashboard.state import THREAT_NAMES
+        self.assertEqual(THREAT_NAMES[C.UNKNOWN], "Unknown")
+
+
 class Rules(unittest.TestCase):
     def test_categories(self):
         self.assertEqual(threat.rules(ctx(BOX))[0], C.DELIVERY)
@@ -66,7 +203,7 @@ class Parsing(unittest.TestCase):
         self.assertEqual(cat, C.VISITOR)
         self.assertIn("rejected nobody", note)
         cat, reason, note = threat.check(C.VISITOR, '{"x": 1}', ctx(COAT))
-        self.assertEqual((cat, note), (C.VISITOR, ""))
+        self.assertEqual((cat, note), (C.VISITOR, "code wrote the reason"))
         self.assertNotIn("{", reason)                       # junk reason replaced by the rule's
         _, reason, _ = threat.check(C.VISITOR, "word " * 80, ctx(COAT))
         self.assertLessEqual(len(reason), threat.REASON_MAX)
@@ -211,6 +348,7 @@ class PipelineEffects(unittest.TestCase):
         self.assertEqual((p.modes.mode, p.modes.alert), before)
         offs = [a for a in self.emitted if a.type in (ActionType.OUTLET_OFF, ActionType.SET_MODE)]
         self.assertEqual(offs, [])
+        p.wait_background(5)     # the confrontation thread is done before the temp dir goes
 
 
 class Shown(unittest.TestCase):

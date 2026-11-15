@@ -120,7 +120,8 @@ class ThreatCategory:
     VISITOR = "visitor"
     SUSPICIOUS = "suspicious"
     NOBODY = "nobody"
-    ALL = frozenset({DELIVERY, VISITOR, SUSPICIOUS, NOBODY})
+    UNKNOWN = "unknown"        # the photo couldn't be analysed (vision failed): never a guess
+    ALL = frozenset({DELIVERY, VISITOR, SUSPICIOUS, NOBODY, UNKNOWN})
 
 
 THREAT_VIA = frozenset({"bonsai", "rules"})

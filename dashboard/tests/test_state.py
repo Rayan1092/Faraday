@@ -56,7 +56,8 @@ class Feed(unittest.TestCase):
     def test_empty_log(self):
         s = self.state()
         self.assertEqual((s["feed"], s["talk"], s["photo"], s["summary"]), ([], [], None, None))
-        self.assertTrue(s["offline"])
+        self.assertNotIn("offline", s)      # no network badge: a real home has Wi-Fi
+        self.assertIsNone(s["recording"])
         self.assertEqual([l["on"] for l in s["lights"]], [False, False, False])
         json.dumps(s)  # must be JSON-serialisable
 
