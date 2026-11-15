@@ -4,14 +4,13 @@ Serves the page and its assets from dashboard/static/, the live state as JSON,
 and photos from captures/. Buttons post back to the pipeline:
 - Away / Night  -> pipeline.owner_set_mode()
 - Home          -> pipeline.owner_passphrase(), the only way to disarm
-- text box      -> a speech_heard event (backup if the mic or STT fails)
 - light switch  -> integration's control_hook (outlet_on/off, source dashboard)
 - Snapshot      -> pipeline.owner_snapshot() (take_photo, source dashboard)
-- Listen        -> integration's listen_hook (opens one listening window)
 
-/controls is the phone-style Controls page. Its live camera and intercom come from
-integration's controls server on dashboard port + 1 (PLAN Q27); `controls_port` in
-/api/state tells the page where that is.
+The live camera (with the detector's boxes) and the Controls page's intercom come
+from integration's controls server on dashboard port + 1 (PLAN Q27); `controls_port`
+in /api/state tells the pages where that is. There are no sensor or typed-speech
+buttons: the product only acts on the real sensors and the mic.
 
 Safety:
 - POSTs must carry the header "X-Faraday: 1". Browsers won't send a custom header
@@ -31,12 +30,11 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
-from shared import EventType, Mode, Outlet, Source, make_event
+from shared import Mode, Outlet
 
 from brain.pipeline import snapshot_action
 from rules import instructions as owner_instructions
 
-from .netcheck import NetCheck
 from .photos import PhotoWatcher
 from .state import build_state
 
@@ -80,15 +78,11 @@ class Dashboard:
         self.pipeline = pipeline
         self.colors = colors
         self.limiter = PassphraseLimiter()
-        self.netcheck = NetCheck()
         self.photos = PhotoWatcher(MEDIA_DIR / "photos", REPO_ROOT)
-        self.sensor_keys = {"doorbell": "0x00DEC608", "motion": "0x00C5AFAE"}
-        # integration/ sets these (PLAN Q26). listen_hook() -> bool opens one listening
-        # window (the Listen button); talk_hook is the old name for the same thing.
-        # listening_hook() -> bool, optional, says whether the mic is open right now.
-        self.listen_hook: Optional[Any] = None
-        self.talk_hook: Optional[Any] = None
+        # integration/ sets this (PLAN Q26): listening_hook() -> bool, optional, says
+        # whether the mic is open right now (the mic indicator).
         self.listening_hook: Optional[Any] = None
+        self.listen_hook: Optional[Any] = None   # the Listen button is gone; stays unset
         # integration/ sets this (PLAN Q26): control_hook(outlet, on) -> bool switches a
         # light through its dispatcher and logs it with source "dashboard".
         self.control_hook: Optional[Any] = None
@@ -105,10 +99,6 @@ class Dashboard:
                     cfg.get("port", 8080) if port is None else port)
         if settings.get("controls", {}).get("port"):
             board._controls_port = int(settings["controls"]["port"])
-        for name in board.sensor_keys:
-            key = settings.get("sensors", {}).get(name, {}).get("key")
-            if key:
-                board.sensor_keys[name] = key
         return board
 
     @property
@@ -137,9 +127,7 @@ class Dashboard:
         p = self.pipeline
         rules = p.rules.all() if getattr(p, "rules", None) is not None else []
         state = build_state(p.log.recent(500), p.modes.mode, p.modes.alert, rules, self.colors,
-                            network=self.netcheck.status(), newest_photo=self.photos.newest())
-        listen = self._listen_fn()
-        state["listen_available"] = state["talk_available"] = listen is not None
+                            newest_photo=self.photos.newest())
         state["listening"] = self._listening()
         state["control_available"] = self.control_hook is not None
         state["controls_port"] = self.controls_port
@@ -180,9 +168,6 @@ class Dashboard:
         changed = bool(self.control_hook(outlet, on))
         return 200, {"ok": True, "changed": changed}
 
-    def _listen_fn(self) -> Optional[Any]:
-        return self.listen_hook or self.talk_hook
-
     def _listening(self) -> Optional[bool]:
         """True/False from integration's listening_hook, None if it isn't set."""
         if self.listening_hook is None:
@@ -191,15 +176,6 @@ class Dashboard:
             return bool(self.listening_hook())
         except Exception:
             return None
-
-    def listen(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
-        """Listen button: one listening window. integration's hook returns at once
-        (False if a window is already open)."""
-        hook = self._listen_fn()
-        if hook is None:
-            return 503, {"ok": False, "error": "The microphone isn't connected."}
-        opened = hook()
-        return 200, {"ok": True, "opened": True if opened is None else bool(opened)}
 
     def set_mode(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
         mode = body.get("mode")
@@ -220,28 +196,6 @@ class Dashboard:
             return 403, {"ok": False, "error": "Wrong passphrase."}
         return 200, {"ok": True, "mode": self.pipeline.modes.mode}
 
-    def say(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
-        text = str(body.get("text", "")).strip()[:500]
-        if not text:
-            return 400, {"ok": False, "error": "Type something first."}
-        event = make_event(EventType.SPEECH_HEARD, {"text": text}, Source.DASHBOARD)
-        # Bonsai can take seconds: answer the browser now, the feed shows the result.
-        threading.Thread(target=self.pipeline.handle, args=(event,), daemon=True).start()
-        return 202, {"ok": True}
-
-    def sensor(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
-        """Stage backup: the same doorbell/motion event the Flipper would send, marked
-        source "dashboard" in the log so nobody is fooled."""
-        kind = body.get("type")
-        if kind not in self.sensor_keys:
-            return 400, {"ok": False, "error": "type must be doorbell or motion"}
-        data = {"key": self.sensor_keys[kind]}
-        if kind == "motion":
-            data.update(packets=17, duration_ms=1960)
-        event = make_event(kind, data, Source.DASHBOARD)
-        threading.Thread(target=self.pipeline.handle, args=(event,), daemon=True).start()
-        return 202, {"ok": True}
-
     def delete_rule(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
         rules = getattr(self.pipeline, "rules", None)
         ok = rules is not None and rules.remove(str(body.get("id", "")))
@@ -250,9 +204,7 @@ class Dashboard:
 
 def _make_handler(app: Dashboard):
     posts = {"/api/mode": app.set_mode, "/api/home": app.go_home,
-             "/api/say": app.say, "/api/rules/delete": app.delete_rule,
-             "/api/sensor": app.sensor, "/api/listen": app.listen,
-             "/api/talk": app.listen,   # old name for Listen
+             "/api/rules/delete": app.delete_rule,
              "/api/control": app.control,
              "/api/snapshot": app.snapshot, "/api/instructions/delete": app.delete_instruction}
 
