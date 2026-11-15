@@ -48,6 +48,16 @@ LM Studio continues a trailing assistant message, so the model starts after its 
 - **Text calls:** Dell's probe sends "Say OK." and switches to the raw `/v1/completions` no-think prompt if the model thinks. On this laptop the raw path answers "OK" in 0.3 s with no thinking, and the auto path picks chat because GGUF honours reasoning_effort. Not yet known on the Mac: whether LM Studio serves `/v1/completions` for MLX models. The check prints a verdict for the 9B and the 2B. If it says PROBLEM, the template line fixes chat for both.
 - **`brain/vision.py` `Describer`:** sends images through chat with up to 300 tokens, so it would think on the Mac. Nothing in the product calls it; the product uses `hardware/vision.py`. Noted for Dell in PLAN Q39.
 
+## Review fixes (four fresh reviews before merging)
+
+- A photo never waits behind another probe: the detector describes it instead. Any probe the server answered with nothing usable rests a minute. A refused or timed-out connection gets no rest, so vision is back with the server (crash-safety test).
+- The "thinks before every answer" verdict, with its template fix, comes only when every reply was real thinking. Not after a timeout, a server error or an over-long answer.
+- A reply that hit the 120-token cap gives only its real whole sentences, and only if none reads like reasoning ("I should", "but wait", "the prompt"…). An empty capped reply counts as hidden thinking. An over-long answer never drops a working strategy.
+- The 400 retry (no extra fields) works for every strategy and keeps `reasoning_effort` unless the error names it.
+- `check vision` keeps the 9B unless only the 4B makes 5 s, and prints TOO LONG apart from THINKS.
+- The startup line and the skip warnings give the real reason, once per rest.
+- Dell's `nv-test-rehearsal-facts-only.patch` (PLAN Q41) is applied: the "who's at the door" answer is facts only now.
+
 ## On the Mac
 
 - Settings: under `"llm"`, `"vision_max_tokens": 120,` (it was 768 in my earlier settings note). This is in MAC_TEST.md as edit 3.
