@@ -5,6 +5,7 @@ and photos from captures/. Buttons post back to the pipeline:
 - Away / Night  -> pipeline.owner_set_mode()
 - Home          -> pipeline.owner_passphrase(), the only way to disarm
 - text box      -> a speech_heard event (backup if the mic or STT fails)
+- light switch  -> integration's control_hook (outlet_on/off, source dashboard)
 
 Safety:
 - POSTs must carry the header "X-Faraday: 1". Browsers won't send a custom header
@@ -24,7 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
-from shared import EventType, Mode, Source, make_event
+from shared import EventType, Mode, Outlet, Source, make_event
 
 from .netcheck import NetCheck
 from .photos import PhotoWatcher
@@ -75,6 +76,9 @@ class Dashboard:
         self.sensor_keys = {"doorbell": "0x00DEC608", "motion": "0x00C5AFAE"}
         # integration/ can set this to start/stop push-to-talk recording from the page.
         self.talk_hook: Optional[Any] = None
+        # integration/ sets this (PLAN Q26): control_hook(outlet, on) -> bool switches a
+        # light through its dispatcher and logs it with source "dashboard".
+        self.control_hook: Optional[Any] = None
         self.httpd = ThreadingHTTPServer((host, port), _make_handler(self))
         self.httpd.daemon_threads = True
         self._thread: Optional[threading.Thread] = None
@@ -114,7 +118,20 @@ class Dashboard:
         state = build_state(p.log.recent(500), p.modes.mode, p.modes.alert, rules, self.colors,
                             network=self.netcheck.status(), newest_photo=self.photos.newest())
         state["talk_available"] = self.talk_hook is not None
+        state["control_available"] = self.control_hook is not None
         return state
+
+    def control(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+        """A light switch on the page: {"outlet": "porch_light", "on": true}. Integration
+        sends it and logs it; the Lights panel then follows the log, so it shows the
+        real state, not what the button hoped for."""
+        outlet, on = body.get("outlet"), body.get("on")
+        if outlet not in Outlet.ALL or not isinstance(on, bool):
+            return 400, {"ok": False, "error": "Send an outlet name and on: true or false."}
+        if self.control_hook is None:
+            return 503, {"ok": False, "error": "The light switches aren't connected."}
+        changed = bool(self.control_hook(outlet, on))
+        return 200, {"ok": True, "changed": changed}
 
     def talk(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
         """Push-to-talk from the dashboard: calls integration's hook on a thread."""
@@ -173,7 +190,7 @@ class Dashboard:
 def _make_handler(app: Dashboard):
     posts = {"/api/mode": app.set_mode, "/api/home": app.go_home,
              "/api/say": app.say, "/api/rules/delete": app.delete_rule,
-             "/api/sensor": app.sensor, "/api/talk": app.talk}
+             "/api/sensor": app.sensor, "/api/talk": app.talk, "/api/control": app.control}
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "Faraday"
