@@ -107,6 +107,7 @@ def build_app(args: argparse.Namespace, settings, known_outlets=None,
                           diarize_grace_s=Diarizer.grace_s(settings),
                           owner_voice=owner_voice, owner_voice_grace_s=OwnerVoice.grace_s(settings),
                           urgent=lambda: app.pipeline.modes.alert != "normal",
+                          mode=lambda: app.pipeline.modes.mode,     # the visit after a ring: armed only
                           busy=app.speech_busy, chime=chime)
     # Part health (owner 2026-11-15): a part failing mid-run is said once, clearly,
     # and again when it's back; nothing stops (integration/health.py).
