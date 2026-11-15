@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
+import random
 import unittest
 from unittest import mock
 
 from hardware import check
 from hardware.flipper.outlets import compare, parse_sub, raw_code, signal_of, verdict
-from hardware.settings import load_settings
+from hardware.settings import CONFIG_DIR
 
 
 def key_file(key):
@@ -47,7 +49,35 @@ class Files(unittest.TestCase):
                  "RAW_Data: " + " ".join(map(str, pt2262(CODE_OFF)[40:]))]
         self.assertEqual(signal_of(parse_sub(lines)), f"RAW 24 bits {int(CODE_OFF, 2):#x}")
         self.assertIsNone(raw_code([300, -900] * 5))           # too short to tell
-        self.assertIsNone(raw_code(pt2262(CODE_ON, repeats=1)))  # one frame: nothing repeats
+        self.assertIsNone(raw_code(pt2262(CODE_ON, repeats=2)))  # seen twice: not enough
+
+    def test_raw_with_real_noise_and_jitter(self):
+        """Review: thousands of noise pulses around the presses (a real Read RAW) split
+        frames at every 0 bit; same codes compared "different", different ones "same"."""
+        rnd = random.Random(7)
+
+        def noise(n):
+            out = []
+            for _ in range(n):
+                out += [rnd.randint(30, 900), -rnd.randint(30, 900)]
+            return out
+
+        def jittered(bits, frames=25):
+            out = []
+            for _ in range(frames):
+                for b in bits:
+                    hi, lo = (1050, 350) if b == "1" else (350, 1050)
+                    out += [int(hi * rnd.uniform(0.88, 1.12)), -int(lo * rnd.uniform(0.88, 1.12))]
+                out += [int(350 * rnd.uniform(0.88, 1.12)), -int(10850 * rnd.uniform(0.9, 1.1))]
+            return out
+        for _ in range(20):
+            on = noise(2500) + jittered(CODE_ON) + noise(2500)
+            off = noise(2500) + jittered(CODE_OFF) + noise(2500)
+            same = noise(2500) + jittered(CODE_ON) + noise(2500)
+            self.assertEqual(raw_code(on), CODE_ON)
+            kinds = (compare({"protocol": "RAW", "raw": on}, {"protocol": "RAW", "raw": off})[0],
+                     compare({"protocol": "RAW", "raw": on}, {"protocol": "RAW", "raw": same})[0])
+            self.assertEqual(kinds, ("different", "same"))
 
     def test_compare(self):
         on, off = parse_sub(key_file("95 D5 D1")), parse_sub(key_file("95 D5 D1"))
@@ -57,6 +87,14 @@ class Files(unittest.TestCase):
         self.assertEqual(compare(on, missing)[0], "missing")
         raw_junk = parse_sub(["Protocol: RAW", "RAW_Data: 100 -100 100"])
         self.assertEqual(compare(on, raw_junk)[0], "unknown")
+
+    def test_a_key_file_and_a_recording_are_not_compared(self):
+        raw = {"protocol": "RAW", "raw": pt2262("000000000000000000000001")}
+        self.assertEqual(compare(parse_sub(key_file("00 00 01")), raw)[0], "unknown")
+
+    def test_files_without_a_key_line_are_not_the_same_signal(self):
+        binraw = parse_sub(["Protocol: BinRAW", "Bit: 1170", "TE: 400", "Data_RAW: 01 02"])
+        self.assertEqual(compare(binraw, dict(binraw))[0], "unknown")
 
 
 class Verdict(unittest.TestCase):
@@ -79,8 +117,19 @@ class Verdict(unittest.TestCase):
         self.assertEqual(kind, "toggles")
         self.assertIn("ON twice", text)
 
-    def test_off_that_does_nothing_is_mixed(self):
-        self.assertEqual(verdict(False, [False, False, True, True, True])[0], "mixed")
+    def test_off_that_never_arrives_is_missed(self):
+        kind, text = verdict(False, [False, False, True, True, True])
+        self.assertEqual(kind, "missed")
+        self.assertIn("OFF (send 5)", text)
+
+    def test_one_missed_send_is_not_a_toggle(self):
+        """Review: a working outlet that missed the first ON was called a toggle."""
+        self.assertEqual(verdict(False, [False, False, False, True, False])[0], "missed")
+        self.assertEqual(verdict(True, [True, False, True, True, False])[0], "missed")
+
+    def test_starting_on_toggle_and_wrong_way_mix(self):
+        self.assertEqual(verdict(True, [False, True, False, True, False])[0], "toggles")
+        self.assertEqual(verdict(False, [True, False, False, True, False])[0], "mixed")
 
     def test_stopped_early(self):
         self.assertEqual(verdict(False, [True])[0], "incomplete")
@@ -92,6 +141,11 @@ class FakeCli:
 
     def __init__(self, files, toggle=False):
         self.files, self.toggle, self.lamp, self.sent, self.closed = files, toggle, False, [], False
+        self.resyncs = 0
+
+    def get_prompt(self, timeout=3.0):
+        self.resyncs += 1
+        return True
 
     def run(self, cmd, timeout=3.0):
         if cmd.startswith("storage read "):
@@ -108,7 +162,7 @@ class FakeCli:
 
 class OutletsCommand(unittest.TestCase):
     def setUp(self):
-        self.settings = load_settings()
+        self.settings = json.loads((CONFIG_DIR / "settings.example.json").read_text(encoding="utf-8"))
 
     def files(self, outlet2_off="95 D5 D1"):
         return {"outlet1_on": key_file("11 11 11"), "outlet1_off": key_file("11 11 14"),
@@ -172,6 +226,23 @@ class OutletsCommand(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("No outlet '7'", out)
 
+    def test_a_timed_out_read_resyncs_the_cli(self):
+        """Review: late output with its prompt became the next command's answer."""
+        cli = FakeCli(self.files())
+        real = cli.run
+        cli.run = lambda cmd, timeout=3.0: (False, []) if "outlet1_off" in cmd else real(cmd, timeout)
+        _, out = self.run_check(cli, "none")
+        self.assertEqual(cli.resyncs, 1)
+        self.assertIn("no answer from the Flipper", out)
+
+    def test_q_at_the_lamp_question_does_not_guess_the_state(self):
+        cli = FakeCli(self.files(outlet2_off="95 D5 D4"))
+        answers = iter(["n", "", "n", "", "q"])                 # before, send, after, send, stop
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            check.outlets(self.settings, "2", ask=lambda p: next(answers), conn=cli)
+        self.assertNotIn("The lamp is", out.getvalue())
+
 
 class UnloadAfterVisionCheck(unittest.TestCase):
     def test_only_models_the_check_loaded_are_unloaded(self):
@@ -204,7 +275,9 @@ class UnloadAfterVisionCheck(unittest.TestCase):
 
     def test_unload_tries_the_rest_api_then_lms(self):
         ok = mock.Mock(status_code=200)
-        with mock.patch("requests.post", return_value=ok) as post:
+        ok.json.return_value = {"instance_id": "4b"}
+        with mock.patch("requests.post", return_value=ok) as post, \
+                mock.patch.object(check, "_loaded", return_value=["9b"]):
             self.assertTrue(check._unload("http://lm", "4b"))
         self.assertEqual(post.call_args[0][0], "http://lm/api/v1/models/unload")
         self.assertEqual(post.call_args[1]["json"], {"instance_id": "4b"})
@@ -214,6 +287,28 @@ class UnloadAfterVisionCheck(unittest.TestCase):
                 mock.patch("subprocess.run", return_value=done) as run:
             self.assertTrue(check._unload("http://lm", "4b"))
         self.assertEqual(run.call_args[0][0], ["/usr/local/bin/lms", "unload", "4b"])
+
+    def test_older_lm_studio_200_with_an_error_falls_back_to_lms(self):
+        """Review: 0.3.x answers unknown routes with 200 {"error": ...}."""
+        old = mock.Mock(status_code=200)
+        old.json.return_value = {"error": "Unexpected endpoint or method. (POST /api/v1/models/unload)"}
+        done = mock.Mock(returncode=0)
+        with mock.patch("requests.post", return_value=old), \
+                mock.patch("shutil.which", return_value="/usr/local/bin/lms"), \
+                mock.patch("subprocess.run", return_value=done) as run:
+            self.assertTrue(check._unload("http://lm", "4b"))
+        run.assert_called_once()
+        with mock.patch("requests.get") as get:
+            get.return_value.json.return_value = {"error": "Unexpected endpoint"}
+            self.assertIsNone(check._loaded("http://lm"))           # can't tell, not "nothing"
+
+    def test_a_model_left_loaded_earlier_gets_an_eject_hint(self):
+        lines = []
+        with mock.patch.object(check, "_unload") as unload:
+            check.unload_test_models("http://lm", ["9b", "4b"], before=["9b", "4b"], keep={"9b"},
+                                     out=lines.append)
+        unload.assert_not_called()
+        self.assertIn("4b was already loaded before this check", lines[0])
 
 
 if __name__ == "__main__":

@@ -37,62 +37,86 @@ def parse_sub(lines: Sequence[str]) -> Dict[str, Any]:
     return info
 
 
+GAP_US = 4000                 # a low this long ends a frame (PT2262/EV1527 sync: ~31 T, 9-12 ms)
+PULSE_US = (80, 3000)         # a data pulse is within this; noise usually isn't
+MIN_BITS, MIN_REPEATS = 20, 3
+
+
 def raw_code(durations: Sequence[int]) -> Optional[str]:
     """The frame a RAW recording repeats, as bits, to compare two recordings.
     OOK pulse-width codes (Princeton/PT2262, EV1527): each bit is a high pulse
     then a low one, the longer of the two gives 1 or 0, and frames end at a long
-    low gap. Noise around the presses doesn't repeat, so the most common frame
-    is the code. None if no frame of 8+ bits repeats."""
-    pulses = [int(d) for d in durations if d]
-    if len(pulses) < 16:
-        return None
-    short = sorted(abs(d) for d in pulses)[len(pulses) // 4] or 1     # a short pulse
+    low gap (the sync). A frame with a pulse out of range or out of step is
+    noise. The code is the most common clean frame of MIN_BITS+ bits, seen
+    MIN_REPEATS+ times; None otherwise (the guided test decides then)."""
+    vals = [int(d) for d in durations if d]
     frames: List[str] = []
     bits: List[str] = []
+    clean = True
     i = 0
-    while i < len(pulses) - 1:
-        high, low = pulses[i], pulses[i + 1]
-        if high <= 0 or low >= 0:                 # out of step: move on one pulse
-            i += 1
-            continue
-        if -low > 8 * short:                      # the gap: the frame ends (sync dropped)
-            if len(bits) >= 8:
+    while i < len(vals):
+        v = vals[i]
+        nxt = vals[i + 1] if i + 1 < len(vals) else 0
+        if v < 0 and -v > GAP_US:                 # the gap: the frame ends
+            if clean and len(bits) >= MIN_BITS:
                 frames.append("".join(bits))
-            bits = []
-        else:
-            bits.append("1" if high > -low else "0")
-        i += 2
-    if len(bits) >= 8:
+            bits, clean = [], True
+            i += 1
+        elif v > 0 and nxt < 0 and -nxt <= GAP_US:
+            low = -nxt
+            if not (PULSE_US[0] <= v <= PULSE_US[1] and PULSE_US[0] <= low <= PULSE_US[1]):
+                clean = False
+            bits.append("1" if v > low else "0")
+            i += 2
+        elif v > 0 and nxt < 0:                   # the sync's high pulse, right before the gap
+            i += 1
+        else:                                     # two of a kind in a row: out of step
+            clean = False
+            i += 1
+    if clean and len(bits) >= MIN_BITS:
         frames.append("".join(bits))
     if not frames:
         return None
     code, count = Counter(frames).most_common(1)[0]
-    return code if count >= 2 else None
+    return code if count >= MIN_REPEATS else None
+
+
+def signal_key(info: Dict[str, Any]) -> Optional[Tuple[str, int, int]]:
+    """(format, bits, value) to compare two files of the same kind, or None:
+    "key" for decoded files with a Key line, "raw" for a decoded recording."""
+    proto = info.get("protocol")
+    if proto == "RAW":
+        code = raw_code(info.get("raw", []))
+        return ("raw", len(code), int(code, 2)) if code else None
+    key = (info.get("key") or "").replace(" ", "")
+    if not proto or not key:
+        return None                          # e.g. BinRAW: no Key line to compare
+    try:
+        return "key", int(str(info.get("bit", "0")).strip() or 0), int(key, 16)
+    except ValueError:
+        return None
 
 
 def signal_of(info: Dict[str, Any]) -> Optional[str]:
-    """What a .sub file sends, comparable between files: "Princeton 24bit
-    0x95D5D4", or "RAW <bits>" for a recording. None if it can't be told."""
-    proto = info.get("protocol")
-    if not proto:
+    """What a .sub file sends, for the table: "Princeton 24bit 0x95D5D4", or
+    "RAW 24 bits 0x..." for a recording. None if it can't be told."""
+    sig = signal_key(info)
+    if sig is None:
         return None
-    if proto == "RAW":
-        code = raw_code(info.get("raw", []))
-        return f"RAW {len(code)} bits {int(code, 2):#x}" if code else None
-    key = (info.get("key") or "").replace(" ", "").upper().lstrip("0") or "0"
-    return f"{proto} {info.get('bit', '?')}bit 0x{key}"
+    kind, bits, value = sig
+    return f"RAW {bits} bits {value:#x}" if kind == "raw" else f"{info.get('protocol')} {bits}bit 0x{value:X}"
 
 
 def compare(on: Dict[str, Any], off: Dict[str, Any]) -> Tuple[str, str]:
     """(kind, text) for one outlet's two files. kind: "same", "different",
-    "missing", "unknown" (two RAW recordings that couldn't be decoded)."""
+    "missing", "unknown" (can't decode, or one is a recording and one a key)."""
     if on.get("error") or not on.get("protocol"):
         return "missing", "the ON file is missing or unreadable"
     if off.get("error") or not off.get("protocol"):
         return "missing", "the OFF file is missing or unreadable"
-    a, b = signal_of(on), signal_of(off)
-    if a is None or b is None:
-        return "unknown", "can't decode the recording; the guided test tells"
+    a, b = signal_key(on), signal_key(off)
+    if a is None or b is None or a[0] != b[0]:
+        return "unknown", "can't compare these two files; the guided test tells"
     if a == b:
         return "same", "SAME SIGNAL: the outlet can't tell on from off, so every send flips it"
     return "different", "different signals (good)"
@@ -104,11 +128,14 @@ STEPS = ("off", "off", "on", "on", "off")
 
 def verdict(before: bool, after: Sequence[bool]) -> Tuple[str, str]:
     """(kind, text) from the lamp's state before the test and after each of
-    STEPS. kind: works, toggles, swapped, deaf, mixed, incomplete."""
+    STEPS. kind: works, missed, toggles, swapped, deaf, mixed, incomplete."""
     if len(after) < len(STEPS):
         return "incomplete", "the test was stopped before the end"
     states = [before] + list(after)
+    wanted = [s == "on" for s in STEPS]
     changed = [states[i + 1] != states[i] for i in range(len(STEPS))]
+    # a send that moved the lamp the other way than it says: never a missed send
+    wrong_way = [changed[i] and after[i] != wanted[i] for i in range(len(STEPS))]
     offs = [after[i] for i, s in enumerate(STEPS) if s == "off"]
     ons = [after[i] for i, s in enumerate(STEPS) if s == "on"]
     if not any(changed):
@@ -116,13 +143,18 @@ def verdict(before: bool, after: Sequence[bool]) -> Tuple[str, str]:
                         "too far from the Flipper, or the files hold another code)")
     if not any(offs) and all(ons):
         return "works", "OFF turns it off and ON turns it on, every time, also when repeated"
+    if not any(wrong_way):
+        missed = [f"{STEPS[i].upper()} (send {i + 1})" for i in range(len(STEPS)) if after[i] != wanted[i]]
+        return "missed", ("it always switched the right way, but " + ", ".join(missed)
+                          + " didn't reach it")
     if all(changed):
         return "toggles", "every send flips the lamp, ON and OFF alike (a repeat flips it back)"
     if all(offs) and not any(ons):
         return "swapped", "OFF turns it on and ON turns it off: the two files are swapped"
-    if changed[1] or changed[3]:
-        which = " and ".join(n for n, c in (("OFF", changed[1]), ("ON", changed[3])) if c)
-        return "toggles", f"sending {which} twice flips the lamp back: it toggles"
+    flips = [name for name, a, b in (("OFF", 0, 1), ("ON", 2, 3))
+             if after[a] == wanted[a] and wrong_way[b]]       # right first, a repeat undid it
+    if flips:
+        return "toggles", f"sending {' and '.join(flips)} twice flips the lamp back: it toggles"
     return "mixed", ("OFF left it " + ", ".join("on" if s else "off" for s in offs)
                      + "; ON left it " + ", ".join("on" if s else "off" for s in ons))
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import glob
 import logging
+import os
 import re
 import time
 from typing import List, Optional, Tuple
@@ -66,8 +67,14 @@ class FlipperSerial:
         port = find_port(self.port_setting)
         if not port:
             return False
+        # exclusive (POSIX): macOS lets a second process open the port, and two talkers
+        # stop each other's commands (a check run beside Faraday stopped its rx)
+        extra = {"exclusive": True} if os.name == "posix" else {}
         try:
-            self._ser = serial.Serial(port, self.baud, timeout=0.05, write_timeout=2)
+            try:
+                self._ser = serial.Serial(port, self.baud, timeout=0.05, write_timeout=2, **extra)
+            except (TypeError, ValueError):                  # a pyserial without exclusive
+                self._ser = serial.Serial(port, self.baud, timeout=0.05, write_timeout=2)
         except (serial.SerialException, OSError) as e:
             log.debug("open %s failed: %s", port, e)
             self._ser = None
