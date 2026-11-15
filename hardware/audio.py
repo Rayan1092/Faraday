@@ -34,20 +34,25 @@ DEFAULT_NO_SPEECH_S = 3.0  # nobody spoke for this long -> window ends with noth
 
 
 class MicGate:
-    """Set while the speaker talks; the recorder ignores audio meanwhile."""
+    """Muted while anything plays on the speaker (Faraday's voice, the intercom);
+    the recorder ignores audio meanwhile. Counted, so the intercom and TTS can
+    overlap: the mic opens again only when both are done."""
 
     def __init__(self) -> None:
-        self._muted = threading.Event()
+        self._count = 0
+        self._lock = threading.Lock()
 
     @property
     def muted(self) -> bool:
-        return self._muted.is_set()
+        return self._count > 0
 
     def mute(self) -> None:
-        self._muted.set()
+        with self._lock:
+            self._count += 1
 
     def unmute(self) -> None:
-        self._muted.clear()
+        with self._lock:
+            self._count = max(0, self._count - 1)
 
     def wait_unmuted(self, timeout: float) -> bool:
         end = time.monotonic() + timeout

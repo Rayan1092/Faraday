@@ -50,6 +50,7 @@ class SpeechHeardData:
     text: str                           # transcript. Passphrase is redacted before logging
     audio_path: Optional[str] = None    # "captures/audio/....wav", relative to repo root
     duration_s: Optional[float] = None
+    voices: Optional[int] = None        # distinct voices (Argmax diarization), if it finished in time
 
 
 @dataclass
@@ -237,4 +238,8 @@ def validate_event(d: Dict[str, Any]) -> List[str]:
             errors.append("data.voices must be a whole number or null")
     if d["type"] == EventType.SPEECH_HEARD and not str(data["text"]).strip():
         errors.append("data.text is empty")
+    if d["type"] == EventType.SPEECH_HEARD and data.get("voices") is not None:
+        v = data["voices"]
+        if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+            errors.append("data.voices must be a whole number >= 1")
     return errors

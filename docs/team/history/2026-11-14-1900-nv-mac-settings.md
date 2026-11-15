@@ -53,7 +53,13 @@ Facts this is built on (owner, 2026-11-14):
       "kind": "argmax",
       "url": "http://127.0.0.1:50060/v1/audio/transcriptions",
       "model": "large-v3-v20240930_626MB",
-      "language": "en"
+      "language": "en",
+      "diarize": {
+        "command": ["/Users/captain/clueless/vendor/argmax-oss-swift/.build/release/argmax-cli",
+                    "diarize", "--audio-path", "{wav}"],
+        "timeout_s": 20,
+        "grace_s": 0
+      }
     },
     "windows": {"kind": "standin"}
   },
@@ -67,7 +73,11 @@ Facts this is built on (owner, 2026-11-14):
     "windows": {"kind": "standin"}
   },
 
-  "audio": {"mic_device": null, "speaker_device": null, "sample_rate": 16000, "max_record_s": 8},
+  "audio": {
+    "mic_device": null, "speaker_device": null, "sample_rate": 16000, "max_record_s": 8,
+    "listen": {"max_s": 6, "silence_s": 0.8, "no_speech_s": 3},
+    "wake": {"enabled": true, "phrase": "hey faraday", "window_s": 4}
+  },
 
   "camera": {"index": 0, "width": 1280, "height": 720},
 
@@ -89,6 +99,9 @@ Facts this is built on (owner, 2026-11-14):
 7. First run of each device: macOS asks for Terminal's camera and microphone access; allow both.
 
 ## Checks that still need the Mac
+- `argmax-cli diarize --help`: confirm the flags in `stt.mac.diarize.command` (the `--audio-path` flag is a guess) and what it prints. Then time it next to STT; if it's usually only a little slower, raise `grace_s` to e.g. 0.5.
+- Hands-free: ring the doorbell, answer after the greeting; say "Hey Faraday, what happened while I was out?"; say just "Faraday" and check nothing happens.
+- Controls page `http://127.0.0.1:8081/`: live camera, hold-to-talk to the door speaker (door mic muted meanwhile), lights, Listen.
 - `python3 -m hardware.check camera`, `say "Hello"`, `record 4` (real STT), `mute`.
 - `python3 -m integration`: push-to-talk `r` with real speech, the passphrase spoken, and the spoken lines through `--play`.
 - Bonsai 9B vision on a real photo (PLAN Q2 is confirmed only for the 4B).
