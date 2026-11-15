@@ -163,6 +163,8 @@ class Recorder:
         self.sample_rate, self.device, self.max_s = sample_rate, device, max_s
         self.audio_dir = audio_dir
         self.stream_factory = stream_factory
+        # The tail is for a real speaker playing on; a test stream has none.
+        self.echo_tail_s = self.ECHO_TAIL_S if stream_factory is _default_stream else 0.0
         self.preroll = int(preroll_s * sample_rate)
         self._frames: List[np.ndarray] = []          # start()/stop() recording
         self._stream = None                          # start()/stop() stream
@@ -227,7 +229,7 @@ class Recorder:
     def _live_callback(self, indata, frames, time_info, status) -> None:
         # A Bluetooth speaker keeps playing a few hundred ms after the gate opens (owner,
         # Mac: Faraday heard its own side-door line): stay deaf for a tail after each line.
-        if self.gate.muted or not self.gate.quiet_for(self.ECHO_TAIL_S):
+        if self.gate.muted or (self.echo_tail_s and not self.gate.quiet_for(self.echo_tail_s)):
             # Faraday is speaking: don't hear ourselves, and forget what came just
             # before, so the next window doesn't start with stale audio
             with self._lock:

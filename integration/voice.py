@@ -683,7 +683,7 @@ class Voice:
             self.out("  [stt] no words recognized" + ("" if self.stt.available
                                                       else " (no STT on this OS)"))
             return
-        if self.is_echo(text):
+        if channel == VISITOR and len(text.split()) >= 3 and self.is_echo(text):   # an owner's "yes, talk to them" isn't one
             self.out(f"  [echo] ignored, Faraday's own words: {text[:60]!r}")
             return
         if channel == VISITOR and self._visit_closed:
