@@ -31,7 +31,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, Optional
+from typing import Any, Callable, Dict, Iterator, Optional, Tuple
 
 from shared import Action, Event, EventType, PhotoDescribedData, Source, make_event
 
@@ -42,6 +42,7 @@ log = logging.getLogger("hardware.camera")
 NO_VISION = "Photo saved."
 NO_CAMERA = "Camera unavailable."
 WARMUP_FRAMES = 5          # first frames are dark while auto-exposure settles
+STEADY_FRAMES = 5          # a photo + the next frames: objects must be in 3 of them (detect.py)
 
 
 class Camera:
@@ -115,6 +116,8 @@ class CameraFeed:
         self._boxes: list = []
         self._boxes_at = 0.0                   # frame time the boxes belong to
         self._detect_at = 0.0
+        self._filter: Any = None               # hardware.detect.StreamFilter (steady objects only)
+        self._size: Optional[Tuple[int, int]] = None   # (width, height) of the last frame
         self.photos_dir = photos_dir
         self.fps, self.idle_s, self.jpeg_quality = fps, idle_s, jpeg_quality
         self.capture_factory = capture_factory
@@ -236,14 +239,21 @@ class CameraFeed:
                 if ok and frame is not None:
                     with self._lock:
                         self._frame, self._frame_at = frame, time.monotonic()
+                        self._size = (int(frame.shape[1]), int(frame.shape[0]))
                         frame_at, watched = self._frame_at, self._viewers > 0
                         self._new_frame.notify_all()
                     if (self.detector is not None and watched
                             and t0 - self._detect_at >= 1.0 / max(0.5, self.detect_fps)):
+                        if self._filter is None:
+                            from hardware.detect import NAMED, StreamFilter
+                            self._filter = StreamFilter(named=getattr(self.detector, "named", NAMED))
+                        if t0 - self._detect_at > self._reset_gap():
+                            self._filter.reset()       # the stream paused: old frames don't count
                         self._detect_at = t0
-                        found = self.detector.detect(frame) or []    # None = failed: no boxes
+                        found = self.detector.detect(frame)
+                        shown = self._filter.update(found) if found is not None else []  # None = failed
                         with self._lock:
-                            self._boxes, self._boxes_at = found, frame_at
+                            self._boxes, self._boxes_at = shown, frame_at
                 else:
                     log.warning("camera %s gave no frame; reopening", self.index)
                     self._release()
@@ -355,20 +365,45 @@ class CameraFeed:
             return None
         return video if video.exists() and video.stat().st_size > 0 else None
 
+    def _reset_gap(self) -> float:
+        """A pause longer than this between detections starts the steadiness window
+        over (more than 2 detection periods, so a slow fps never clears it)."""
+        return max(2.0, 2.5 / max(0.5, self.detect_fps))
+
+    def frame_size(self) -> Optional[Tuple[int, int]]:
+        """(width, height) of the camera's frames, once one has come (kept while
+        idle): the live stream is always this whole frame, never cropped."""
+        with self._lock:
+            return self._size
+
     def snapshot(self) -> Optional[Path]:
         """Same interface as Camera.snapshot(), but through the shared feed."""
-        frame = self._wait_frame(after=time.monotonic(), timeout=6.0)
+        return self.snapshot_burst(1)[0]
+
+    def snapshot_burst(self, n: int = 5) -> "tuple[Optional[Path], list]":
+        """A photo of the next frame, plus up to n-1 frames right after it (the
+        object detector checks that things are steady). (path, [frames]) with
+        frames[0] the saved photo; (None, []) if no frame came."""
+        frame, at = self._wait_frame_at(after=time.monotonic(), timeout=6.0)
         if frame is None:
             log.error("camera %s gave no frame for the photo", self.index)
-            return None
+            return None, []
         import cv2
         self.photos_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
         path = self.photos_dir / f"{stamp}.jpg"
         if not cv2.imwrite(str(path), frame):
             log.error("could not write %s", path)
-            return None
-        return path
+            return None, []
+        frames = [frame]
+        end = time.monotonic() + 1.5
+        while len(frames) < n and time.monotonic() < end:
+            nxt, nxt_at = self._wait_frame_at(after=at, timeout=max(0.05, end - time.monotonic()))
+            if nxt is None:
+                break                                # camera hiccup: check what we have
+            frames.append(nxt)
+            at = nxt_at
+        return path, frames
 
 
 def relative(path: Path) -> str:
@@ -394,13 +429,19 @@ class PhotoCamera:
         return cls(Camera.from_settings(settings), Vision.from_settings(settings),
                    Detector.from_settings(settings))
 
-    def _analyse(self, path: Path) -> Optional[Dict[str, Any]]:
+    def _analyse(self, path: Path, frames: Optional[list] = None) -> Optional[Dict[str, Any]]:
+        """The photo (and the frames right after it, when the feed gave them)."""
         if self.detector is None:
             return None
         try:
+            many = getattr(self.detector, "analyse_frames", None)
+            if frames and many is not None:
+                return many(frames)
             import cv2
             frame = cv2.imread(str(path))
-            return self.detector.analyse(frame) if frame is not None else None
+            if frame is None:
+                return None
+            return many([frame]) if many is not None else self.detector.analyse(frame)
         except Exception as e:
             log.warning("detection on %s failed: %r", path.name, e)
             return None
@@ -408,8 +449,13 @@ class PhotoCamera:
     def take(self, action: Optional[Action] = None) -> Optional[Event]:
         t0 = time.monotonic()
         caused_by = action.id if action is not None else None
+        frames: Optional[list] = None
         try:
-            path = self.camera.snapshot()
+            burst = getattr(self.camera, "snapshot_burst", None)
+            if burst is not None and self.detector is not None:
+                path, frames = burst(STEADY_FRAMES)  # the photo + the next frames
+            else:
+                path = self.camera.snapshot()
         except Exception as e:          # driver errors: treat like no frame
             log.error("snapshot failed: %r", e)
             path = None
@@ -418,7 +464,7 @@ class PhotoCamera:
                               PhotoDescribedData(photo_path="", description=NO_CAMERA),
                               Source.CAMERA, caused_by=caused_by)
         from hardware.detect import describe_from, hint
-        info = self._analyse(path)
+        info = self._analyse(path, frames)
         self.last_info = info
         text = None
         if self.vision is not None:

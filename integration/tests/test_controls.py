@@ -122,6 +122,20 @@ class Controls(unittest.TestCase):
         self.assertEqual(r.status, 400)
         self.assertFalse(self.intercom.active)
 
+    # ---- framing (owner 2026-11-15: a page cropped the stream, boxes got cut) -----------
+    def test_stream_is_the_whole_frame_and_status_says_its_size(self):
+        import cv2
+        r, status = self.request("GET", "/api/status")
+        self.assertIsNone(json.loads(status)["frame"])                 # no frame yet
+        r, jpg = self.request("GET", "/frame.jpg")
+        img = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
+        self.assertEqual(img.shape[:2], (72, 128))                     # FakeCapture's whole frame
+        r, status = self.request("GET", "/api/status")
+        self.assertEqual(json.loads(status)["frame"], {"width": 128, "height": 72})
+        r, page = self.request("GET", "/")
+        self.assertIn(b"object-fit: contain", page)                    # the reference page never crops
+        self.assertNotIn(b"object-fit: cover", page)
+
     # ---- outlets / listen ------------------------------------------------------------
     def test_control_switches_outlet_once(self):
         r, body = self.post_json("/api/control", {"outlet": "living_room_lamp", "on": True})
