@@ -111,7 +111,7 @@ A step is only signed off once it has been tested on real hardware. Sim and stan
 
 Add new ones at the bottom. When one is settled, write the answer next to it and who decided.
 
-1. **Bonsai 9B model id on the Mac.** `bonsai-2-9b` in the settings example is a placeholder. Confirm with `curl http://localhost:1234/v1/models` on the Mac mini.
+1. ~~**Bonsai 9B model id on the Mac.**~~ **Closed 2026-11-14 (owner):** `ternary-bonsai-2-9b-mlx`, server `http://127.0.0.1:1234`, Parallel 1. The Mac also has `qwen/qwen3.8-27b` and `prism-ml/bonsai-27b` installed, which the rules don't allow: the `mac` profile names the 9B exactly and `integration/start_mac.sh` fails unless it is the *loaded* model (LM Studio's `/api/v0/models` state). The full Mac `settings.json` is in `docs/team/history/2026-11-14-1900-nv-mac-settings.md`.
 2. ~~**Vision.**~~ **Closed 2026-11-14 (owner):** the 4B (`ternary-bonsai-2-4b@q2_0`) accepts images in LM Studio, as checked by both Dell and NV. NV's `hardware/vision.py` is the one wired in, and it shrinks photos to 512 px. The 9B on the Mac is still to be checked in the 9B benchmark session. Original: Which Bonsai 2 build accepts images in LM Studio (2B/4B/9B, which quant)? The rules allow no other model, so if none does, we need a plan B (for example, describe only from sensor context).
     **Partly answered 2026-11-14 (Dell):** `ternary-bonsai-2-4b@q2_0` in LM Studio on the NV laptop does accept images.
     - It described a generated green triangle correctly. Asked the same question with no image, it made something up.

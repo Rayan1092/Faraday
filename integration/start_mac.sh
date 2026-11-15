@@ -76,7 +76,33 @@ if [ "${FARADAY_SKIP_CHECKS:-0}" != "1" ]; then
   if [ -z "$MODELS" ]; then
     fail "LM Studio not answering at $LLM_URL. Start its server (Developer tab, or: lms server start) and load $LLM_MODEL."
   elif printf '%s' "$MODELS" | "$PY" -c "import json,sys; ids=[m['id'] for m in json.load(sys.stdin).get('data',[])]; sys.exit(0 if sys.argv[1] in ids else 1)" "$LLM_MODEL"; then
-    ok "LM Studio at $LLM_URL has $LLM_MODEL"
+    ok "LM Studio at $LLM_URL has $LLM_MODEL downloaded"
+    # /v1/models lists every downloaded model. Only Bonsai 2 may run (event rule), and
+    # the Mac also has 27B models installed, so check which model is actually LOADED.
+    # (-f: a 404 from an older LM Studio gives no body -> "unknown", not "nothing loaded")
+    LOADED="$(curl -s -f -m 5 "$LLM_URL/api/v0/models" 2>/dev/null | "$PY" -c '
+import json, sys
+try:
+    obj = json.load(sys.stdin)
+    data = obj.get("data") if isinstance(obj, dict) else None
+except Exception:
+    data = None
+if not isinstance(data, list):
+    print("unknown"); sys.exit(0)
+want = sys.argv[1]
+loaded = [m.get("id") for m in data if str(m.get("state", "")).lower() == "loaded"]
+if want in loaded:
+    print("loaded" + ("|" + ",".join(m for m in loaded if m != want) if len(loaded) > 1 else ""))
+else:
+    print("not-loaded|" + (",".join(loaded) or "nothing"))
+' "$LLM_MODEL" 2>/dev/null || echo unknown)"
+    case "$LOADED" in
+      loaded)      ok "$LLM_MODEL is the loaded model" ;;
+      loaded\|*)   ok "$LLM_MODEL is loaded"
+                   warn "other models are loaded too (${LOADED#loaded|}): eject them, they only use RAM" ;;
+      not-loaded*) fail "$LLM_MODEL is downloaded but NOT loaded (loaded now: ${LOADED#not-loaded|}). In LM Studio eject that and load $LLM_MODEL. Only Bonsai 2 is allowed." ;;
+      *)           warn "can't tell which model is loaded (no /api/v0/models); every request names $LLM_MODEL exactly" ;;
+    esac
   else
     fail "LM Studio answers but has no model '$LLM_MODEL'. Load it, or fix llm.profiles.$PROFILE.model (see: curl $LLM_URL/v1/models)."
   fi
