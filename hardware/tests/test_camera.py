@@ -320,6 +320,8 @@ class VisionClient(Base):
             deadline = time.monotonic() + 10
             while v.strategy is None and time.monotonic() < deadline:
                 time.sleep(0.05)
+            with v._lock:
+                pass                                                  # the background probe is done
             self.assertEqual((v.strategy, v.disabled_until), ("prefill", 0.0))
             self.assertIsNotNone(v.describe(self.photo))             # the next photo: Bonsai
         finally:
@@ -349,8 +351,50 @@ class VisionClient(Base):
 
     def test_unreachable_gives_none_without_trying_every_strategy(self):
         t0 = time.monotonic()
-        self.assertIsNone(Vision("http://127.0.0.1:9", "m", timeout_s=4).describe(self.photo))
+        v = Vision("http://127.0.0.1:9", "m", timeout_s=4)
+        with self.assertLogs("hardware.vision", "WARNING"):
+            self.assertIsNone(v.describe(self.photo))
         self.assertLess(time.monotonic() - t0, 6.0)
+        self.assertEqual(len(v.probe_results), 1)                     # stopped at the first
+        self.assertEqual(v.disabled_until, 0.0)                       # no verdict: it never answered
+
+    def test_a_timeout_is_no_verdict_about_thinking(self):
+        """Review of #64: a slow first image (prefill timed out) must not lead to
+        "thinks before every answer" because plain then thought."""
+        lm = FakeLMStudio(delay_s=1.2, thinks_unless=prefill)
+        try:
+            v = Vision(lm.url, "m9b", timeout_s=3)
+            self.assertIsNone(v.probe(per_request=0.5))
+        finally:
+            lm.close()
+        self.assertEqual((len(v.probe_results), v.disabled_until, v.strategy), (1, 0.0, None))
+
+    def test_a_photo_never_waits_behind_the_warm_up(self):
+        lm = FakeLMStudio()
+        try:
+            v = Vision(lm.url, "m9b")
+            with v._lock:                                             # the warm-up is probing
+                t0 = time.monotonic()
+                with self.assertLogs("hardware.vision", "WARNING"):
+                    self.assertIsNone(v.describe(self.photo))
+                self.assertLess(time.monotonic() - t0, 0.5)
+            self.assertEqual(lm.requests, [])
+            self.assertIn("busy", v.last["error"])
+            v.strategy = "prefill"                                    # it picked one meanwhile
+            self.assertIsNotNone(v.describe(self.photo))
+        finally:
+            lm.close()
+
+    def test_server_refusing_the_extra_fields_still_gets_the_prefill(self):
+        lm = FakeLMStudio(refuse_extras=True, thinks_unless=prefill)
+        try:
+            v = Vision(lm.url, "m9b")
+            self.assertIsNotNone(v.describe(self.photo))
+        finally:
+            lm.close()
+        self.assertEqual(v.strategy, "prefill")
+        self.assertNotIn("chat_template_kwargs", lm.requests[-1])
+        self.assertEqual(lm.requests[-1]["messages"][-1]["role"], "assistant")
 
     def test_detector_hint_goes_into_the_prompt(self):
         lm = FakeLMStudio()
@@ -363,7 +407,12 @@ class VisionClient(Base):
 
     def test_reasoning_in_the_content_is_not_a_description(self):
         for content, finish in (("<think>The image shows a door and", "length"),
-                                ("Thinking Process: 1. look at the photo", "stop")):
+                                ("Thinking Process: 1. look at the photo", "stop"),
+                                ("**Thinking Process:**\n\n1. **Analyze the Request:** The user wants", "length"),
+                                ("Okay, so I need to describe this photo.", "stop"),
+                                ("Here's a thinking process to describe the image.", "stop"),
+                                ("One person stands at the door holding a box and looking at the "
+                                 "camera while the light is on and the door is closed and", "length")):
             with self.subTest(content=content):
                 lm = FakeLMStudio(content=content, finish_reason=finish)
                 try:
@@ -408,6 +457,16 @@ class _nothing:
 
 class CheckVision(Base):
     """python -m hardware.check vision: every strategy, timed, and the pick."""
+
+    def test_the_9b_stays_unless_only_the_4b_makes_5_s(self):
+        from hardware.check import pick_model
+        nine, four = "ternary-bonsai-2-9b-mlx", "ternary-bonsai-2-4b-mlx"
+        for picks, want in (({nine: ("prefill", 2.0), four: ("prefill", 1.0)}, nine),
+                            ({nine: ("prefill", 6.0), four: ("prefill", 1.5)}, four),
+                            ({nine: ("prefill", 6.0), four: ("prefill", 5.5)}, nine),
+                            ({four: ("plain", 7.0)}, four),
+                            ({}, None)):
+            self.assertEqual(pick_model(picks, nine), want, picks)
 
     def run_check(self, lm, model="ternary-bonsai-2-9b-mlx"):
         import contextlib

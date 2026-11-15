@@ -72,6 +72,7 @@ AUTO = ("prefill", "plain")         # the probe: the ones that can stop the thin
 SYSTEM_NO_THINK = ("Reply with the answer only. Do not think step by step, do not reason, "
                    "do not use <think>. Answer immediately in one sentence.")
 RETRY_DISABLED_S = 300.0
+WARM_UP_S = 60.0                    # the warm-up's first image may load the vision part
 CACHE_FILE = REPO_ROOT / "cache" / "vision_mode.json"
 FIX_HINT = ("LM Studio: My Models -> the model -> settings (gear) -> Prompt Template: add "
             "{%- set enable_thinking = false -%} as the first line, save, and reload the model")
@@ -139,10 +140,20 @@ def thought_text(content: str) -> str:
     return re.sub(r"</?think>", "", head + (m.group(1) if m else "")).strip()
 
 
+THINKING_OPENERS = ("<think>", "thinking process", "thinking:", "here's a thinking process",
+                    "here is a thinking process", "okay, let me", "okay, so", "okay so", "ok, so",
+                    "let me think", "let me analyze", "let me look", "alright", "got it",
+                    "the user wants", "the user is asking", "the user asks", "i need to", "first, i",
+                    "analyze the", "1. analyze")
+
+
 def looks_like_thinking(text: str) -> bool:
-    """Reasoning printed as plain text, without the closing tag (cut off)."""
-    head = (text or "").lstrip()[:40].lower()
-    return head.startswith(("<think>", "thinking process", "thinking:", "okay, let me", "let me think"))
+    """Reasoning printed as plain text (no tags): starts like reasoning, before or
+    after the markdown is removed ("**Thinking Process:**" too)."""
+    for variant in (text or "", re.sub(r"[*_#`]+", "", text or "")):
+        if variant.lstrip().lstrip('"').lower()[:60].startswith(THINKING_OPENERS):
+            return True
+    return False
 
 
 def short_description(text: str, max_chars: int = MAX_CHARS) -> Optional[str]:
@@ -238,9 +249,11 @@ class Vision:
         body = self._body(b64, prompt, self.max_tokens, strategy)
         r = requests.post(self.url, json=body, timeout=timeout)
         out: Dict[str, Any] = {"strategy": strategy, "status": r.status_code}
-        if r.status_code == 400 and strategy == "plain":
-            # an older server may refuse the extra fields: once without them
-            body = {k: v for k, v in body.items() if k not in ("chat_template_kwargs", "enable_thinking")}
+        if r.status_code == 400:
+            # an older server may refuse the extra fields: once without them (the prefill
+            # turn, the /no_think text and the system line stay)
+            body = {k: v for k, v in body.items()
+                    if k not in ("chat_template_kwargs", "enable_thinking", "reasoning_effort")}
             r = requests.post(self.url, json=body, timeout=max(1.0, timeout - (time.monotonic() - t0)))
             out["status"] = r.status_code
         out["seconds"] = round(time.monotonic() - t0, 1)
@@ -252,61 +265,77 @@ class Vision:
         reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
         finish = choice.get("finish_reason")
         answer = short_description(content)
-        plain_reasoning = looks_like_thinking(strip_reasoning(content))
-        if plain_reasoning:
-            answer = None                  # reasoning printed as plain text is not a description
+        plain_reasoning = looks_like_thinking(strip_reasoning(content)) or (
+            answer is not None and looks_like_thinking(answer))
+        # One sentence never needs 120 tokens: cut off with no closed think block,
+        # it was reasoning (in whatever words), not a description.
+        cut_off = finish == "length" and "</think>" not in content
+        if plain_reasoning or cut_off:
+            answer = None
         thought = (reasoning.strip() + " " + thought_text(content)).strip()
         # thinks: it reasoned before (or instead of) answering. An empty closed
-        # <think></think> is not thinking; a reply cut off with no answer is.
-        thinks = bool(thought) or plain_reasoning or (finish == "length" and answer is None)
+        # <think></think> is not thinking.
+        thinks = bool(thought) or plain_reasoning or cut_off
         out.update(answer=answer, thinks=thinks, finish=finish, content=content[:500],
                    reasoning_chars=len(thought))
         return out
 
     # ---- choosing a strategy ----------------------------------------------------------
     def probe(self, b64: Optional[str] = None, prompt: str = PROMPT, deadline: Optional[float] = None,
-              strategies=AUTO) -> Optional[Dict[str, Any]]:
+              strategies=AUTO, per_request: float = 15.0) -> Optional[Dict[str, Any]]:
         """Try the strategies in order; keep the first that answers without thinking
         (else the fastest that still answered within the token cap). Returns that
-        reply (its answer is a real description of `b64`), or None."""
+        reply (its answer is a real description of `b64`), or None. Waits for a
+        probe already running (background callers only: describe() never waits)."""
         with self._lock:
-            b64 = b64 or test_image()
-            self.probe_results = []
-            started = time.monotonic()
-            for strategy in strategies:
-                left = (deadline - time.monotonic()) if deadline else self.timeout_s * 2 - (
-                    time.monotonic() - started)
-                if left <= 1:
-                    break
-                try:
-                    reply = self._ask(b64, prompt, strategy, min(left, 15.0))
-                except Exception as e:
-                    reply = {"strategy": strategy, "error": repr(e), "answer": None, "thinks": None}
-                self.probe_results.append(reply)
-                if reply.get("answer") and not reply.get("thinks"):
-                    return self._choose(reply, "answers without thinking")
-                if reply.get("error") and "HTTP" not in reply["error"]:
-                    break                    # server down or timed out: no point trying more
-            answered = [r for r in self.probe_results if r.get("answer")]
-            if answered:                     # it thinks a little, but answers within the cap
-                return self._choose(min(answered, key=lambda r: r.get("seconds", 99)),
-                                    "thinks a little but answers within the token cap")
-            if self.probe_results and any(r.get("thinks") for r in self.probe_results):
-                self.strategy = None
-                self.disabled_until = time.monotonic() + RETRY_DISABLED_S
-                if self.use_cache:
-                    _save_cache(self._key, None)
-                if not self._warned:
-                    self._warned = True
-                    log.warning("vision: %s thinks before every answer, whatever the request. "
-                                "Photos are described by the object detector until that's fixed. %s",
-                                self.model, FIX_HINT)
-            return None
+            return self._probe(b64, prompt, deadline, strategies, per_request)
+
+    def _probe(self, b64: Optional[str], prompt: str, deadline: Optional[float],
+               strategies=AUTO, per_request: float = 15.0) -> Optional[Dict[str, Any]]:
+        """probe() without the lock: the caller holds self._lock."""
+        b64 = b64 or test_image()
+        self.probe_results = []
+        if deadline is None:
+            deadline = time.monotonic() + max(self.timeout_s * 2, per_request * len(strategies))
+        for strategy in strategies:
+            left = deadline - time.monotonic()
+            if left <= 1:
+                break
+            timeout = min(left, per_request)
+            try:
+                reply = self._ask(b64, prompt, strategy, timeout)
+            except requests.RequestException as e:
+                # down, refused or timed out: no point trying the next one (and no
+                # verdict about thinking: it never answered)
+                why = f"timed out after {timeout:.0f} s" if isinstance(e, requests.Timeout) else repr(e)
+                self.probe_results.append({"strategy": strategy, "error": why[:300], "answer": None,
+                                           "thinks": None})
+                break
+            except Exception as e:           # an HTTP error for this request's shape: try the next
+                reply = {"strategy": strategy, "error": repr(e)[:300], "answer": None, "thinks": None}
+            self.probe_results.append(reply)
+            if reply.get("answer") and not reply.get("thinks"):
+                return self._choose(reply, "answers without thinking")
+        answered = [r for r in self.probe_results if r.get("answer")]
+        if answered:                         # it thinks a little, but answers within the cap
+            return self._choose(min(answered, key=lambda r: r.get("seconds", 99)),
+                                "thinks a little but answers within the token cap")
+        if any(r.get("thinks") for r in self.probe_results):     # real replies, all thinking
+            self.strategy = None
+            self.disabled_until = time.monotonic() + RETRY_DISABLED_S
+            if self.use_cache:
+                _save_cache(self._key, None)
+            if not self._warned:
+                self._warned = True
+                log.warning("vision: %s thinks before every answer, whatever the request. "
+                            "Photos are described by the object detector until that's fixed. %s",
+                            self.model, FIX_HINT)
+        return None
 
     def _choose(self, reply: Dict[str, Any], how: str) -> Dict[str, Any]:
-        self.strategy, self.disabled_until, self._warned = reply["strategy"], 0.0, False
         if self.use_cache and not self.forced:
-            _save_cache(self._key, self.strategy)
+            _save_cache(self._key, reply["strategy"])      # before it shows: nothing races the file
+        self.strategy, self.disabled_until, self._warned = reply["strategy"], 0.0, False
         log.info("vision: %s %s with '%s' (%.1f s)", self.model, how, self.strategy,
                  reply.get("seconds", 0))
         return reply
@@ -325,19 +354,21 @@ class Vision:
         all, or None; self.answer_s is how long the description itself took."""
         t0 = time.monotonic()
         self.answer_s = None
+        load_s = max(self.timeout_s, WARM_UP_S)       # the first image also loads the vision part
         try:
-            if self.strategy is not None:
-                reply = self._ask(test_image(), PROMPT, self.strategy, self.timeout_s)
-                if reply.get("answer"):
-                    self.answer_s = reply.get("seconds")
-                    return round(time.monotonic() - t0, 1)
-                if self.forced:
-                    log.warning("vision warm-up: '%s' gave no answer (the model thought). %s",
-                                self.strategy, FIX_HINT)
-                    return None
-                log.info("vision warm-up: the saved '%s' gave no answer; probing", self.strategy)
-                self.strategy = None
-            reply = self.probe()
+            with self._lock:                          # a photo meanwhile doesn't wait: the detector
+                if self.strategy is not None:
+                    reply = self._ask(test_image(), PROMPT, self.strategy, load_s)
+                    if reply.get("answer"):
+                        self.answer_s = reply.get("seconds")
+                        return round(time.monotonic() - t0, 1)
+                    if self.forced:
+                        log.warning("vision warm-up: '%s' gave no answer (the model thought). %s",
+                                    self.strategy, FIX_HINT)
+                        return None
+                    log.info("vision warm-up: the saved '%s' gave no answer; probing", self.strategy)
+                    self.strategy = None
+                reply = self._probe(None, PROMPT, None, AUTO, per_request=load_s)
             if reply is None:
                 return None
             self.answer_s = reply.get("seconds")
@@ -377,8 +408,28 @@ class Vision:
                 log.warning("vision: '%s' stopped working (no answer, the model thought); "
                             "trying the others", self.strategy)
                 self.strategy = None
-            last["attempts"] += 1
-            reply = self.probe(b64, prompt, deadline)
+            # pick a strategy on this photo, but never wait behind another probe (the
+            # warm-up, the background retry): the detector describes this one instead
+            if not self._lock.acquire(blocking=False):
+                last["error"] = "vision is busy picking how to turn thinking off (warm-up)"
+                log.warning("vision skipped: %s; the detector describes this photo", last["error"])
+                return None
+            try:
+                if self.disabled_until:      # that other probe found nothing works
+                    last["error"] = "vision skipped: the model thinks before every answer (" + FIX_HINT + ")"
+                    return None
+                if self.strategy is not None:    # ... or it just picked one: use it
+                    last["attempts"] += 1
+                    reply = self._ask(b64, prompt, self.strategy, max(1.0, deadline - time.monotonic()))
+                    self._note(last, reply)
+                    if not reply.get("answer"):
+                        last["error"] = f"'{self.strategy}' gave no answer"
+                        log.warning("vision failed: %s", last["error"])
+                    return reply.get("answer")
+                last["attempts"] += 1
+                reply = self._probe(b64, prompt, deadline)
+            finally:
+                self._lock.release()
             if reply is not None:
                 self._note(last, reply)
                 last["strategy"] = self.strategy

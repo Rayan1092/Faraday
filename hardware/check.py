@@ -130,11 +130,7 @@ def vision(settings, photo=None) -> int:
             r = clean[0] if clean else min(answered, key=lambda x: x["seconds"])
             picks[m] = (r["strategy"], r["seconds"])
     print()
-    if v.model in picks and picks[v.model][1] < 5:
-        choice = v.model
-    else:
-        fast = [m for m in picks if picks[m][1] < 5]
-        choice = fast[0] if fast else min(picks, key=lambda m: picks[m][1], default=None)
+    choice = pick_model(picks, v.model)
     if choice is None:
         print("NO strategy stops the thinking on this server. Photos will be described by the "
               f"object detector until it's fixed: {FIX_HINT}. Then run this again.")
@@ -152,6 +148,18 @@ def vision(settings, photo=None) -> int:
     print()
     _brain_check(settings, prof)
     return code
+
+
+def pick_model(picks, preferred, target_s: float = 5.0):
+    """picks = {model: (strategy, seconds)} of the models that work. The preferred
+    (vision) model stays unless it misses the target and another makes it; a model
+    is recommended over it only then, or when it doesn't work at all."""
+    fast = [m for m in picks if picks[m][1] < target_s]
+    if preferred in picks and (picks[preferred][1] < target_s or not fast):
+        return preferred
+    if fast:
+        return fast[0]
+    return min(picks, key=lambda m: picks[m][1], default=None)
 
 
 def _brain_check(settings, prof) -> None:

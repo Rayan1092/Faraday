@@ -44,7 +44,7 @@ Every other new setting already has the right default in the code. The full file
 
 ## With Wi-Fi OFF
 
-6. Open LM Studio, then bring everything up without starting Faraday: **`FARADAY_DRY_RUN=1 integration/start_mac.sh`**. It starts `argmax-cli serve` (it keeps running), loads the 9B and the 2B (and `llm.vision_model` if you set one) if the `lms` command is installed, and checks everything. If `lms` isn't installed, load only the 9B and the 2B by hand. Eject anything else.
+6. Open LM Studio, then bring everything up without starting Faraday: **`FARADAY_DRY_RUN=1 integration/start_mac.sh`**. It starts `argmax-cli serve` (it keeps running), loads the 9B and the 2B (and `llm.vision_model` if you set one) if the `lms` command is installed, and checks everything. If `lms` isn't installed, load only the 9B and the 2B by hand (plus `llm.vision_model` if you set one). Eject anything else.
 7. `python3 -m hardware.check camera`, then **`python3 -m hardware.check vision`** (under a minute; it also loads and times `ternary-bonsai-2-4b-mlx` if that is downloaded).
    - **Expect:** a table, one row per model and no-think method. On the 9B, `plain` says THINKS (it ignores reasoning_effort). The row that matters is **`prefill`**: `ok`, a factual sentence ("Nobody is there." with nobody in view), under 5 s. Then a `USE: …` line (the app picks it up from its next start) and two `brain …: OK` lines (Dell's 9B and 2B calls).
    - **If `USE` names the 4B:** add the line it prints under `"llm"` in `config/settings.json`. `start_mac.sh` then loads the 4B as well.
