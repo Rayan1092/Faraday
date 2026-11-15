@@ -30,7 +30,7 @@ Owner's list after the Mac test, item 5: "Rewrite every fixed spoken line in one
 
 **Prompts:** Bonsai's own lines are now asked for as "a calm, professional home security assistant: one short sentence, never jokes" (both prompt profiles).
 
-**NV's voice cache:** `integration/fixed_lines.py` finds all 31 lines in `FIXED_LINES` and none of the old ones. The startup pre-render renders them, keyed by text. NV's `test_dells_fixed_lines_are_found` names three old lines, so a patch is ready: `docs/team/patches/nv-test-tts-final-lines.patch` (16/16 pass). PLAN Q37.
+**NV's voice cache:** `integration/fixed_lines.py` finds all 31 lines in `FIXED_LINES` and none of the old ones. The startup pre-render renders them, keyed by text. NV's `test_dells_fixed_lines_are_found` names three old lines, so a patch is ready: `docs/team/patches/nv-test-tts-final-lines.patch` (16/16 pass). PLAN Q38.
 
 **Review fixes:**
 - No armed reply mentions a passphrase. The armed "no changes" line no longer says "Say the passphrase", and a test checks every armed reply.
