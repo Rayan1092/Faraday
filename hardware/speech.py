@@ -195,9 +195,12 @@ class ArgmaxTTS(TextToSpeech):
         self.command, self.device, self.timeout_s, self.player = command, device, timeout_s, player
         self.voice = dict(voice or {})
         self.cache_dir = cache_dir
-        self._extras_ok = True              # this argmax-cli accepts the voice/output flags
+        self._voice_ok = True               # this argmax-cli accepts the voice flags
+        self._output_ok = True              # ... and --output-path/--output-format
         self.speaking = False
         self.cache_hits = 0
+        self._render_proc: Optional[subprocess.Popen] = None   # a pre-render running now
+        self._render_lock = threading.Lock()
 
     @classmethod
     def from_config(cls, cfg: Dict[str, Any], device: Any = None,
@@ -222,39 +225,72 @@ class ArgmaxTTS(TextToSpeech):
         for key, flag in (("seed", "--seed"), ("temperature", "--temperature"),
                           ("top_k", "--top-k"), ("model", "--model")):
             if v.get(key) is not None:
-                args += [flag, str(v[key])]
+                value = str(v[key])
+                args += [flag, value.lower() if key == "model" else value]   # CLI wants 0.6b / 1.7b
         if v.get("instruction") and str(v.get("model", "")).lower() == "1.7b":
             args += ["--instruction", str(v["instruction"])]      # the 0.6B ignores it
         return args
 
-    def _cmd(self, text: str, tmp: Path, play: bool, extras: bool) -> List[str]:
+    @property
+    def can_cache(self) -> bool:
+        """A wav to keep comes out of every line (the CLI takes the output flags)."""
+        return self.cache_dir is not None and (not self.plays_itself or self._output_ok)
+
+    def _cmd(self, text: str, tmp: Path, play: bool) -> List[str]:
         cmd = self.build(text, tmp / "say.wav")
+        if self._voice_ok:
+            cmd += self.voice_args()
         if not self.plays_itself:
-            return cmd + (self.voice_args() if extras else [])
+            return cmd
         if not play:
             cmd = [part for part in cmd if part != "--play"]
-        if extras:
-            cmd += self.voice_args() + ["--output-path", str(tmp / "say"), "--output-format", "wav"]
+        if self._output_ok:
+            cmd += ["--output-path", str(tmp / "say"), "--output-format", "wav"]
         return cmd
 
     def _timeout(self, text: str) -> float:
         # with --play the process lives for the whole spoken line (~3 words/s)
         return max(self.timeout_s, 10 + 0.15 * len(text))
 
-    def _run(self, cmd: List[str], text: str) -> Tuple[bool, str]:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self._timeout(text))
-        out = (proc.stdout or "") + (proc.stderr or "")
-        if proc.returncode != 0:
-            log.warning("argmax TTS failed (%s): %s", proc.returncode, out[-300:])
-        return proc.returncode == 0, out
+    USAGE_ERROR = 64                 # swift-argument-parser's exit code for bad flags/values
 
-    def _run_with_fallback(self, text: str, tmp: Path, play: bool) -> Tuple[bool, str]:
-        ok, out = self._run(self._cmd(text, tmp, play, self._extras_ok), text)
-        if not ok and self._extras_ok and re.search(r"unknown option|unexpected argument", out, re.I):
-            log.warning("this argmax-cli refuses the voice/output flags; using the plain command")
-            self._extras_ok = False
-            ok, out = self._run(self._cmd(text, tmp, play, False), text)
-        return ok, out
+    def _run(self, cmd: List[str], text: str, track: bool = False) -> Tuple[int, str]:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if track:
+            self._render_proc = proc
+        try:
+            stdout, stderr = proc.communicate(timeout=self._timeout(text))
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise
+        finally:
+            if track:
+                self._render_proc = None
+        out = (stdout or "") + (stderr or "")
+        if proc.returncode != 0 and not (track and proc.returncode < 0):
+            log.warning("argmax TTS failed (%s): %s", proc.returncode, out[-300:])
+        return proc.returncode, out
+
+    def _usage_error(self, code: int, out: str) -> bool:
+        return code == self.USAGE_ERROR or bool(
+            re.search(r"unknown option|unexpected argument|is invalid|invalid value", out, re.I))
+
+    def _run_with_fallback(self, text: str, tmp: Path, play: bool,
+                           track: bool = False) -> Tuple[bool, str]:
+        """Run; on a usage error drop the voice flags first (keep caching), then the
+        output flags, so Faraday never goes silent over a flag this CLI lacks."""
+        code, out = self._run(self._cmd(text, tmp, play), text, track)
+        if code != 0 and self._usage_error(code, out) and self._voice_ok and self.voice_args():
+            log.warning("this argmax-cli refuses the voice settings (%s); speaking without them",
+                        out.strip().splitlines()[-1][:120] if out.strip() else code)
+            self._voice_ok = False
+            code, out = self._run(self._cmd(text, tmp, play), text, track)
+        if code != 0 and self._usage_error(code, out) and self._output_ok and self.plays_itself:
+            log.warning("this argmax-cli refuses --output-path/--output-format; no cache")
+            self._output_ok = False
+            code, out = self._run(self._cmd(text, tmp, play), text, track)
+        return code == 0, out
 
     # ---- cache ------------------------------------------------------------------------
     def cache_path(self, text: str) -> Optional[Path]:
@@ -284,7 +320,7 @@ class ArgmaxTTS(TextToSpeech):
         if made is None or made.stat().st_size <= 44:
             return None
         dest.parent.mkdir(parents=True, exist_ok=True)
-        part = dest.with_suffix(".part")
+        part = dest.with_suffix(f".{threading.get_ident()}.part")   # one per thread
         shutil.copyfile(made, part)
         os.replace(part, dest)
         self._prune()
@@ -303,16 +339,28 @@ class ArgmaxTTS(TextToSpeech):
         print(f"  SAY: {text}")
         self.speaking = True
         try:
+            self._stop_render()                  # a live line never shares the engine
             hit = self.cached(text)
             if hit is not None:
-                self.cache_hits += 1
-                self.player(hit, self.device)
-                return True
+                try:
+                    self.player(hit, self.device)
+                    self.cache_hits += 1
+                    try:
+                        os.utime(hit)            # recently used: pruned last
+                    except OSError:
+                        pass
+                    return True
+                except Exception as e:           # bad file / device: forget it, synthesize
+                    log.warning("cached take failed to play (%r); synthesizing", e)
+                    try:
+                        hit.unlink()
+                    except OSError:
+                        pass
             with tempfile.TemporaryDirectory(prefix="faraday-tts-") as tmp_name:
                 tmp = Path(tmp_name)
                 if self.plays_itself:
                     ok, out = self._run_with_fallback(text, tmp, play=True)
-                    if ok:
+                    if ok and self.can_cache:
                         self._store(text, tmp, out)
                     return ok
                 ok, out = self._run_with_fallback(text, tmp, play=False)
@@ -325,18 +373,29 @@ class ArgmaxTTS(TextToSpeech):
         finally:
             self.speaking = False
 
+    def _stop_render(self) -> None:
+        """A live line is starting: stop a pre-render that is running (it would
+        load the models a second time and make the live line late or choppy).
+        prerender() tries that line again afterwards."""
+        proc = self._render_proc
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
     def render(self, text: str) -> Optional[Path]:
         """Make the cached wav for a line without playing it (pre-render)."""
         text = " ".join(str(text).split())
-        if not text or self.cache_dir is None:
+        if not text or not self.can_cache:
             return None
         hit = self.cached(text)
         if hit is not None:
             return hit
-        with tempfile.TemporaryDirectory(prefix="faraday-tts-") as tmp_name:
+        with self._render_lock, tempfile.TemporaryDirectory(prefix="faraday-tts-") as tmp_name:
             tmp = Path(tmp_name)
             try:
-                ok, out = self._run_with_fallback(text, tmp, play=False)
+                ok, out = self._run_with_fallback(text, tmp, play=False, track=True)
             except subprocess.TimeoutExpired:
                 log.warning("pre-render timed out: %s", text[:60])
                 return None
@@ -351,9 +410,14 @@ class ArgmaxTTS(TextToSpeech):
         """Render every line not cached yet; pauses while `wait()` is True (Faraday
         is talking) so it never competes with a live line. Returns lines made."""
         made = 0
-        for line in lines:
+        todo = list(lines)
+        tries: Dict[str, int] = {}
+        while todo:
+            line = todo.pop(0)
             if stop is not None and stop.is_set():
                 break
+            if not self.can_cache:
+                break                         # this CLI can't write a file: nothing to fill
             if self.cached(line) is not None:
                 continue
             while (wait is not None and wait()) or self.speaking:
@@ -361,6 +425,14 @@ class ArgmaxTTS(TextToSpeech):
                     return made
                 if stop is None:
                     time.sleep(0.2)
-            if self.render(line) is not None:
+            try:
+                path = self.render(line)
+            except Exception:
+                log.exception("pre-render failed: %s", line[:60])
+                path = None
+            if path is not None:
                 made += 1
+            elif self.speaking and tries.get(line, 0) < 2:
+                tries[line] = tries.get(line, 0) + 1
+                todo.append(line)             # stopped for a live line: once more later
         return made

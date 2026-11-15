@@ -221,6 +221,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     tts_cfg = for_os(settings.get("tts", {})) or {}
     if prerender is not None and getattr(app.speaker, "cache_dir", None) and tts_cfg.get("prerender", True):
         # Faraday's fixed lines, rendered once with the fixed voice: instant and identical
+        import threading
         from integration.fixed_lines import fixed_lines
         lines = fixed_lines()
 

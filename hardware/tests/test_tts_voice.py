@@ -23,16 +23,26 @@ import json, os, sys, time, wave
 args = sys.argv[1:]
 with open(os.environ["FAKE_ARGMAX_LOG"], "a", encoding="utf-8") as f:
     f.write(json.dumps(args) + "\n")
-if os.environ.get("FAKE_ARGMAX_OLD") and any(a in args for a in ("--seed", "--output-path")):
-    print("Error: Unknown option '--seed'", file=sys.stderr)
-    sys.exit(64)
+old = os.environ.get("FAKE_ARGMAX_OLD", "")
+refused = {"voice": ("--seed", "--temperature", "--top-k", "--model"),
+           "all": ("--seed", "--temperature", "--top-k", "--model", "--output-path", "--output-format")}
+for flag in refused.get(old, ()):
+    if flag in args:
+        print(f"Error: Unknown option '{flag}'", file=sys.stderr)
+        sys.exit(64)
 def opt(name, default=None):
     return args[args.index(name) + 1] if name in args else default
+if opt("--model") not in (None, "0.6b", "1.7b"):
+    print(f"Error: The value '{opt('--model')}' is invalid for '--model <model>'", file=sys.stderr)
+    sys.exit(64)
+time.sleep(float(os.environ.get("FAKE_ARGMAX_SLOW", "0")))
 if "--play" in args:
     time.sleep(0.2)
 out, fmt = opt("--output-path"), opt("--output-format", "m4a")
 if out:
-    path = out if out.endswith("." + fmt) else out + "." + fmt
+    # like AudioOutput.saveAudio: drop any "extension", then add the format's
+    folder, name = os.path.split(out)
+    path = os.path.join(folder, os.path.splitext(name)[0] + "." + fmt)
     with wave.open(path, "wb") as w:
         w.setnchannels(1); w.setsampwidth(2); w.setframerate(24000)
         w.writeframes(b"\x01\x00" * 2400)
@@ -105,8 +115,8 @@ class Voice(Base):
         self.assertEqual(args[args.index("--model") + 1], "1.7b")
         self.assertEqual(args[args.index("--instruction") + 1], "Speak calmly and warmly")
 
-    def test_old_cli_without_the_flags_still_speaks(self):
-        os.environ["FAKE_ARGMAX_OLD"] = "1"
+    def test_cli_without_voice_flags_still_speaks_and_caches(self):
+        os.environ["FAKE_ARGMAX_OLD"] = "voice"
         gate = MicGate()
         tts = self.tts(gate=gate)
         with self.assertLogs("hardware.speech", "WARNING"):
@@ -114,8 +124,46 @@ class Voice(Base):
         first, second = self.calls()
         self.assertIn("--seed", first)
         self.assertNotIn("--seed", second)
-        self.assertFalse(tts._extras_ok)
+        self.assertIn("--output-path", second)                  # caching kept
+        self.assertFalse(tts._voice_ok)
+        self.assertIsNotNone(tts.cached("Hello there."))
         self.assertFalse(gate.muted)
+
+    def test_cli_without_any_new_flags_speaks_and_skips_prerender(self):
+        os.environ["FAKE_ARGMAX_OLD"] = "all"
+        tts = self.tts()
+        with self.assertLogs("hardware.speech", "WARNING"):
+            self.assertTrue(tts.say("Hello there."))
+        self.assertNotIn("--output-path", self.calls()[-1])
+        self.assertFalse(tts.can_cache)
+        n = len(self.calls())
+        self.assertEqual(tts.prerender(["A line.", "Another line."]), 0)
+        self.assertEqual(len(self.calls()), n)                  # no pointless runs
+
+    def test_model_value_is_lower_cased(self):
+        tts = self.tts(voice={"seed": 7, "model": "1.7B", "instruction": "Speak calmly and warmly"})
+        self.assertTrue(tts.say("Hello."))                      # the CLI rejects "1.7B"
+        args = self.calls()[0]
+        self.assertEqual(args[args.index("--model") + 1], "1.7b")
+        self.assertIn("--instruction", args)
+
+    def test_broken_cached_take_falls_back_to_the_cli(self):
+        tts = self.tts()
+        tts.say("Hello.")
+        def broken(path, device):
+            raise RuntimeError("device gone")
+        tts.player = broken
+        with self.assertLogs("hardware.speech", "WARNING"):
+            self.assertTrue(tts.say("Hello."))
+        self.assertEqual(len(self.calls()), 2)                  # synthesized again
+
+    def test_cache_hit_marks_the_take_recently_used(self):
+        tts = self.tts()
+        tts.say("Hello.")
+        hit = tts.cached("Hello.")
+        os.utime(hit, (1, 1))
+        tts.say("Hello.")
+        self.assertGreater(hit.stat().st_mtime, 1000)
 
     def test_mic_muted_while_a_cached_take_plays(self):
         gate, seen = MicGate(), []
@@ -149,11 +197,45 @@ class Prerender(Base):
         tts.say("One moment, please.")
         self.assertEqual(len(self.played), 1)                      # instant, from the cache
 
+    def test_live_line_stops_a_running_prerender_which_retries_later(self):
+        os.environ["FAKE_ARGMAX_SLOW"] = "1.5"
+        try:
+            tts = self.tts()
+            result = []
+            t = threading.Thread(target=lambda: result.append(tts.prerender(["Let me look."])))
+            t.start()
+            from hardware.tests.test_media import wait_until
+            self.assertTrue(wait_until(lambda: tts._render_proc is not None, 5))
+            os.environ["FAKE_ARGMAX_SLOW"] = "0"
+            t0 = time.monotonic()
+            self.assertTrue(tts.say("Someone is at the door."))  # live: the render is stopped
+            self.assertLess(time.monotonic() - t0, 1.5)
+            t.join(20)
+            self.assertEqual(result, [1])                       # and made afterwards
+            self.assertIsNotNone(tts.cached("Let me look."))
+        finally:
+            os.environ.pop("FAKE_ARGMAX_SLOW", None)
+
     def test_stop_ends_the_prerender(self):
         tts = self.tts()
         stop = threading.Event()
         stop.set()
         self.assertEqual(tts.prerender(["A line.", "Another line."], stop=stop), 0)
+
+
+class Audition(Base):
+    def test_takes_are_found_although_the_cli_drops_dotted_names(self):
+        """Review of #44: "take01-0.6b-s7-t0.3" was saved as "...-t0.wav" and every take
+        was reported FAILED."""
+        from hardware import tts_audition
+        cmd = [sys.executable, str(self.cli), "tts", "--text", "{text}", "--speaker", "aiden"]
+        take = {"take": 3, "model": "0.6b", "seed": 7, "temperature": 0.3}
+        out = self.dir / "aud"
+        out.mkdir()
+        r = tts_audition.render(cmd, "Hello.", take, out)
+        self.assertTrue(r["ok"], r)
+        self.assertTrue(Path(r["wav"]).exists())
+        self.assertIn('"voice": {"seed": 7, "temperature": 0.3', tts_audition.settings_lines(take))
 
 
 class Settings(unittest.TestCase):

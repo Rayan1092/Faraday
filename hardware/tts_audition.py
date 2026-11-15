@@ -55,12 +55,24 @@ def render(cmd: List[str], line: str, take: Dict[str, Any], out: Path) -> Dict[s
              "--model", take["model"]]
     if take.get("instruction"):
         args += ["--instruction", take["instruction"]]
-    stem = out / f"take{take['take']:02d}-{take['model']}-s{take['seed']}-t{take['temperature']}"
+    # no dots in the name: the CLI drops everything after the last dot ("t0.3" -> "t0")
+    stem = out / f"take{take['take']:02d}"
+    for old in out.glob(f"take{take['take']:02d}.*"):
+        old.unlink()
     args += ["--output-path", str(stem), "--output-format", "wav"]
     t0 = time.monotonic()
-    proc = subprocess.run(args, capture_output=True, text=True, timeout=300)
+    timeout = 1200 if take["model"] == "1.7b" else 300      # the first 1.7B run downloads it
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return dict(take, seconds=round(time.monotonic() - t0, 1), ok=False, wav=None,
+                    error=f"timed out after {timeout} s")
     took = time.monotonic() - t0
-    wav = Path(str(stem) + ".wav")
+    lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+    wav = Path(lines[-1]) if lines and lines[-1].lower().endswith(".wav") else Path(str(stem) + ".wav")
+    if not wav.exists():
+        found = sorted(out.glob(f"take{take['take']:02d}*.wav"))
+        wav = found[0] if found else wav
     result = dict(take, seconds=round(took, 1), ok=proc.returncode == 0 and wav.exists(),
                   wav=str(wav) if wav.exists() else None)
     if not result["ok"]:
@@ -108,7 +120,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         r = render(cmd, a.line, take, OUT)
         results.append(r)
         print(f"{r['seconds']} s" + (f" for {r['audio_s']} s of audio" if r["ok"] else f"  FAILED {r.get('error', '')}"))
-    (OUT / "takes.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+        (OUT / "takes.json").write_text(json.dumps(results, indent=2), encoding="utf-8")   # as we go
     for model in ("0.6b", "1.7b"):
         times = [r["seconds"] for r in results if r["ok"] and r["model"] == model]
         if times:
