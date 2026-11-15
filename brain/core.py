@@ -21,7 +21,7 @@ from shared import Action, ActionType, ChangedBy, Event, EventType, Mode, Speech
 from . import fallback as fb
 from . import lines as spoken
 from .bonsai import BonsaiClient, BonsaiError
-from .guard import GarbageReply, RawItem, filter_actions, parse_reply
+from .guard import GarbageReply, RawItem, claims_ability, filter_actions, parse_reply
 from modes.passphrase import REDACTED, redact
 from rules import instructions as oi
 
@@ -199,6 +199,13 @@ class Brain:
                                   ins=ins, recent=recent)
 
         actions, dropped = filter_actions(items, event, mode, allowed)
+        # A line that promises what Faraday can't do is never said (owner, Mac retest:
+        # "I will check the app settings for you"); the fallback answers instead.
+        promises = [a for a in actions if a.type == ActionType.SPEAK and claims_ability(a.args.get("text", ""))]
+        if promises:
+            actions = [a for a in actions if a not in promises]
+            dropped = dropped + [({"type": a.type, "args": a.args}, "promises something Faraday can't do")
+                                 for a in promises]
         self.log(f"[brain] Bonsai call took {elapsed:.2f}s: {len(items)} proposed, "
                  f"{len(actions)} kept, {len(dropped)} dropped")
         for item, why in dropped:

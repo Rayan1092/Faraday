@@ -185,6 +185,17 @@ def grounded(reason: str, ctx: Context) -> bool:
     return bool(words & stems)
 
 
+def agrees(category: str, reason: str) -> bool:
+    """Does the reason fit the label? A person label with "no one visible", or "nobody"
+    with a person in the reason, contradicts itself (owner, Mac retest)."""
+    text = reason or ""
+    if category in (C.VISITOR, C.DELIVERY, C.SUSPICIOUS):
+        return not NOBODY.search(text)
+    if category == C.NOBODY:
+        return bool(NOBODY.search(text)) or not PERSON.search(text)
+    return True
+
+
 _BOXY = re.compile(r"\b(package|parcel|box|boxes|carton|envelope)\b", re.I)
 _COURIER = re.compile(r"\bcouriers?\b", re.I)
 
@@ -358,6 +369,10 @@ def check(category: str, reason: str, ctx: Context) -> Tuple[str, str, str]:
             return rule_cat, rule_reason, f"code: {category} named nothing seen, so the rules decided"
         note = f"code wrote the reason (2B said: {clean[:60]})" if clean else "code wrote the reason"
         clean = rule_reason
+    if not agrees(category, clean):
+        # Owner, Mac retest: "visitor" with the reason "doorbell while away, no one visible".
+        note = f"code wrote the reason: the 2B's contradicted {category} ({clean[:60]})"
+        clean = reason_for(ctx, category)
     if len(clean) > REASON_MAX:
         clean = clean[:REASON_MAX - 3].rsplit(" ", 1)[0] + "..."
     return category, clean, note

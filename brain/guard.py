@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from shared import Action, ActionType, Event, Mode, Source, make_action
@@ -171,6 +172,40 @@ def _tidy(kind: str, args: Dict[str, Any]) -> Dict[str, Any]:
     if kind == ActionType.SET_MODE and isinstance(args.get("mode"), str):
         args["mode"] = args["mode"].strip().lower()
     return args
+
+
+# ---- promises Faraday can't keep -------------------------------------------
+# Faraday can only talk, take a message and pass on the owner's words. Owner, Mac
+# retest: Bonsai told someone "I will check the app settings for you".
+_COMMIT = re.compile(
+    r"\b(?:i(?:'ll|\s+will|\s+can|\s+could|\s+shall|'m\s+going\s+to|\s+am\s+going\s+to)|let\s+me"
+    r"|we(?:'ll|\s+will|\s+can))\s+(?:(?:also|just|now|only|gladly|happily|certainly|definitely|"
+    r"personally|quickly|right\s+away|go\s+ahead\s+and|try\s+to|be\s+(?:happy|glad|sure)\s+to|"
+    r"make\s+sure\s+to)\s+)*([a-z']+)(?:\s+([a-z']+))?", re.I)
+_DOING = re.compile(r"\bi'?m\s+(?:now\s+)?(?:checking|calling|contacting|texting|emailing|sending|opening|"
+                    r"unlocking|looking|searching|notifying|alerting|getting|fetching|fixing|connecting|"
+                    r"transferring|paging|ringing|phoning|messaging)\b", re.I)
+# What may follow "I'll / I can / let me": passing things on, never doing them.
+_CAN_DO = {"let", "tell", "pass", "take", "save", "put", "note", "make", "give", "record", "relay", "share",
+           "keep", "ask", "say", "repeat", "know", "hear", "not", "never", "help"}
+_HELP_WITH = re.compile(r"\b(deliver\w*|messages?|packages?|parcels?)\b", re.I)
+
+
+def claims_ability(text: str) -> bool:
+    """Does this line promise something Faraday can't do ("I'll check the settings",
+    "let me call the owner", "I'm opening the gate")? Taking a message, letting the owner
+    know and helping with a delivery are fine."""
+    text = str(text or "").replace("’", "'")
+    if _DOING.search(text):
+        return True
+    for m in _COMMIT.finditer(text):
+        verb, after = m.group(1).lower(), (m.group(2) or "").lower()
+        if verb == "help":
+            if not _HELP_WITH.search(text[m.start():]):
+                return True
+        elif verb not in _CAN_DO or (verb == "take" and after == "care"):
+            return True
+    return False
 
 
 def _shorten(text: str, limit: int) -> str:
