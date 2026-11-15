@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from shared import ActionType, EventType, Mode, Source, ThreatCategory, make_event, validate_event
+from shared import ActionType, EventType, Mode, Source, ThreatCategory, make_event, now_iso, validate_event
 from shared.events import PhotoDescribedData
 
 from brain.pipeline import Pipeline
@@ -60,6 +60,9 @@ class LabelFromSpeech(unittest.TestCase):
         photo, described = self.ring_and_photo(people=1, faces=1, described_by="detector")
         self.p.handle(events.speech("Delivery for Sam.", "visitor"))
         self.assertEqual(self.labels(), [])                               # no label yet: nothing to update
+        # The camera worker makes the event when vision is done, after the speech (a
+        # timestamp from before it made this test depend on the millisecond clock).
+        described.timestamp = now_iso()
         self.p.handle(described)                                          # vision failed, detector saw 1
         self.assertEqual(self.labels()[-1]["data"]["category"], C.DELIVERY)
 
