@@ -7,6 +7,7 @@ and photos from captures/. Buttons post back to the pipeline:
 - text box      -> a speech_heard event (backup if the mic or STT fails)
 - light switch  -> integration's control_hook (outlet_on/off, source dashboard)
 - Snapshot      -> pipeline.owner_snapshot() (take_photo, source dashboard)
+- Listen        -> integration's listen_hook (opens one listening window)
 
 /controls is the phone-style Controls page. Its live camera and intercom come from
 integration's controls server on dashboard port + 1 (PLAN Q27); `controls_port` in
@@ -81,8 +82,12 @@ class Dashboard:
         self.netcheck = NetCheck()
         self.photos = PhotoWatcher(MEDIA_DIR / "photos", REPO_ROOT)
         self.sensor_keys = {"doorbell": "0x00DEC608", "motion": "0x00C5AFAE"}
-        # integration/ can set this to start/stop push-to-talk recording from the page.
+        # integration/ sets these (PLAN Q26). listen_hook() -> bool opens one listening
+        # window (the Listen button); talk_hook is the old name for the same thing.
+        # listening_hook() -> bool, optional, says whether the mic is open right now.
+        self.listen_hook: Optional[Any] = None
         self.talk_hook: Optional[Any] = None
+        self.listening_hook: Optional[Any] = None
         # integration/ sets this (PLAN Q26): control_hook(outlet, on) -> bool switches a
         # light through its dispatcher and logs it with source "dashboard".
         self.control_hook: Optional[Any] = None
@@ -132,7 +137,9 @@ class Dashboard:
         rules = p.rules.all() if getattr(p, "rules", None) is not None else []
         state = build_state(p.log.recent(500), p.modes.mode, p.modes.alert, rules, self.colors,
                             network=self.netcheck.status(), newest_photo=self.photos.newest())
-        state["talk_available"] = self.talk_hook is not None
+        listen = self._listen_fn()
+        state["listen_available"] = state["talk_available"] = listen is not None
+        state["listening"] = self._listening()
         state["control_available"] = self.control_hook is not None
         state["controls_port"] = self.controls_port
         return state
@@ -157,12 +164,26 @@ class Dashboard:
         changed = bool(self.control_hook(outlet, on))
         return 200, {"ok": True, "changed": changed}
 
-    def talk(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
-        """Push-to-talk from the dashboard: calls integration's hook on a thread."""
-        if self.talk_hook is None:
-            return 503, {"ok": False, "error": "Push-to-talk isn't connected."}
-        threading.Thread(target=self.talk_hook, daemon=True).start()
-        return 202, {"ok": True}
+    def _listen_fn(self) -> Optional[Any]:
+        return self.listen_hook or self.talk_hook
+
+    def _listening(self) -> Optional[bool]:
+        """True/False from integration's listening_hook, None if it isn't set."""
+        if self.listening_hook is None:
+            return None
+        try:
+            return bool(self.listening_hook())
+        except Exception:
+            return None
+
+    def listen(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+        """Listen button: one listening window. integration's hook returns at once
+        (False if a window is already open)."""
+        hook = self._listen_fn()
+        if hook is None:
+            return 503, {"ok": False, "error": "The microphone isn't connected."}
+        opened = hook()
+        return 200, {"ok": True, "opened": True if opened is None else bool(opened)}
 
     def set_mode(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
         mode = body.get("mode")
@@ -214,7 +235,9 @@ class Dashboard:
 def _make_handler(app: Dashboard):
     posts = {"/api/mode": app.set_mode, "/api/home": app.go_home,
              "/api/say": app.say, "/api/rules/delete": app.delete_rule,
-             "/api/sensor": app.sensor, "/api/talk": app.talk, "/api/control": app.control,
+             "/api/sensor": app.sensor, "/api/listen": app.listen,
+             "/api/talk": app.listen,   # old name for Listen
+             "/api/control": app.control,
              "/api/snapshot": app.snapshot}
 
     class Handler(BaseHTTPRequestHandler):

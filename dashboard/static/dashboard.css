@@ -461,7 +461,18 @@ a.pill-btn:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.7); outline-
 .pill-btn.primary { background: var(--text); color: #0b0e14; border-color: transparent; }
 .pill-btn.ghost { background: transparent; }
 .pill-btn[hidden] { display: none; }
-.talk { padding: 0.6rem 1.3rem; font-size: 1.05rem; }
+.listen { padding: 0.5rem 1rem; font-size: 0.9rem; color: var(--text-2); }
+.listen .ico { width: 1rem; height: 1rem; }
+.listen.on { color: var(--green); border-color: rgba(52, 199, 89, 0.45); background: rgba(52, 199, 89, 0.10); cursor: default; }
+.listen:disabled { opacity: 1; }
+.link-row { display: inline-flex; align-items: center; gap: 0.5rem; }
+.mic-open {                    /* subtle: a small green mic while a listening window is open */
+  display: inline-grid; place-items: center; width: 1.6rem; height: 1.6rem; border-radius: 50%;
+  color: var(--green); background: rgba(52, 199, 89, 0.12); border: 1px solid rgba(52, 199, 89, 0.4);
+  animation: breathe 1.6s ease-in-out infinite;
+}
+.mic-open[hidden] { display: none; }
+.mic-open .ico { width: 0.9rem; height: 0.9rem; }
 .icon-btn {
   width: 2.6rem; height: 2.6rem; border-radius: 50%;
   border: 1px solid var(--stroke); background: transparent; color: var(--text-3);

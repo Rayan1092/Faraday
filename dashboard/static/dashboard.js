@@ -50,7 +50,7 @@
     for (const m of ["away", "night", "home"]) {
       $("btn-" + m).classList.toggle("active", s.mode === m);
     }
-    $("btn-talk").hidden = !s.talk_available;
+    renderListen(s);
 
     renderNet(s.network);
     renderToast(s.banner);
@@ -62,6 +62,21 @@
     renderFeed(s.feed);
     renderRules(s.rules);
     renderNotes(s.summary, s.messages);
+  }
+
+  // Listen: one tap opens one listening window (integration's listen_hook). The mic
+  // indicator follows integration's listening state; without it, a few seconds after a tap.
+  let listenUntil = 0;
+  const LISTEN_GUESS_MS = 8000;
+
+  function renderListen(s) {
+    const btn = $("btn-listen");
+    btn.hidden = !s.listen_available;
+    const open = s.listening === true || (s.listening == null && Date.now() < listenUntil);
+    btn.classList.toggle("on", open);
+    btn.disabled = open;
+    $("listen-label").textContent = open ? "Listening…" : "Listen";
+    $("mic-open").hidden = !open;
   }
 
   function renderNet(network) {
@@ -340,7 +355,10 @@
     if (e.key === "Escape") { setBackup(false); closeDialog(); }
   });
 
-  $("btn-talk").onclick = () => post("/api/talk", {});
+  $("btn-listen").onclick = () => post("/api/listen", {}).then(({ status, data }) => {
+    if (status === 200 && data.opened) listenUntil = Date.now() + LISTEN_GUESS_MS;
+    poll();
+  });
   $("btn-ring").onclick = () => post("/api/sensor", { type: "doorbell" }).then(poll);
   $("btn-motion").onclick = () => post("/api/sensor", { type: "motion" }).then(poll);
 

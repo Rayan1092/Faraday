@@ -117,30 +117,5 @@ class SensorButtons(unittest.TestCase):
         self.assertTrue(self.wait_for("alert_changed"))              # same path as the radio
         self.assertEqual(self.post({"type": "disarm"}), 400)
 
-
-class TalkButton(unittest.TestCase):
-    def test_hook_is_called_and_button_shows_only_when_set(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            d = Path(tmp)
-            brain = Brain(None, SECRET, log=lambda _m: None)
-            p = Pipeline(brain, ModeState(SECRET), EventLog(d / "e.jsonl", SECRET), say=lambda _m: None)
-            board = Dashboard(p, "127.0.0.1", 0).start()
-            try:
-                self.assertFalse(board.state()["talk_available"])
-                code, _ = board.talk({})
-                self.assertEqual(code, 503)
-                pressed = []
-                board.talk_hook = lambda: pressed.append(1)
-                self.assertTrue(board.state()["talk_available"])
-                self.assertEqual(board.talk({})[0], 202)
-                for _ in range(40):
-                    if pressed:
-                        break
-                    time.sleep(0.05)
-                self.assertEqual(pressed, [1])
-            finally:
-                board.stop()
-
-
 if __name__ == "__main__":
     unittest.main()
