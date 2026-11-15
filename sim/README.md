@@ -10,7 +10,7 @@ python -m sim --offline    # rule-based fallback only, no LM Studio needed
 python -m sim -v           # also print full JSON for every event and action
 python -m sim --log x.jsonl  # write somewhere other than logs/events.jsonl (rules go to x-rules.json)
 python -m sim --dashboard  # also serve the dashboard and open it in the browser
-python -m sim --offline --dashboard --port 8081 --no-browser
+python -m sim --offline --dashboard --port 8090 --no-browser
 ```
 
 Type a key, then Enter:
@@ -18,7 +18,8 @@ Type a key, then Enter:
 | Key | Does |
 |---|---|
 | `d` | doorbell |
-| `m` | motion (one merged event) |
+| `m` | motion (one merged event). Armed: porch light, then a 15 s wait for a doorbell |
+| `w` | end that wait now: no doorbell came, so the warning goes up |
 | `t <text>` | speech, as if STT heard it. Speech that contains the passphrase disarms (it is redacted first) |
 | `1` / `2` / `3` | Home / Away / Night. Home from an armed mode asks for the passphrase |
 | `s` | status: mode, alert and the last 10 log entries |

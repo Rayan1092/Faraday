@@ -86,7 +86,7 @@ When something happens, Faraday takes a photo, shows it on the dashboard right a
 - The AI can arm the house but can never disarm it. It picks from a fixed menu of 8 actions (set the mode, turn an outlet on or off, speak, take a photo, save a message, summarize the log, add a rule), and there's no "disarm" on it. Disarming only happens when someone says or types the passphrase, and that check is plain code.
 - The AI never sees the passphrase. It's blanked out of speech before anything gets logged or shown.
 - Everything the AI picks goes through checks in code. Unknown actions, bad arguments and anything that would change the mode while armed get dropped.
-- If the model errors, times out or says something useless, simple keyword rules take over, so the demo never freezes.
+- If the model errors, times out or says something useless, simple keyword rules take over, so Faraday never freezes.
 - In Away mode whoever is talking is a visitor, so they can only leave a message. They can't add rules or instructions, switch lights or hear the summary.
 - The threat label can only make Faraday more careful. Owner instructions are words to pass on, never actions.
 
@@ -123,30 +123,9 @@ cd Faraday
 cp config/settings.example.json config/settings.json    # then set your own passphrase
 ```
 
-**Try it without any hardware or AI.** This uses simple rules instead of Bonsai:
-
-```
-python -m sim --offline --dashboard
-```
-
-The dashboard opens in your browser. In the terminal, type a key and press Enter:
-- `d` is the doorbell, and `m` is motion.
-- `t <words>` is something someone said, for example `t Who's at the door?`.
-- `1`, `2`, `3` switch to Home, Away and Night. Home asks for the passphrase.
-- `q` quits.
-
-**With Bonsai.** Install LM Studio, load Bonsai 2 models and start its local server. Put the server address and model names in `config/settings.json` under `llm` (`model` is the smart one, `fast_model` the small one). Then run:
-
-```
-python -m sim --dashboard
-```
-
-On Windows use `py` instead of `python`.
-
 **With the real hardware.** Plug in the Flipper (close any app on it first), the camera, the mic and the speaker.
 - **On the Mac mini:** in LM Studio, load `ternary-bonsai-2-9b-mlx` and `ternary-bonsai-2-2b-mlx`, and raise Parallel above 1 so a background call doesn't wait in line. Start Argmax (`argmax-cli serve`). Then run `integration/start_mac.sh`. It checks that LM Studio and Argmax answer, warns you if the Wi-Fi is still on, and starts Faraday with the dashboard at http://127.0.0.1:8080 and the camera and intercom server next to it on port 8081.
 - **On a Windows laptop:** `py -m integration`.
-- **No hardware at all (developers):** `python -m sim --offline --dashboard` runs the same pipeline and dashboard with typed keys instead of sensors. It's a development and test tool, not part of the product.
 
 Then turn the Wi-Fi off. **[TBD: full run on the Mac mini]**
 
@@ -157,6 +136,14 @@ Then turn the Wi-Fi off. **[TBD: full run on the Mac mini]**
 4. Click **Relaunch**.
 
 With the Wi-Fi off, other devices can't reach the Mac, so open the Controls page on the Mac itself.
+
+**For developers: no hardware.** The simulator sends typed sensor events through the same pipeline and dashboard. It's a development and test tool, not part of the product. `python -m sim --offline --dashboard` uses simple rules instead of Bonsai. `python -m sim --dashboard` uses Bonsai through LM Studio's local server, with the server address and model names in `config/settings.json` under `llm` (`model` is the smart one, `fast_model` the small one). In the terminal, type a key and press Enter:
+- `d` is the doorbell, and `m` is motion. `w` ends the 15-second wait for a doorbell after motion.
+- `t <words>` is something someone said, for example `t Who's at the door?`.
+- `1`, `2`, `3` switch to Home, Away and Night. Home asks for the passphrase.
+- `q` quits.
+
+On Windows use `py` instead of `python`.
 
 **Tests:** `python -m unittest discover`
 
@@ -172,7 +159,7 @@ We'd rather be honest about these:
 - **It's not instant.** On a laptop running the 4B, a Bonsai call took 2.5 seconds on average and 5.7 seconds at worst in the benchmark. So lights and photos never wait for the AI, and Faraday says "One moment, please" to visitors while it thinks. **[TBD: timings on the Mac mini with the 9B and the 2B]**
 - **The passphrase is spoken out loud.** Anyone who hears you say it could use it. We also accept a typed passphrase on the dashboard, and wrong guesses get locked out for 30 seconds after 5 tries.
 - **Talking from another device needs the Chrome trust step**, and a network. On the Mac itself it just works.
-- **One house, one door, one camera.** It's a demo setup, not a full security system. It doesn't call anyone or send alerts off the box.
+- **One house, one door, one camera.** It's a small setup, not a full security system. It doesn't call anyone or send alerts off the box.
 
 ## Repo map
 

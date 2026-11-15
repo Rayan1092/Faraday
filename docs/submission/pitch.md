@@ -61,5 +61,3 @@ Matches the demo script in docs/PLAN.md. If time is short, skip beats 3 and 8.
 ## 3:40 Close (20 s)
 
 "Faraday is useful, it's private, and it's safe. It answers your door, it never sends your doorstep anywhere, and the AI can't unlock your house. And it's eyes and captions at the door for people who need them. Thanks. Happy to show anything again."
-
-
