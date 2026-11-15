@@ -38,7 +38,6 @@
           <div class="alert-row"><span class="dot" aria-hidden="true"></span><span id="alert">All clear</span></div>
         </div>
         <div class="badges">
-          <span id="net" class="pill net" title="Checked every few seconds without sending anything"><span class="dot" aria-hidden="true"></span><span id="net-text">OFFLINE</span></span>
           <span class="link-row"><span id="mic-open" class="mic-open" title="The mic is open" hidden><span data-icon="mic"></span></span><span id="link" class="link">connecting…</span></span>
         </div>
       </div>
@@ -55,17 +54,21 @@
       </div>
     </section>
 
-    <!-- Center: latest photo and the conversation -->
+    <!-- Center: the live camera (with the detector's boxes), its label, and the conversation -->
     <section class="col col-center">
       <figure class="glass photo-card">
         <div class="photo-frame">
+          <img id="live" alt="Live camera" hidden>
           <img id="photo" alt="Latest photo" hidden>
+          <span id="live-badge" class="live-badge" hidden><span class="dot" aria-hidden="true"></span>Live</span>
           <div id="photo-empty" class="photo-empty"><span data-icon="camera"></span><span>No photo yet</span></div>
         </div>
         <figcaption class="caption">
+          <p id="threat" class="threat" aria-live="polite"></p>
+          <div id="chips" class="chips" aria-label="What the camera detected" hidden></div>
+          <p id="recording" class="recording" hidden><span class="dot" aria-hidden="true"></span><span id="recording-text">Recording saved</span></p>
           <p id="photo-text" class="caption-text">The camera hasn't taken a photo yet.</p>
           <p class="caption-meta"><span data-icon="camera"></span><span id="photo-meta"></span></p>
-          <p id="threat" class="threat" aria-live="polite"></p>
         </figcaption>
       </figure>
 
@@ -83,7 +86,7 @@
       </div>
     </section>
 
-    <!-- Bottom dock: lights, modes, Controls page, Listen, backup -->
+    <!-- Bottom dock: lights, modes, Controls page -->
     <nav class="glass dock" aria-label="Controls">
       <div id="lights" class="lights"></div>
 
@@ -95,27 +98,9 @@
 
       <div class="dock-actions">
         <a id="btn-controls" class="pill-btn" href="/controls"><span data-icon="sliders"></span>Controls</a>
-        <button id="btn-listen" class="pill-btn listen" type="button" hidden title="Open the mic once, like saying Hey Faraday"><span data-icon="mic"></span><span id="listen-label">Listen</span></button>
-        <button id="btn-backup" class="icon-btn" type="button" aria-expanded="false" aria-controls="backup" title="Stage backup"><span data-icon="more"></span></button>
       </div>
     </nav>
   </main>
-
-  <!-- Stage backup: tucked away until needed -->
-  <div id="backup" class="glass popover" hidden>
-    <div class="popover-title">Stage backup</div>
-    <div class="popover-row">
-      <button id="btn-ring" class="pill-btn" type="button" title="Sends the same doorbell event the Flipper would"><span data-icon="door"></span>Ring doorbell</button>
-      <button id="btn-motion" class="pill-btn" type="button" title="Sends the same motion event the Flipper would"><span data-icon="motion"></span>Motion</button>
-    </div>
-    <form id="say-form" class="say" autocomplete="off">
-      <label for="say-text">Type what someone said (backup for the mic)</label>
-      <div class="say-row">
-        <input id="say-text" type="text" maxlength="500" placeholder="Faraday, I'm heading out.">
-        <button class="pill-btn" type="submit">Send</button>
-      </div>
-    </form>
-  </div>
 
   <!-- Passphrase sheet -->
   <div id="home-dialog" class="sheet-backdrop" hidden>

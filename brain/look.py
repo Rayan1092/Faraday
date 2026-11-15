@@ -68,4 +68,8 @@ def look_line(photo: Event, category: Optional[str]) -> str:
     if desc and desc[-1] not in ".!?":
         desc += "."
     tail = LABEL_WORDS.get(category or "", "")
+    said = desc.lower()
+    if tail and (tail.lower().rstrip(".") in said
+                 or (category == "nobody" and re.search(r"\b(nobody|no one|empty)\b", said))):
+        tail = ""          # "Nobody is there. Nobody is there." says it twice
     return f"{desc} {tail}".strip()

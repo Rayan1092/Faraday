@@ -1,4 +1,4 @@
-"""Projector polish rules that live in the page code (checked at 1280x720 and 1920x1080
+"""Polish rules that live in the page code (checked at 1280x720 and 1920x1080
 with screenshots; these tests keep the rules from silently disappearing)."""
 import re
 import unittest

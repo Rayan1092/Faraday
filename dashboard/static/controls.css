@@ -1,6 +1,6 @@
 /* Faraday Controls page. Same glass look as the dashboard (dashboard.css is loaded
    first for the colours, glass cards, pills and switches), laid out like a phone app:
-   one column on a phone, two on a laptop or projector. Big touch targets throughout. */
+   one column on a phone, two on a laptop or a wall screen. Big touch targets throughout. */
 
 html { font-size: 17px; }
 

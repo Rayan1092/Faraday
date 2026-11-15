@@ -500,7 +500,7 @@ class Voice:
         text = text_override if text_override is not None else self.stt.transcribe(wav)
         if not text:
             self.out("  [stt] no words recognized" + ("" if self.stt.available
-                                                      else " (no STT on this OS: use t <text>)"))
+                                                      else " (no STT on this OS)"))
             return
         data: Dict[str, Any] = {"text": text, "audio_path": relative(wav),
                                 "duration_s": round(seconds, 2), "channel": channel}
