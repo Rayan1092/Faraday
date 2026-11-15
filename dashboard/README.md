@@ -19,7 +19,7 @@ Or from the sim: `python -m sim --dashboard` (add `--offline` to run without LM 
 - **Heard & said:** speech in, Faraday's speech out. The passphrase shows as `[passphrase]`.
 - **Live events:** feed, newest first.
 - **Lights:** porch light and lamp as real switches. A tap posts `/api/control` to integration's `board.control_hook`, which sends the code and logs an `outlet_on`/`outlet_off` with `source: dashboard`. The tile always shows the state from the log, never what the tap hoped for. Without the hook the tiles are display only. The spare outlet shows only while it's on.
-- **Rules:** with a delete button.
+- **Rules & instructions:** voice rules and the owner's standing instructions for visitors ("Delivery · ask them to leave it by the side door"), each with a delete button.
 - **Messages:** plus the latest spoken summary.
 - **Buttons:** Away and Night. Home asks for the passphrase.
 - **Listen:** a small tap button (push-to-talk is gone). One tap opens one listening window through integration's `board.listen_hook`, like saying "Hey Faraday". While the mic is open the button reads "Listening…" and a small green mic breathes next to "Live". That follows `board.listening_hook()` if integration sets it, otherwise it shows for 8 s after a tap.
@@ -51,6 +51,7 @@ The page finds the controls server at `location.hostname` plus `controls_port` f
 | `POST /api/home {"passphrase": ...}` | disarm through `modes/`. 5 misses → 30 s lockout. Never logged |
 | `POST /api/say {"text": ...}` | backup for the mic |
 | `POST /api/rules/delete {"id": ...}` | remove a rule |
+| `POST /api/instructions/delete {"id": ...}` | remove an owner instruction |
 | `POST /api/sensor {"type": "doorbell"\|"motion"}` | stage backup: the same event the Flipper would send |
 | `POST /api/control {"outlet": ..., "on": true\|false}` | light switch through `board.control_hook`. 400 for a bad outlet, 503 if the hook isn't set |
 | `POST /api/listen` | Listen button: one listening window through `board.listen_hook` (`talk_hook` also works). Replies `{"opened": false}` if one is already open |

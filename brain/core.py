@@ -21,6 +21,7 @@ from . import fallback as fb
 from .bonsai import BonsaiClient, BonsaiError
 from .guard import GarbageReply, RawItem, filter_actions, parse_reply
 from modes.passphrase import REDACTED, redact
+from rules import instructions as oi
 
 from .safety import is_disarm_request
 from .settings import llm_config, load_settings, passphrase
@@ -58,6 +59,7 @@ class Brain:
         self.fast_model: Optional[str] = None
         self.smart_model: Optional[str] = None
         self.force_role: Optional[str] = None  # the bench can force "fast" or "smart"
+        self.instructions: Optional[Any] = None  # rules.InstructionStore, set by the pipeline
         self.log = log
 
     @classmethod
@@ -111,6 +113,7 @@ class Brain:
         recent = list(recent)
         cause = photo_cause(event, recent)
         label = threat_label(event, recent)
+        ins = self.instructions_for(event, mode, cause, label, recent)
 
         if event.type == EventType.SPEECH_HEARD:
             text, matched = redact(str(event.data.get("text", "")), self.passphrase)
@@ -140,11 +143,12 @@ class Brain:
         role = self.role_for(event, mode)
         client = self.fast_client if role == "fast" else self.client
         if client is None:
-            return self._fallback(event, mode, allowed, None, "no model configured", cause=cause, label=label)
+            return self._fallback(event, mode, allowed, None, "no model configured", cause=cause,
+                                  label=label, ins=ins)
         system = self.prompts["system"] if role == "smart" else PROFILES[
             pick_profile(self.fast_model or "")]["system"]
         messages = [{"role": "system", "content": system},
-                    {"role": "user", "content": self.prompt(event, mode, recent)}]
+                    {"role": "user", "content": self.prompt(event, mode, recent, ins)}]
         if before_model is not None:
             try:
                 before_model(event, mode)
@@ -158,11 +162,13 @@ class Brain:
         except (BonsaiError, GarbageReply) as e:
             elapsed = time.perf_counter() - started
             self.log(f"[brain] Bonsai call failed after {elapsed:.2f}s: {e}")
-            return self._fallback(event, mode, allowed, elapsed, str(e), cause=cause, label=label)
+            return self._fallback(event, mode, allowed, elapsed, str(e), cause=cause, label=label,
+                                  ins=ins)
         except Exception as e:  # never let the demo stall on a surprise
             elapsed = time.perf_counter() - started
             self.log(f"[brain] Bonsai call crashed after {elapsed:.2f}s: {e!r}")
-            return self._fallback(event, mode, allowed, elapsed, repr(e), cause=cause, label=label)
+            return self._fallback(event, mode, allowed, elapsed, repr(e), cause=cause, label=label,
+                                  ins=ins)
 
         actions, dropped = filter_actions(items, event, mode, allowed)
         self.log(f"[brain] Bonsai call took {elapsed:.2f}s: {len(items)} proposed, "
@@ -171,7 +177,7 @@ class Brain:
             self.log(f"[brain]   dropped {_short(item)}: {why}")
         if not actions:
             return self._fallback(event, mode, allowed, elapsed,
-                                  "no usable actions from Bonsai", dropped, cause, label)
+                                  "no usable actions from Bonsai", dropped, cause, label, ins)
         # Plain-code fix-ups on top of the model's answer. Each one is recorded, so the
         # benchmark can tell "Bonsai got it right" from "code fixed it".
         fixups: List[str] = []
@@ -188,7 +194,17 @@ class Brain:
         actions = self._confirm_mode(actions, event, mode, allowed)
         if len(actions) != before:
             fixups.append("added a spoken confirmation")
-        if label == ThreatCategory.DELIVERY and not any(
+        delivery_ins = next((i for i in ins if i["audience"] == oi.DELIVERY), None)
+        if label == ThreatCategory.DELIVERY and delivery_ins is not None:
+            # The owner said where deliveries go: that line, never a different spot.
+            if not any(a.type == ActionType.SPEAK and oi.mentions(a.args["text"], delivery_ins)
+                       for a in actions):
+                actions = [a for a in actions if not (a.type == ActionType.SPEAK
+                                                      and fb.mentions_dropoff(a.args["text"]))]
+                extra, _ = filter_actions([fb._speak(oi.spoken_line(delivery_ins))], event, mode, allowed)
+                actions = actions + extra
+                fixups.append("corrected: passed on the owner's delivery instruction")
+        elif label == ThreatCategory.DELIVERY and not any(
                 a.type == ActionType.SPEAK and fb.mentions_dropoff(a.args["text"]) for a in actions):
             # A delivery always gets drop-off instructions.
             extra, _ = filter_actions([fb._speak(fb.DELIVERY_LINE)], event, mode, allowed)
@@ -200,7 +216,30 @@ class Brain:
             extra, _ = filter_actions([fb._speak(fb.OFFER_MESSAGE)], event, mode, allowed)
             actions = actions + extra
             fixups.append("added the message offer")
+        greet_ins = [i for i in ins if i["audience"] != oi.DELIVERY]
+        if (event.type == EventType.PHOTO_DESCRIBED and cause == EventType.DOORBELL
+                and label != ThreatCategory.DELIVERY):
+            # The first greeting passes on the owner's words for visitors.
+            for one in greet_ins:
+                if not any(a.type == ActionType.SPEAK and oi.mentions(a.args["text"], one)
+                           for a in actions):
+                    extra, _ = filter_actions([fb._speak(oi.spoken_line(one))], event, mode, allowed)
+                    actions = actions + extra
+                    fixups.append("corrected: passed on the owner's instruction")
         return Decision(actions, "bonsai", elapsed, dropped, fixups=fixups, role=role)
+
+    def instructions_for(self, event: Event, mode: str, cause: str, label: str,
+                         recent: Iterable[Any] = ()) -> List[Dict[str, Any]]:
+        """The owner's instructions that fit this visitor moment (words only): a doorbell
+        or delivery photo, or a visitor talking while the house is armed."""
+        if self.instructions is None:
+            return []
+        if event.type == EventType.PHOTO_DESCRIBED and (cause == EventType.DOORBELL
+                                                        or label == ThreatCategory.DELIVERY):
+            return self.instructions.relevant(label)
+        if event.type == EventType.SPEECH_HEARD and mode in Mode.ARMED:
+            return self.instructions.relevant(latest_label(recent))
+        return []
 
     # ---- free-text calls (no tools) ----------------------------------------
 
@@ -233,7 +272,8 @@ class Brain:
 
     # ---- prompt ------------------------------------------------------------
 
-    def prompt(self, event: Event, mode: str, recent: Iterable[Any] = ()) -> str:
+    def prompt(self, event: Event, mode: str, recent: Iterable[Any] = (),
+               ins: Iterable[Dict[str, Any]] = ()) -> str:
         recent = list(recent)
         lines = [f"Mode: {mode}" + (" (armed)" if mode in Mode.ARMED else "")]
         history = [line for line in (_log_line(e) for e in list(recent)[-self.recent_lines:]) if line]
@@ -241,6 +281,10 @@ class Brain:
             lines.append("Recent:")
             lines += [f"- {line}" for line in history]
         lines.append(f"New: {describe_event(event, photo_cause(event, recent), threat_label(event, recent))}")
+        ins = list(ins)[:3]
+        if ins:
+            lines.append("The owner asked you to pass this on (say it, nothing else):")
+            lines += [f"- {oi.prompt_line(i)}" for i in ins]
         return "\n".join(lines)
 
     # ---- helpers -----------------------------------------------------------
@@ -253,8 +297,12 @@ class Brain:
     def _fallback(self, event: Event, mode: str, allowed: List[str],
                   elapsed: Optional[float], error: str,
                   model_dropped: Optional[List[Tuple[Any, str]]] = None,
-                  cause: str = "", label: str = "") -> Decision:
-        actions, dropped = filter_actions(fb.fallback(event, mode, cause, label),
+                  cause: str = "", label: str = "",
+                  ins: Iterable[Dict[str, Any]] = ()) -> Decision:
+        ins = list(ins)
+        delivery = next((oi.spoken_line(i) for i in ins if i["audience"] == oi.DELIVERY), None)
+        also = [oi.spoken_line(i) for i in ins if i["audience"] != oi.DELIVERY]
+        actions, dropped = filter_actions(fb.fallback(event, mode, cause, label, delivery, also),
                                           event, mode, allowed)
         actions = self._confirm_mode(actions, event, mode, allowed)
         self.log(f"[brain] using rule-based fallback ({error})")
@@ -390,6 +438,17 @@ def photo_cause(event: Event, recent: Iterable[Any]) -> str:
         if kind in reason:
             return kind
     return ""
+
+
+def latest_label(recent: Iterable[Any]) -> str:
+    """The most recent threat_assessed category in the log (for a visitor talking)."""
+    label = ""
+    for entry in recent:
+        if hasattr(entry, "to_dict"):
+            entry = entry.to_dict()
+        if isinstance(entry, dict) and entry.get("type") == EventType.THREAT_ASSESSED:
+            label = str((entry.get("data") or {}).get("category", ""))
+    return label
 
 
 def threat_label(event: Event, recent: Iterable[Any]) -> str:

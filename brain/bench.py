@@ -27,12 +27,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from shared import Action, ActionType, Mode, Source, make_action
+from shared import Action, ActionType, EventType, Mode, Source, make_action, make_event
 
 from sim import events
 
 from . import threat
 from .core import Brain, Decision
+from rules import instructions as owner_instructions
 from .threat import ThreatAssessor
 from .settings import REPO_ROOT, llm_config, load_settings
 
@@ -218,6 +219,14 @@ def cases() -> List[Case]:
                      Mode.AWAY, "motion", 0, "nobody"),
         Case("summary", "Owner: summary of the log (free text)", Mode.HOME,
              _free_text(lambda b: b.summarize(FACTS)), _summary_ok, _summary_ok),
+        Case("i_delivery", 'Instruction, away delivery: owner said "ask them to leave it by the side door"',
+             Mode.AWAY, _with_instruction("If a delivery comes, ask them to leave it by the side door.",
+                                          BOX_TEXT, "delivery"),
+             _says("side door"), _says("side door")),
+        Case("i_visitor", 'Instruction, away doorbell: owner said "tell them I\'m in the back garden"',
+             Mode.AWAY, _with_instruction("If someone comes, tell them I'm in the back garden.",
+                                          "A woman in a red coat waving at the camera.", "visitor"),
+             _says("garden"), _says("garden")),
         Case("confrontation", "Alarm: one line that mentions what the camera sees (free text)",
              Mode.AWAY, _free_text(lambda b: b.confront(events.FAKE_DESCRIPTION)),
              _line_mentions("jacket", "box", "cardboard", "dark"),
@@ -226,6 +235,43 @@ def cases() -> List[Case]:
 
 
 BOX_TEXT = events.FAKE_DESCRIPTION
+
+
+class _MemoryInstructions:
+    """Just enough of rules.InstructionStore for a bench case, without a file."""
+
+    def __init__(self, text: str):
+        self.items = [dict(owner_instructions.parse_instruction(text), id="ins_bench")]
+
+    def relevant(self, label: str = "") -> List[Dict[str, Any]]:
+        want = {"delivery": ("delivery", "anyone")}.get(label, ("visitor", "anyone"))
+        return [i for i in self.items if i["audience"] in want and label not in ("suspicious", "nobody")]
+
+
+def _with_instruction(said: str, description: str, label: str):
+    """A doorbell photo with its threat label, while the owner's instruction is stored."""
+    def run(brain: Brain) -> Tuple[Optional[Decision], Optional[str], float]:
+        bell = events.doorbell()
+        photo = make_action(ActionType.TAKE_PHOTO, {"reason": "doorbell while away"}, Source.RULES,
+                            caused_by=bell.id)
+        described = events.photo_described(photo.id, description)
+        tag = make_event(EventType.THREAT_ASSESSED, {"category": label, "reason": "bench"},
+                         Source.BRAIN, caused_by=described.id)
+        before = brain.instructions
+        brain.instructions = _MemoryInstructions(said)
+        try:
+            d = brain.decide(described, Mode.AWAY, [bell.to_dict(), photo.to_dict(), tag.to_dict()])
+        finally:
+            brain.instructions = before
+        return d, None, d.elapsed_s or 0.0
+    return run
+
+
+def _says(*words: str) -> Check:
+    def check(actions: List[Action]) -> bool:
+        return any(a.type == ActionType.SPEAK and all(w in a.args["text"].lower() for w in words)
+                   for a in actions)
+    return check
 
 
 def _threat_case(name: str, title: str, description: str, mode: str, cause: str,

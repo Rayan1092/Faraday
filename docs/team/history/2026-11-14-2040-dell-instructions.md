@@ -1,0 +1,11 @@
+# Owner instructions (Dell, item 8)
+- Laptop / branch / PR: Dell / `dell/instructions` / PR "owner instructions"
+- What changed:
+  - **Parser and store:** `rules/instructions.py` has the plain-code parser ("if a delivery comes, ask them to leave it by the side door", "tell visitors to…", "let them know…") and `InstructionStore` in `logs/instructions.json`, which survives restarts. There's one instruction per audience: delivery, visitor or anyone.
+  - **Pipeline:** at **Home only** (while armed the speaker could be a visitor), a spoken instruction is stored and confirmed by plain code with no Bonsai call. "Forget the delivery instruction" or "clear all my instructions" removes them. A request about lights, modes, the alarm, locks, opening doors or codes is refused out loud and never stored.
+  - **Brain:** `instructions_for()` picks the relevant ones by threat label. They go into the visitor prompt (doorbell and delivery photos, a visitor talking while armed). Plain code makes the first greeting pass them on. A delivery hears the owner's spot instead of the default "front door" line, and a conflicting drop-off line from Bonsai is replaced. Without Bonsai, the fallback greeting says them too, in the third person ("The owner is in the back garden.").
+  - **Dashboard:** the Rules card becomes "Rules & instructions" with a "DELIVERY" chip and a delete button (`POST /api/instructions/delete`). Messages can now clamp down to one line so the sender and time stay visible at 1280×720 when the Rules card is bigger.
+  - **Sim:** keeps instructions next to a custom log.
+  - **Docs:** rules/README, PLAN mode notes, dashboard/README.
+- How it was tested: `python -m unittest discover` passes. 21 new tests cover phrasings, refusals, third-person lines, the store surviving restarts, per-audience replace, relevance by label, hand-edited unsafe entries, the owner-only rule, voice forget, delivery and visitor lines with and without Bonsai, the prompt, and the dashboard list and delete. New bench cases `i_delivery` and `i_visitor`: the 4B passed on the owner's words by itself 6/6 (`docs/bench/2026-11-14-2031-…`). Screenshots at 1280×720 and 1920×1080.
+- Next: item 9 ("Who's at the door?").

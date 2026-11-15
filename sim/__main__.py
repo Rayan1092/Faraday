@@ -36,7 +36,7 @@ from brain.settings import llm_config, load_settings, settings_path  # noqa: E40
 from dashboard import Dashboard  # noqa: E402
 from sim.controls import SimControls  # noqa: E402
 from log import EventLog  # noqa: E402
-from rules import RuleStore  # noqa: E402
+from rules import InstructionStore, RuleStore  # noqa: E402
 from sim import events  # noqa: E402
 
 
@@ -164,21 +164,23 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     settings = load_settings()
     cfg = llm_config(settings)
-    log, rules = None, None
+    log, rules, instructions = None, None, None
     if args.demo and not args.log:
         # A fresh, separate log and rules file every time, so the demo always starts clean
         # and never mixes with the real logs/events.jsonl.
         args.log = str(Path(settings.get("paths", {}).get("logs", "logs")) / "demo-events.jsonl")
         demo_log = Path(args.log) if Path(args.log).is_absolute() else Path(__file__).resolve().parents[1] / args.log
-        for stale in (demo_log, demo_log.with_name("demo-events-rules.json")):
+        for stale in (demo_log, demo_log.with_name("demo-events-rules.json"),
+                      demo_log.with_name("demo-events-instructions.json")):
             if stale.exists():
                 stale.unlink()
         args.log = str(demo_log)
     if args.log:  # keep the rules next to a custom log, so test runs don't touch logs/
         log = EventLog(args.log, settings["security"]["passphrase"])
         rules = RuleStore(Path(args.log).with_name(Path(args.log).stem + "-rules.json"))
+        instructions = InstructionStore(Path(args.log).with_name(Path(args.log).stem + "-instructions.json"))
     pipeline = Pipeline.from_settings(settings, use_llm=not args.offline, log=log, mode=args.mode,
-                                      rules=rules)
+                                      rules=rules, instructions=instructions)
     sim = Sim(pipeline, args.verbose, args.photo)
 
     print(f"Faraday sim. Settings: {settings_path().name}. Log: {pipeline.log.path}")

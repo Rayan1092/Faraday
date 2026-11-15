@@ -60,7 +60,7 @@
     lastVersion = s.version;
     renderTalk(s.talk);
     renderFeed(s.feed);
-    renderRules(s.rules);
+    renderRules(s.rules, s.instructions || []);
     renderNotes(s.summary, s.messages);
   }
 
@@ -259,19 +259,34 @@
     }
   }
 
-  function renderRules(rules) {
+  function deleteButton(title, path, id) {
+    const del = el("button", "rule-del");
+    del.type = "button";
+    del.title = title;
+    del.setAttribute("aria-label", title);
+    del.append(icon("close"));
+    del.onclick = () => post(path, { id }).then(poll);
+    return del;
+  }
+
+  function renderRules(rules, instructions) {
     const list = $("rules");
     list.replaceChildren();
-    if (!rules.length) list.append(el("li", "empty", "Say \u201cWhen there's motion at night, turn on the lamp.\u201d"));
+    $("rules-title").textContent = instructions.length ? "Rules & instructions" : "Rules";
+    // Owner instructions first: words Faraday passes on to visitors (never actions).
+    for (const ins of instructions) {
+      const li = el("li", "instruction");
+      const text = el("span", "rule-text");
+      text.append(el("span", "ins-who", ins.who), document.createTextNode(ins.text));
+      li.append(text, deleteButton("Delete instruction", "/api/instructions/delete", ins.id));
+      list.append(li);
+    }
+    if (!rules.length && !instructions.length) {
+      list.append(el("li", "empty", "Say \u201cWhen there's motion at night, turn on the lamp.\u201d"));
+    }
     for (const r of rules) {
       const li = el("li");
-      const del = el("button", "rule-del");
-      del.type = "button";
-      del.title = "Delete rule";
-      del.setAttribute("aria-label", "Delete rule");
-      del.append(icon("close"));
-      del.onclick = () => post("/api/rules/delete", { id: r.id }).then(poll);
-      li.append(el("span", "rule-text", r.text), del);
+      li.append(el("span", "rule-text", r.text), deleteButton("Delete rule", "/api/rules/delete", r.id));
       if (r.description) li.append(el("span", "rule-said", "\u201c" + r.description + "\u201d"));
       list.append(li);
     }
@@ -298,9 +313,9 @@
     while (list.children.length > 1 && list.scrollHeight > list.clientHeight + 1) {
       list.lastElementChild.remove();
     }
-    if (list.firstElementChild && list.scrollHeight > list.clientHeight + 1) {
-      list.firstElementChild.classList.add("clamp");
-    }
+    const newest = list.firstElementChild;
+    if (newest && list.scrollHeight > list.clientHeight + 1) newest.classList.add("clamp");
+    if (newest && list.scrollHeight > list.clientHeight + 1) newest.classList.add("clamp1");
   }
   window.addEventListener("resize", () => renderNotes(lastNotes[0], lastNotes[1]));
 
