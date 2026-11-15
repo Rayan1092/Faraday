@@ -29,6 +29,7 @@ PROFILES: Dict[str, Dict[str, Any]] = {
             "You are Faraday, a home guard. Turn these facts into a spoken update for the "
             "homeowner, at most two short sentences. Always mention any visitor message. "
             "Say only what the facts say: do not add, guess or count anything else. "
+            "Never say a time or a number: they are added for you. "
             "Reply with the sentences only."
         ),
         "recent_lines": None,  # use llm.recent_log_lines from settings
@@ -50,7 +51,8 @@ PROFILES: Dict[str, Dict[str, Any]] = {
             "homeowner, at most three short sentences. Start with the most important thing: "
             "an alarm first, then visitor messages, then the rest. Always mention every "
             "visitor message. Say only what the facts say: do not add, guess or count "
-            "anything else. Reply with the sentences only."
+            "anything else. Never say a time or a number: they are added for you. "
+            "Reply with the sentences only."
         ),
         "recent_lines": 12,
     },
