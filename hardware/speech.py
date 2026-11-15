@@ -10,17 +10,23 @@ doesn't care which OS it runs on.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import os
+import re
+import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
 from hardware.audio import MicGate, play_wav
-from hardware.settings import for_os
+from hardware.settings import REPO_ROOT, for_os
 
 log = logging.getLogger("hardware.speech")
 MUTE_TAIL_S = 0.4          # keep the mic muted a moment after speech (room echo)
@@ -82,7 +88,7 @@ class TextToSpeech:
         cfg = for_os(settings.get("tts", {})) or {}
         device = settings.get("audio", {}).get("speaker_device")
         if cfg.get("kind") == "argmax" and cfg.get("command"):
-            return ArgmaxTTS(cfg["command"], device, gate, float(cfg.get("timeout_s", 30)))
+            return ArgmaxTTS.from_config(cfg, device, gate)
         if cfg.get("kind") == "pyttsx3" or (cfg.get("kind") == "standin" and _has_pyttsx3()):
             return Pyttsx3TTS(gate, cfg.get("rate"))
         return PrintTTS(gate)
@@ -166,14 +172,46 @@ class ArgmaxTTS(TextToSpeech):
 
     - With "{out_wav}": the command writes a wav, which is then played.
     - Without it (the real Mac setup: `argmax-cli tts --text {text} --speaker aiden
-      --play`): the command streams to the speaker itself; we just wait for it.
-    Either way the mic stays muted until the process has finished playing."""
+      --play`): the command streams to the speaker itself; we wait for it.
+    Either way the mic stays muted until the process has finished playing.
+
+    Voice consistency (owner 2026-11-14: Aiden changed mid-run, sometimes
+    robotic or rushed). argmax-cli picks a *random seed for every line* unless
+    --seed is given (Sources/ArgmaxCLI/TTSCLI.swift), so `voice` adds a fixed
+    --seed, a lower --temperature (CLI default 0.9), --top-k, and optionally
+    --model 1.7b with --instruction. If an older argmax-cli refuses these
+    flags, the line is retried once without them.
+
+    Cache: every line is also saved as a wav (--output-path/--output-format wav;
+    without it the CLI writes ./output.m4a on every line). A line already in the
+    cache is played from the file: instant and identical every time.
+    prerender() fills the cache for Faraday's fixed lines at startup.
+    """
 
     def __init__(self, command: List[str], device: Any = None, gate: Optional[MicGate] = None,
-                 timeout_s: float = 30, player=play_wav):
+                 timeout_s: float = 30, player=play_wav, voice: Optional[Dict[str, Any]] = None,
+                 cache_dir: Optional[Path] = None):
         super().__init__(gate)
         self.command, self.device, self.timeout_s, self.player = command, device, timeout_s, player
+        self.voice = dict(voice or {})
+        self.cache_dir = cache_dir
+        self._voice_ok = True               # this argmax-cli accepts the voice flags
+        self._output_ok = True              # ... and --output-path/--output-format
+        self.speaking = False
+        self.cache_hits = 0
+        self._render_proc: Optional[subprocess.Popen] = None   # a pre-render running now
+        self._render_lock = threading.Lock()
 
+    @classmethod
+    def from_config(cls, cfg: Dict[str, Any], device: Any = None,
+                    gate: Optional[MicGate] = None) -> "ArgmaxTTS":
+        cache = None
+        if cfg.get("cache", True):
+            cache = Path(cfg.get("cache_dir") or (REPO_ROOT / "cache" / "tts"))
+        return cls(cfg["command"], device, gate, float(cfg.get("timeout_s", 30)),
+                   voice=cfg.get("voice"), cache_dir=cache)
+
+    # ---- command lines ----------------------------------------------------------------
     def build(self, text: str, out_wav: Path) -> List[str]:
         return [part.replace("{text}", text).replace("{out_wav}", str(out_wav))
                 for part in self.command]
@@ -182,24 +220,219 @@ class ArgmaxTTS(TextToSpeech):
     def plays_itself(self) -> bool:
         return not any("{out_wav}" in part for part in self.command)
 
+    def voice_args(self) -> List[str]:
+        v, args = self.voice, []
+        for key, flag in (("seed", "--seed"), ("temperature", "--temperature"),
+                          ("top_k", "--top-k"), ("model", "--model")):
+            if v.get(key) is not None:
+                value = str(v[key])
+                args += [flag, value.lower() if key == "model" else value]   # CLI wants 0.6b / 1.7b
+        if v.get("instruction") and str(v.get("model", "")).lower() == "1.7b":
+            args += ["--instruction", str(v["instruction"])]      # the 0.6B ignores it
+        return args
+
+    @property
+    def can_cache(self) -> bool:
+        """A wav to keep comes out of every line (the CLI takes the output flags)."""
+        return self.cache_dir is not None and (not self.plays_itself or self._output_ok)
+
+    def _cmd(self, text: str, tmp: Path, play: bool) -> List[str]:
+        cmd = self.build(text, tmp / "say.wav")
+        if self._voice_ok:
+            cmd += self.voice_args()
+        if not self.plays_itself:
+            return cmd
+        if not play:
+            cmd = [part for part in cmd if part != "--play"]
+        if self._output_ok:
+            cmd += ["--output-path", str(tmp / "say"), "--output-format", "wav"]
+        return cmd
+
     def _timeout(self, text: str) -> float:
         # with --play the process lives for the whole spoken line (~3 words/s)
         return max(self.timeout_s, 10 + 0.15 * len(text))
 
-    def _run(self, cmd: List[str], text: str) -> bool:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self._timeout(text))
-        if proc.returncode != 0:
-            log.warning("argmax TTS failed (%s): %s", proc.returncode,
-                        (proc.stderr or proc.stdout)[-300:])
-        return proc.returncode == 0
+    USAGE_ERROR = 64                 # swift-argument-parser's exit code for bad flags/values
 
+    def _run(self, cmd: List[str], text: str, track: bool = False) -> Tuple[int, str]:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if track:
+            self._render_proc = proc
+        try:
+            stdout, stderr = proc.communicate(timeout=self._timeout(text))
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise
+        finally:
+            if track:
+                self._render_proc = None
+        out = (stdout or "") + (stderr or "")
+        if proc.returncode != 0 and not (track and proc.returncode < 0):
+            log.warning("argmax TTS failed (%s): %s", proc.returncode, out[-300:])
+        return proc.returncode, out
+
+    def _usage_error(self, code: int, out: str) -> bool:
+        return code == self.USAGE_ERROR or bool(
+            re.search(r"unknown option|unexpected argument|is invalid|invalid value", out, re.I))
+
+    def _run_with_fallback(self, text: str, tmp: Path, play: bool,
+                           track: bool = False) -> Tuple[bool, str]:
+        """Run; on a usage error drop the voice flags first (keep caching), then the
+        output flags, so Faraday never goes silent over a flag this CLI lacks."""
+        code, out = self._run(self._cmd(text, tmp, play), text, track)
+        if code != 0 and self._usage_error(code, out) and self._voice_ok and self.voice_args():
+            log.warning("this argmax-cli refuses the voice settings (%s); speaking without them",
+                        out.strip().splitlines()[-1][:120] if out.strip() else code)
+            self._voice_ok = False
+            code, out = self._run(self._cmd(text, tmp, play), text, track)
+        if code != 0 and self._usage_error(code, out) and self._output_ok and self.plays_itself:
+            log.warning("this argmax-cli refuses --output-path/--output-format; no cache")
+            self._output_ok = False
+            code, out = self._run(self._cmd(text, tmp, play), text, track)
+        return code == 0, out
+
+    # ---- cache ------------------------------------------------------------------------
+    def cache_path(self, text: str) -> Optional[Path]:
+        if self.cache_dir is None:
+            return None
+        base = [p for p in self.command if "{text}" not in p and "{out_wav}" not in p and p != "--play"]
+        key = json.dumps({"text": " ".join(str(text).split()), "cmd": base[1:], "voice": self.voice},
+                         sort_keys=True)
+        return self.cache_dir / (hashlib.sha1(key.encode("utf-8")).hexdigest()[:20] + ".wav")
+
+    def cached(self, text: str) -> Optional[Path]:
+        path = self.cache_path(text)
+        return path if path is not None and path.exists() and path.stat().st_size > 44 else None
+
+    def _store(self, text: str, tmp: Path, out: str) -> Optional[Path]:
+        """Move the wav this run produced into the cache."""
+        dest = self.cache_path(text)
+        if dest is None:
+            return None
+        made = None
+        lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+        if lines and lines[-1].lower().endswith(".wav") and Path(lines[-1]).exists():
+            made = Path(lines[-1])                   # the CLI prints the saved path last
+        if made is None:
+            wavs = sorted(tmp.glob("*.wav"))
+            made = wavs[0] if wavs else None
+        if made is None or made.stat().st_size <= 44:
+            return None
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        part = dest.with_suffix(f".{threading.get_ident()}.part")   # one per thread
+        shutil.copyfile(made, part)
+        os.replace(part, dest)
+        self._prune()
+        return dest
+
+    def _prune(self, keep: int = 400) -> None:
+        files = sorted(self.cache_dir.glob("*.wav"), key=lambda p: p.stat().st_mtime)
+        for old in files[:-keep]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+
+    # ---- speaking ---------------------------------------------------------------------
     def _speak(self, text: str) -> bool:
         print(f"  SAY: {text}")
-        if self.plays_itself:
-            return self._run(self.build(text, Path("unused.wav")), text)
-        with tempfile.TemporaryDirectory(prefix="faraday-tts-") as tmp:
-            out = Path(tmp) / "say.wav"
-            if not self._run(self.build(text, out), text) or not out.exists():
-                return False
-            self.player(out, self.device)
-        return True
+        self.speaking = True
+        try:
+            self._stop_render()                  # a live line never shares the engine
+            hit = self.cached(text)
+            if hit is not None:
+                try:
+                    self.player(hit, self.device)
+                    self.cache_hits += 1
+                    try:
+                        os.utime(hit)            # recently used: pruned last
+                    except OSError:
+                        pass
+                    return True
+                except Exception as e:           # bad file / device: forget it, synthesize
+                    log.warning("cached take failed to play (%r); synthesizing", e)
+                    try:
+                        hit.unlink()
+                    except OSError:
+                        pass
+            with tempfile.TemporaryDirectory(prefix="faraday-tts-") as tmp_name:
+                tmp = Path(tmp_name)
+                if self.plays_itself:
+                    ok, out = self._run_with_fallback(text, tmp, play=True)
+                    if ok and self.can_cache:
+                        self._store(text, tmp, out)
+                    return ok
+                ok, out = self._run_with_fallback(text, tmp, play=False)
+                wav = tmp / "say.wav"
+                if not ok or not wav.exists():
+                    return False
+                self.player(wav, self.device)
+                self._store(text, tmp, out)
+                return True
+        finally:
+            self.speaking = False
+
+    def _stop_render(self) -> None:
+        """A live line is starting: stop a pre-render that is running (it would
+        load the models a second time and make the live line late or choppy).
+        prerender() tries that line again afterwards."""
+        proc = self._render_proc
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+    def render(self, text: str) -> Optional[Path]:
+        """Make the cached wav for a line without playing it (pre-render)."""
+        text = " ".join(str(text).split())
+        if not text or not self.can_cache:
+            return None
+        hit = self.cached(text)
+        if hit is not None:
+            return hit
+        with self._render_lock, tempfile.TemporaryDirectory(prefix="faraday-tts-") as tmp_name:
+            tmp = Path(tmp_name)
+            try:
+                ok, out = self._run_with_fallback(text, tmp, play=False, track=True)
+            except subprocess.TimeoutExpired:
+                log.warning("pre-render timed out: %s", text[:60])
+                return None
+            if not ok:
+                return None
+            if not self.plays_itself and (tmp / "say.wav").exists():
+                out += "\n" + str(tmp / "say.wav")
+            return self._store(text, tmp, out)
+
+    def prerender(self, lines: List[str], wait: Optional[Callable[[], bool]] = None,
+                  stop: Optional[threading.Event] = None) -> int:
+        """Render every line not cached yet; pauses while `wait()` is True (Faraday
+        is talking) so it never competes with a live line. Returns lines made."""
+        made = 0
+        todo = list(lines)
+        tries: Dict[str, int] = {}
+        while todo:
+            line = todo.pop(0)
+            if stop is not None and stop.is_set():
+                break
+            if not self.can_cache:
+                break                         # this CLI can't write a file: nothing to fill
+            if self.cached(line) is not None:
+                continue
+            while (wait is not None and wait()) or self.speaking:
+                if stop is not None and stop.wait(0.2):
+                    return made
+                if stop is None:
+                    time.sleep(0.2)
+            try:
+                path = self.render(line)
+            except Exception:
+                log.exception("pre-render failed: %s", line[:60])
+                path = None
+            if path is not None:
+                made += 1
+            elif self.speaking and tries.get(line, 0) < 2:
+                tries[line] = tries.get(line, 0) + 1
+                todo.append(line)             # stopped for a live line: once more later
+        return made

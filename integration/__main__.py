@@ -216,6 +216,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     if detector is not None:
         print(f"Object detection: {detector.engine}"
               + (f" + faces ({detector.faces.engine})" if detector.faces is not None else ""))
+    prerender = getattr(app.speaker, "prerender", None)
+    from hardware.settings import for_os
+    tts_cfg = for_os(settings.get("tts", {})) or {}
+    if prerender is not None and getattr(app.speaker, "cache_dir", None) and tts_cfg.get("prerender", True):
+        # Faraday's fixed lines, rendered once with the fixed voice: instant and identical
+        import threading
+        from integration.fixed_lines import fixed_lines
+        lines = fixed_lines()
+
+        def warm_tts() -> None:
+            made = prerender(lines, wait=app.speech_busy, stop=app._stopping)
+            print(f"  [tts] {made} fixed line(s) rendered, {len(lines)} cached")
+        threading.Thread(target=warm_tts, name="faraday-tts-prerender", daemon=True).start()
     print("Keys: r listen now, t <text>, 1/2/3 home/away/night, d/m fake radio, s status, q quit")
     try:
         console(app, fake)

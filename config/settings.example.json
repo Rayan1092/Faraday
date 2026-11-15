@@ -93,9 +93,12 @@
   "tts": {
     "mac": {
       "kind": "argmax",
-      "_note": "Tested on the Mac mini: starts almost instantly, --play streams straight to the speaker (no wav). STT server: .build/release/argmax-cli serve",
+      "_note": "Tested on the Mac mini: --play streams straight to the speaker. voice adds a fixed --seed (argmax-cli otherwise picks a random seed per line, so the voice drifts), a lower --temperature (CLI default 0.9), --top-k and the model (0.6b, or 1.7b with an instruction). Every line is also saved to cache/tts so repeats are instant and identical; prerender renders the fixed lines at startup. Pick the voice with: python3 -m hardware.tts_audition",
       "command": ["/Users/captain/clueless/vendor/argmax-oss-swift/.build/release/argmax-cli",
-                  "tts", "--text", "{text}", "--speaker", "aiden", "--play"]
+                  "tts", "--text", "{text}", "--speaker", "aiden", "--play"],
+      "voice": {"seed": 7, "temperature": 0.6, "top_k": 50, "model": "0.6b", "instruction": null},
+      "cache": true,
+      "prerender": true
     },
     "windows": {
       "kind": "standin"
