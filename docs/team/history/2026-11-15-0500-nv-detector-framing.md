@@ -47,6 +47,10 @@ Second review:
 - `object_score` outside 0-1 (60, NaN, true) falls back to 0.6 with a warning.
 - Tests now cover the vote path, the setting through the live stream, and the slow-fps window.
 
+Final review:
+- A weapon is never dropped by the overlap filter (`_agnostic`). Before, a knife on top of a "cell phone" at IoU 0.7 or more was removed before tracking.
+- Tracks match on their main box first, then on vote boxes, so one thing under three labels stays one object.
+
 The setting is in the shared settings example at the owner's direct request (2026-11-15); Dell FYI.
 
 Left for the owner (QUESTIONS 25): naming needs the same label at the threshold in 3 of the 5 frames. So a backpack at 0.62, 0.58, 0.61, 0.59, 0.57 is "unknown object". Lowering `object_score` to 0.55 would name it.

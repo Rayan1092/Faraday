@@ -182,10 +182,11 @@ def _iou(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> float:
 
 def _agnostic(found: List[Detection], iou: float = 0.7) -> List[Detection]:
     """Drop a box that mostly overlaps a more confident box of another class
-    (one dog seen as both "dog" and "cat"). Input sorted by confidence."""
+    (one dog seen as both "dog" and "cat"). Input sorted by confidence. A weapon
+    is never dropped: the tracker merges it and lets it win the name."""
     kept: List[Detection] = []
     for d in found:
-        if all(k.label == d.label or _iou(k.box, d.box) < iou for k in kept):
+        if d.label in WEAPONS or all(k.label == d.label or _iou(k.box, d.box) < iou for k in kept):
             kept.append(d)
     return kept
 
@@ -214,16 +215,20 @@ def steady_objects(frames: Sequence[Sequence[Detection]], need: int = STEADY[0],
     tracks: List[Dict[str, Any]] = []
     for fi, found in enumerate(frames):
         objs = [d for d in found if d.label != "person"]
-        pairs = sorted(((max(_iou(b, d.box) for b in t["recent"]), ti, di)
-                        for ti, t in enumerate(tracks) for di, d in enumerate(objs)), reverse=True)
         primary: Dict[int, int] = {}                 # detection index -> track, one each
         taken = set()
-        for overlap, ti, di in pairs:
-            if overlap < iou:
-                break
-            if ti not in taken and di not in primary:
-                primary[di] = ti
-                taken.add(ti)
+        # match on each track's main box first, then (still unmatched) on its vote boxes;
+        # best overlap first, a tie to the more confident box
+        for boxes_of in (lambda t: t["recent"][:1], lambda t: t["recent"][1:]):
+            pairs = sorted(((max(_iou(b, d.box) for b in boxes_of(t)), ti, -di)
+                            for ti, t in enumerate(tracks) if ti not in taken and boxes_of(t)
+                            for di, d in enumerate(objs) if di not in primary), reverse=True)
+            for overlap, ti, ndi in pairs:
+                if overlap < iou:
+                    break
+                if ti not in taken and -ndi not in primary:
+                    primary[-ndi] = ti
+                    taken.add(ti)
         votes: Dict[int, int] = {}                   # extra boxes on an object seen this frame
         for di, d in enumerate(objs):                # most confident first (detect() sorts)
             if di in primary:

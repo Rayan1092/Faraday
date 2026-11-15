@@ -279,6 +279,26 @@ class Steadiness(unittest.TestCase):
         info = self.stub([[phone, knife]] * 5).analyse_frames([np.zeros((480, 640, 3), np.uint8)] * 5)
         self.assertIn("knife", [d["label"] for d in info["detections"]])
 
+    def test_a_knife_on_top_of_a_phone_survives_the_overlap_filter(self):
+        """Review of #66: at IoU 0.86 _agnostic used to drop the knife before tracking."""
+        phone = Detection("cell phone", 0.65, (100, 100, 140, 180))
+        knife = Detection("knife", 0.62, (102, 104, 140, 184))
+        frame = _agnostic(sorted([phone, knife], key=lambda d: -d.confidence))
+        self.assertIn(knife, frame)
+        info = self.stub([frame] * 5).analyse_frames([np.zeros((480, 640, 3), np.uint8)] * 5)
+        self.assertEqual([d["label"] for d in info["detections"]], ["knife"])
+
+    def test_three_labels_on_one_thing_stay_one_object(self):
+        a = Detection("cell phone", 0.80, (100, 100, 200, 200))
+        b = Detection("remote", 0.70, (70, 100, 170, 200))                  # IoU 0.54 with a
+        c = Detection("mouse", 0.65, (130, 100, 230, 200))                  # 0.54 with a, 0.25 with b
+        f = StreamFilter()
+        for _ in range(5):
+            shown = f.update([a, b, c])
+        self.assertEqual([(d.label, d.box) for d in shown], [("cell phone", a.box)])
+        info = self.stub([[a, b, c]] * 5).analyse_frames([np.zeros((480, 640, 3), np.uint8)] * 5)
+        self.assertEqual([d["label"] for d in info["detections"]], ["cell phone"])
+
     def test_an_object_seen_only_as_a_vote_is_still_followed(self):
         """Review of #66: a flicker on top of a handbag in the photo frame, then the
         handbag moves; it must stay the same object (and keep its photo box)."""
@@ -301,6 +321,7 @@ class Steadiness(unittest.TestCase):
             with self.subTest(settings=settings):
                 det = Detector.from_settings(settings)
                 self.assertIsNotNone(det)
+                self.assertEqual(det.named, 0.4 if want else 0.6)            # bad values: the default
                 det.objects = type("Stub", (), {"detect": lambda self, frame: [phone]})()
                 det.faces = None
                 info = det.analyse_frames([np.zeros((480, 640, 3), np.uint8)] * 5)
