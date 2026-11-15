@@ -1,11 +1,11 @@
 """Microphone and speaker, via sounddevice + soundfile.
 
-Hands-free (decided 2026-11-14): the mic is open only during a *listening
-window*. A window is opened after a doorbell, after Faraday asks a question,
-by the dashboard Listen button, or by the wake listener. It records for up to
-`max_s`, stops about `silence_s` after the speaker stops (energy VAD), or after
-`no_speech_s` if nobody spoke at all. Outside windows the mic is closed, and
-while Faraday speaks it is muted (MicGate), so Faraday never hears itself.
+Hands-free (decided 2026-11-14): audio is used only inside a *listening
+window*: after a doorbell, after Faraday asks a question, or for the wake
+listener. A window records for up to `max_s`, stops about `silence_s` after
+the speaker stops (energy VAD), or after `no_speech_s` if nobody spoke. One
+mic stream stays open so back-to-back windows have no gaps; while Faraday
+speaks it is muted (MicGate), so Faraday never hears itself.
 
     gate = MicGate()
     rec = Recorder.from_settings(settings, gate)
@@ -18,9 +18,10 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -28,9 +29,9 @@ from hardware.settings import REPO_ROOT
 
 log = logging.getLogger("hardware.audio")
 
-DEFAULT_MAX_S = 6.0        # longest window
-DEFAULT_SILENCE_S = 0.8    # speaker stopped for this long -> window ends
-DEFAULT_NO_SPEECH_S = 3.0  # nobody spoke for this long -> window ends with nothing
+DEFAULT_MAX_S = 15.0       # longest window (owner 2026-11-14: 6 s cut people off)
+DEFAULT_SILENCE_S = 1.8    # speaker stopped this long -> window ends (0.8 cut mid-sentence)
+DEFAULT_NO_SPEECH_S = 8.0  # nobody spoke for this long -> window ends with nothing
 
 
 class MicGate:
@@ -41,6 +42,7 @@ class MicGate:
     def __init__(self) -> None:
         self._count = 0
         self._lock = threading.Lock()
+        self._quiet_since = time.monotonic()
 
     @property
     def muted(self) -> bool:
@@ -53,6 +55,13 @@ class MicGate:
     def unmute(self) -> None:
         with self._lock:
             self._count = max(0, self._count - 1)
+            if self._count == 0:
+                self._quiet_since = time.monotonic()
+
+    def quiet_for(self, seconds: float) -> bool:
+        """Unmuted, and for at least `seconds` (the speaker has really finished)."""
+        with self._lock:
+            return self._count == 0 and time.monotonic() - self._quiet_since >= seconds
 
     def wait_unmuted(self, timeout: float) -> bool:
         end = time.monotonic() + timeout
@@ -119,22 +128,43 @@ def _default_stream(**kwargs: Any):
 
 
 class Recorder:
+    """Listening windows over ONE microphone stream that stays open (no gaps).
+
+    The stream opens on the first listen() and stays open until close(). While
+    no window is open the last `preroll_s` of audio is kept, so a window (or the
+    next wake segment) starts with the moment just before it: nothing said
+    between two windows is lost. Audio is dropped while the gate is muted.
+
+    A window ends: by silence (`silence_s` after speech), by no speech at all
+    (`no_speech_s`; None = wait for speech forever, the wake listener), by
+    `max_s` (counted from the window's start, or from the first speech when
+    no_speech_s is None), or by cancel(). adjust() changes an open window's
+    rules in place (a wake segment becoming the owner's request window).
+    """
+
+    PREROLL_S = 0.5
+    HARD_CAP_S = 90.0      # wall-clock backstop: a stream that delivers nothing
+
     def __init__(self, gate: Optional[MicGate] = None, sample_rate: int = 16000,
                  device: Any = None, max_s: float = 8.0,
                  audio_dir: Path = REPO_ROOT / "captures" / "audio",
-                 stream_factory: Callable[..., Any] = _default_stream):
+                 stream_factory: Callable[..., Any] = _default_stream,
+                 preroll_s: float = PREROLL_S):
         self.gate = gate or MicGate()
         self.sample_rate, self.device, self.max_s = sample_rate, device, max_s
         self.audio_dir = audio_dir
         self.stream_factory = stream_factory
-        self._frames: List[np.ndarray] = []
-        self._stream = None
+        self.preroll = int(preroll_s * sample_rate)
+        self._frames: List[np.ndarray] = []          # start()/stop() recording
+        self._stream = None                          # start()/stop() stream
+        self._live = None                            # the persistent listening stream
+        self._ring: Deque[np.ndarray] = deque()
+        self._ring_n = 0
         self._lock = threading.Lock()
         self._started = 0.0
         self._timer: Optional[threading.Timer] = None
         self.on_auto_stop: Optional[Callable[[], None]] = None
         self._window: Optional[Dict[str, Any]] = None
-        self._vad: Optional[EnergyVad] = None
 
     @classmethod
     def from_settings(cls, settings: Dict[str, Any], gate: Optional[MicGate] = None) -> "Recorder":
@@ -145,29 +175,167 @@ class Recorder:
 
     @property
     def recording(self) -> bool:
+        """start()/stop() recording in progress (hardware.check)."""
         return self._stream is not None
 
-    # ---- shared ------------------------------------------------------------------
-    def _callback(self, indata, frames, time_info, status) -> None:
+    @property
+    def window_open(self) -> bool:
+        return self._window is not None
+
+    def window_state(self) -> Dict[str, Any]:
+        w = self._window
+        if w is None:
+            return {"open": False, "speech_started": False, "elapsed_s": 0.0}
+        return {"open": True, "speech_started": w["vad"].speech_started,
+                "elapsed_s": (w["samples"] - w["base"]) / float(self.sample_rate)}
+
+    # ---- the persistent stream -----------------------------------------------------
+    def _ensure_live(self) -> None:
+        if self._live is None:
+            self._live = self.stream_factory(samplerate=self.sample_rate, channels=1, dtype="int16",
+                                             device=self.device, callback=self._live_callback)
+            self._live.start()
+
+    def close(self) -> None:
+        """Stop listening altogether (app shutdown)."""
+        self.cancel()
+        live, self._live = self._live, None
+        if live is not None:
+            try:
+                live.stop()
+                live.close()
+            except Exception:
+                log.exception("closing the microphone failed")
+
+    def _live_callback(self, indata, frames, time_info, status) -> None:
         if self.gate.muted:
             return                       # Faraday is speaking: don't hear ourselves
-        window = self._window
+        chunk = np.array(indata, copy=True).reshape(-1)
         with self._lock:
-            if window is not None and window["done"].is_set():
-                return                   # window already decided, ignore the tail
-            chunk = np.array(indata, copy=True).reshape(-1)
-            self._frames.append(chunk)
-        if window is None or self._vad is None:
-            return
-        window["samples"] += len(chunk)
-        self._vad.feed(chunk)
-        elapsed = window["samples"] / float(self.sample_rate)
-        vad = self._vad
-        if (elapsed >= window["max_s"]
-                or (vad.speech_started and vad.silence_s >= window["silence_s"])
-                or (not vad.speech_started and elapsed >= window["no_speech_s"])):
-            window["spoke"] = vad.speech_started
+            w = self._window
+            if w is None or w["done"].is_set():
+                self._ring.append(chunk)
+                self._ring_n += len(chunk)
+                while self._ring and self._ring_n - len(self._ring[0]) >= self.preroll:
+                    self._ring_n -= len(self._ring.popleft())
+                return
+            w["frames"].append(chunk)
+            w["kept"] += len(chunk)
+            w["samples"] += len(chunk)
+            vad = w["vad"]
+            vad.feed(chunk)
+            if vad.speech_started:
+                if w["speech_at"] is None:
+                    w["speech_at"] = w["samples"]
+            else:
+                # nobody talking yet: keep only the preroll, so a long wait (the
+                # wake listener) doesn't pile up audio
+                while w["frames"] and w["kept"] - len(w["frames"][0]) >= self.preroll:
+                    w["kept"] -= len(w["frames"].pop(0))
+            self._check_end(w)
+
+    def _check_end(self, w: Dict[str, Any]) -> None:
+        vad, rate = w["vad"], float(self.sample_rate)
+        since = (w["samples"] - w["base"]) / rate
+        if w["no_speech_s"] is None:         # wake: max counts from the first speech
+            length = ((w["samples"] - w["speech_at"]) / rate) if w["speech_at"] is not None else 0.0
+        else:
+            length = since
+        if ((length >= w["max_s"])
+                or (vad.speech_started and vad.silence_s >= w["silence_s"])
+                or (not vad.speech_started and w["no_speech_s"] is not None
+                    and since >= w["no_speech_s"])):
+            w["spoke"] = vad.speech_started
+            w["done"].set()
+
+    # ---- hands-free window -------------------------------------------------------
+    def listen(self, on_done: Callable[[Optional[Path], float, bool], None],
+               max_s: float = DEFAULT_MAX_S, silence_s: float = DEFAULT_SILENCE_S,
+               no_speech_s: Optional[float] = DEFAULT_NO_SPEECH_S) -> bool:
+        """Open one listening window. Returns False if one is already open.
+        on_done(wav or None, seconds, spoke) runs on a worker thread when the
+        window ends. Nothing is saved when nobody spoke."""
+        with self._lock:
+            if self._window is not None or self.recording:
+                return False
+            vad = EnergyVad(self.sample_rate)
+            pre = list(self._ring)
+            for chunk in pre:                 # someone may already be talking
+                vad.feed(chunk)
+            self._ring.clear()
+            self._ring_n = 0
+            window = {"max_s": max_s, "silence_s": silence_s, "no_speech_s": no_speech_s,
+                      "frames": pre, "kept": sum(len(c) for c in pre), "samples": 0, "base": 0,
+                      "speech_at": 0 if vad.speech_started else None, "vad": vad,
+                      "spoke": False, "cancelled": False, "done": threading.Event()}
+            self._window = window
+        try:
+            self._ensure_live()
+        except Exception:
+            log.exception("could not open the microphone")
+            with self._lock:
+                self._window = None
+            return False
+        threading.Thread(target=self._finish_window, args=(window, on_done),
+                         name="faraday-listen", daemon=True).start()
+        return True
+
+    def adjust(self, restart: bool = True, **rules: Any) -> bool:
+        """Change the open window's max_s / silence_s / no_speech_s. restart=True
+        counts no_speech_s and max_s from now. False if no window is open."""
+        with self._lock:
+            w = self._window
+            if w is None or w["done"].is_set():
+                return False
+            w.update({k: v for k, v in rules.items() if k in ("max_s", "silence_s", "no_speech_s")})
+            if restart:
+                w["base"] = w["samples"]
+                if w["speech_at"] is not None:
+                    w["speech_at"] = max(w["speech_at"], w["base"])
+            return True
+
+    def cancel(self) -> None:
+        """End the current window now; its on_done gets (None, seconds, False)."""
+        window = self._window
+        if window is not None:
+            window["cancelled"] = True
             window["done"].set()
+
+    def _finish_window(self, window: Dict[str, Any], on_done) -> None:
+        # Wall-clock backstop for a stream that never delivers audio. Muted time
+        # doesn't count (a window opened just before Faraday talks waits for it).
+        unmuted, t0 = 0.0, time.monotonic()
+        while not window["done"].wait(0.1):
+            if not self.gate.muted:
+                unmuted += 0.1
+            if window["no_speech_s"] is None:
+                continue                      # wake segment: waits for speech or cancel
+            limit = max(window["max_s"], window["no_speech_s"])
+            if unmuted > limit + 2.0 or time.monotonic() - t0 > self.HARD_CAP_S:
+                break
+        with self._lock:
+            frames = window["frames"]
+            window["done"].set()
+            if self._window is window:
+                self._window = None
+        audio = np.concatenate(frames).reshape(-1) if frames else None
+        spoke = bool(window["spoke"]) and not window["cancelled"] and audio is not None
+        if spoke:
+            seconds = len(audio) / float(self.sample_rate)
+        else:
+            seconds = window["samples"] / float(self.sample_rate)
+        path = self.save(audio) if spoke else None
+        try:
+            on_done(path, seconds, spoke)
+        except Exception:
+            log.exception("listen on_done failed")
+
+    # ---- plain start/stop (hardware.check record / mute) ---------------------------
+    def _callback(self, indata, frames, time_info, status) -> None:
+        if self.gate.muted:
+            return
+        with self._lock:
+            self._frames.append(np.array(indata, copy=True).reshape(-1))
 
     def _open(self) -> None:
         with self._lock:
@@ -197,66 +365,6 @@ class Recorder:
         sf.write(str(path), audio, self.sample_rate, subtype="PCM_16")
         return path
 
-    # ---- hands-free window -------------------------------------------------------
-    def listen(self, on_done: Callable[[Optional[Path], float, bool], None],
-               max_s: float = DEFAULT_MAX_S, silence_s: float = DEFAULT_SILENCE_S,
-               no_speech_s: float = DEFAULT_NO_SPEECH_S) -> bool:
-        """Open one listening window. Returns False if the mic is already in use.
-        on_done(wav or None, seconds, spoke) runs on a worker thread when the
-        window ends: by silence after speech, by no speech at all, by max_s, or
-        by cancel(). Nothing is saved when nobody spoke."""
-        with self._lock:
-            if self.recording or self._window is not None:
-                return False
-            window = {"max_s": max_s, "silence_s": silence_s, "no_speech_s": no_speech_s,
-                      "samples": 0, "spoke": False, "cancelled": False,
-                      "done": threading.Event()}
-            self._vad = EnergyVad(self.sample_rate)
-            self._window = window
-        try:
-            self._open()
-        except Exception:
-            log.exception("could not open the microphone")
-            with self._lock:
-                self._stream, self._window, self._vad = None, None, None
-            return False
-        threading.Thread(target=self._finish_window, args=(window, on_done),
-                         name="faraday-listen", daemon=True).start()
-        return True
-
-    def cancel(self) -> None:
-        """End the current window now; its on_done gets (None, seconds, False)."""
-        window = self._window
-        if window is not None:
-            window["cancelled"] = True
-            window["done"].set()
-
-    def _finish_window(self, window: Dict[str, Any], on_done) -> None:
-        # Wall-clock backstop: with the mic muted the whole time no frame ever
-        # arrives, so the sample-based rules never fire.
-        window["done"].wait(window["max_s"] + 2.0)
-        # Close the stream first and only then free the mic: until then no other
-        # window can open, so two streams never overlap and nothing clears the
-        # next window's state by mistake.
-        stream = self._stream
-        if stream is not None:
-            stream.stop()
-            stream.close()
-        with self._lock:
-            self._stream = None
-            frames, self._frames = self._frames, []
-            if self._window is window:
-                self._window, self._vad = None, None
-        audio = np.concatenate(frames).reshape(-1) if frames else None
-        seconds = len(audio) / float(self.sample_rate) if audio is not None else 0.0
-        spoke = bool(window["spoke"]) and not window["cancelled"] and audio is not None
-        path = self.save(audio) if spoke else None
-        try:
-            on_done(path, seconds, spoke)
-        except Exception:
-            log.exception("listen on_done failed")
-
-    # ---- plain start/stop (hardware.check record) ---------------------------------
     def start(self) -> None:
         if self.recording:
             return
@@ -286,3 +394,29 @@ def play_wav(path: Path, device: Any = None) -> None:
     data, rate = sf.read(str(path), dtype="float32")
     sd.play(data, rate, device=device)
     sd.wait()
+
+
+def chime_samples(rate: int = 24000) -> np.ndarray:
+    """A short soft two-note chime (generated, no asset): float32 in [-1, 1]."""
+    out = []
+    for freq, secs in ((660.0, 0.09), (990.0, 0.14)):
+        t = np.arange(int(rate * secs)) / rate
+        env = np.minimum(1.0, np.minimum(t, secs - t) / 0.02)       # 20 ms fade in/out
+        out.append(0.12 * env * np.sin(2 * np.pi * freq * t))
+    return np.concatenate(out).astype(np.float32)
+
+
+def play_chime(gate: Optional[MicGate] = None, device: Any = None) -> None:
+    """Play the chime with the mic muted (so it isn't heard as speech)."""
+    import sounddevice as sd
+    if gate is not None:
+        gate.mute()
+    try:
+        sd.play(chime_samples(), 24000, device=device)
+        sd.wait()
+    except Exception as e:
+        log.warning("chime failed: %r", e)
+    finally:
+        if gate is not None:
+            time.sleep(0.1)
+            gate.unmute()

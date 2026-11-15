@@ -97,25 +97,36 @@ class NeverDelays(unittest.TestCase):
     out at once without it. Owner wake requests are not diarized."""
 
     def setUp(self):
-        from hardware.tests.test_listen import clip
+        from hardware.tests.test_listen import LiveMic
         self.dir = Path(tempfile.mkdtemp(prefix="faraday-diar-v-"))
-        self.speech = clip(("quiet", 0.3), ("speech", 1.0), ("quiet", 1.2), path=self.dir / "s.wav")
-        self.quiet = clip(("quiet", 2.0), path=self.dir / "q.wav")
+        self.mic = LiveMic()
+        self.v = None
 
     def tearDown(self):
+        if self.v is not None:
+            self.v.stop()
         shutil.rmtree(self.dir, ignore_errors=True)
 
-    def voice(self, diarizer, grace, *clips, stt_texts=("Package for Sam.",)):
+    def say(self, *parts):
+        from hardware.tests.test_listen import clip
+        self.mic.say(clip(*parts, path=self.dir / f"c{time.monotonic_ns()}.wav"))
+
+    def voice(self, diarizer, grace, stt_texts=("Package for Sam.",)):
         from hardware.audio import MicGate, Recorder
-        from integration.tests.test_voice import Clips, FakeSTT
+        from integration.tests.test_voice import FakeSTT
         from integration.voice import Voice
         self.got, self.said = [], []
-        self.clips = Clips(*clips, quiet=self.quiet)
-        rec = Recorder(MicGate(), audio_dir=self.dir / "out", stream_factory=self.clips)
-        return Voice(rec, FakeSTT(*stt_texts), self.got.append, out=self.said.append,
-                     listen={"max_s": 6, "silence_s": 0.8, "no_speech_s": 1.5},
-                     wake={"enabled": True, "window_s": 3},
-                     diarizer=diarizer, diarize_grace_s=grace)
+        rec = Recorder(MicGate(), audio_dir=self.dir / "out", stream_factory=self.mic)
+        self.v = Voice(rec, FakeSTT(*stt_texts), self.got.append, out=self.said.append,
+                       listen={"max_s": 15, "silence_s": 1.0, "no_speech_s": 2.0, "after_speech_s": 0.0},
+                       wake={"enabled": True, "silence_s": 0.7},
+                       diarizer=diarizer, diarize_grace_s=grace)
+        return self.v
+
+    def window(self):
+        self.v.listen_once("doorbell")
+        self.assertTrue(self.wait(lambda: self.v.windows_opened == 1))
+        self.say(("speech", 1.0), ("quiet", 2.0))
 
     def wait(self, cond, timeout=10):
         end = time.monotonic() + timeout
@@ -128,8 +139,8 @@ class NeverDelays(unittest.TestCase):
             def count_voices(self, wav):
                 return 2
 
-        v = self.voice(Fast(), 0.5, self.speech)
-        v.listen_once("doorbell")
+        v = self.voice(Fast(), 0.5)
+        self.window()
         self.assertTrue(self.wait(lambda: len(self.got) == 1))
         self.assertEqual(self.got[0].data["voices"], 2)
         self.assertEqual(validate_event(self.got[0].to_dict()), [])
@@ -144,8 +155,8 @@ class NeverDelays(unittest.TestCase):
                 return 3
 
         slow = Slow()
-        v = self.voice(slow, 0.0, self.speech)
-        v.listen_once("doorbell")
+        v = self.voice(slow, 0.0)
+        self.window()
         self.assertTrue(self.wait(lambda: slow.called.is_set()))
         t0 = time.monotonic()
         self.assertTrue(self.wait(lambda: len(self.got) == 1, timeout=5))
@@ -161,13 +172,10 @@ class NeverDelays(unittest.TestCase):
                 calls.append(wav)
                 return 1
 
-        v = self.voice(Counting(), 0.5, self.speech, self.speech,
-                       stt_texts=("Hey Faraday.", "Turn on the porch light."))
+        v = self.voice(Counting(), 0.5, stt_texts=("Hey Faraday.", "Turn on the porch light."))
         v.start_wake()
-        try:
-            self.assertTrue(self.wait(lambda: len(self.got) == 1, timeout=15))
-        finally:
-            v.stop_wake()
+        self.say(("speech", 0.8), ("quiet", 1.5), ("speech", 1.2), ("quiet", 2.0))
+        self.assertTrue(self.wait(lambda: len(self.got) == 1, timeout=15))
         self.assertEqual(self.got[0].data["text"], "Turn on the porch light.")
         self.assertEqual(calls, [])                              # the owner, not a visitor
 

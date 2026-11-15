@@ -56,6 +56,9 @@ class App:
         self._stopping = threading.Event()
         self._outlet_state: Dict[str, str] = {}   # outlet -> last command sent OK (on/off)
         self._sent_lock = threading.Lock()
+        self._speaking = False                     # a line is being spoken right now
+        self._handling = False                     # the pipeline is working on an event
+        self._photographing = False                # photo + description in progress (it is spoken)
         self.voice: Any = None                     # integration.voice.Voice, set by __main__
         self.extras: List[Any] = []                # things with stop(): controls server, camera feed
         self.flipper.on_event = self.submit
@@ -92,7 +95,7 @@ class App:
         self._threads = []
         self.pipeline.wait_background(5)
         if self.voice is not None:
-            self.voice.stop_wake()
+            self.voice.stop()
         for extra in reversed(self.extras):
             try:
                 extra.stop()
@@ -101,6 +104,15 @@ class App:
         self.flipper.stop()
         if self.board is not None:
             self.board.stop()
+
+    def speech_busy(self) -> bool:
+        """Faraday may still say something: an event is being handled (the 9B may
+        be writing the greeting), lines are queued, or one is being spoken. The
+        voice opens a listening window only when this is False (owner 2026-11-14:
+        it opened while Faraday was still talking). A photo in progress counts:
+        its description is spoken (who's at the door)."""
+        return (self._handling or self._speaking or self._photographing
+                or not self.events.empty() or not self._speech.empty() or not self._photos.empty())
 
     def outlet_states(self) -> Dict[str, str]:
         """Last command sent OK per outlet (for the Controls page)."""
@@ -188,11 +200,14 @@ class App:
                 if self._stopping.is_set():
                     return
                 continue
+            self._handling = True
             try:
                 self.pipeline.handle(event)
             except Exception:
                 log.exception("pipeline failed on %s", event.type)
                 self.out(f"  [integration] pipeline failed on {event.type} (see log)")
+            finally:
+                self._handling = False
 
     def _speech_worker(self) -> None:
         while True:
@@ -202,10 +217,13 @@ class App:
                     return
                 continue
             text = str(action.args.get("text", ""))
+            self._speaking = True
             try:
                 self.speaker.say(text)
             except Exception:
                 log.exception("speaker failed")
+            finally:
+                self._speaking = False
             if self.voice is not None:
                 self.voice.on_said(text)       # a question opens a listening window
 
@@ -219,13 +237,15 @@ class App:
             if self.camera is None:
                 self.out("  [camera] no camera configured; photo skipped")
                 continue
+            self._photographing = True
             try:
                 event = self.camera.take(action)
+                if event is not None:
+                    self.submit(event)
             except Exception:
                 log.exception("camera failed")
-                continue
-            if event is not None:
-                self.submit(event)
+            finally:
+                self._photographing = False
 
 
 def _brief(d: Optional[Dict[str, Any]]) -> str:

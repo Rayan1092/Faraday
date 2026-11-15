@@ -46,11 +46,9 @@ class Controls(unittest.TestCase):
         self.feed = CameraFeed(photos_dir=self.tmp, fps=30, idle_s=5,
                                capture_factory=lambda *a: FakeCapture())
         self.intercom = Intercom(self.gate, stream_factory=FakeOutput, hold_s=0.3)
-        self.listens = []
         self.dash_port = self.app.board.httpd.server_address[1]
         self.srv = ControlsServer("127.0.0.1", 0, feed=self.feed, intercom=self.intercom,
                                   control=self.app.control,
-                                  listen=lambda: self.listens.append(1) or True,
                                   outlet_state=self.app.outlet_states,
                                   dashboard_port=self.dash_port).start()
 
@@ -136,12 +134,6 @@ class Controls(unittest.TestCase):
         r, body = self.post_json("/api/control", {"outlet": "living_room_lamp", "on": "yes"})
         self.assertEqual(r.status, 400)
 
-    def test_listen_opens_a_window(self):
-        r, body = self.post_json("/api/listen", {})
-        self.assertEqual((r.status, body["opened"]), (200, True))
-        self.assertEqual(self.listens, [1])
-
-    # ---- CORS / page -----------------------------------------------------------------
     def test_cors_only_for_dashboard_page(self):
         good = f"http://127.0.0.1:{self.dash_port}"
         r, _ = self.request("OPTIONS", "/api/intercom", headers={
@@ -153,7 +145,8 @@ class Controls(unittest.TestCase):
         r, _ = self.request("OPTIONS", "/api/intercom", headers={"Origin": "http://evil.example"})
         self.assertEqual(r.status, 403)
         self.assertIsNone(r.getheader("Access-Control-Allow-Origin"))
-        r, _ = self.post_json("/api/listen", {}, origin=f"http://192.168.1.20:{self.dash_port}")
+        r, _ = self.post_json("/api/control", {"outlet": "porch_light", "on": True},
+                              origin=f"http://192.168.1.20:{self.dash_port}")
         self.assertEqual(r.getheader("Access-Control-Allow-Origin"),
                          f"http://192.168.1.20:{self.dash_port}")     # phone on the LAN
 
@@ -161,7 +154,7 @@ class Controls(unittest.TestCase):
         r, page = self.request("GET", "/")
         self.assertEqual(r.status, 200)
         text = page.decode("utf-8")
-        for needle in ("/stream.mjpg", "/api/intercom", "/api/control", "/api/listen",
+        for needle in ("/stream.mjpg", "/api/intercom", "/api/control",
                        "getUserMedia", "X-Sample-Rate"):
             self.assertIn(needle, text)
         self.assertNotRegex(text, r"https?://")                          # no external assets
