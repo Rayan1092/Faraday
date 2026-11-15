@@ -52,13 +52,14 @@ Lights, photos and warnings are guaranteed by plain code in `modes/` and `rules/
 | `doorbell` | announce only ("Someone is at the front door.") | the fixed greeting at once (code), `take_photo`, then the owner's words for visitors. Bonsai replies only to what the visitor says → `save_message`. A pending motion warning is cancelled | `outlet_on porch_light`, `take_photo`, quiet (no speech; the dashboard shows "Doorbell at night"). A pending motion warning is cancelled |
 | `motion` (alert normal) | nothing | `outlet_on porch_light` at once, then a 15 s grace period (`alerts.motion_grace_s`). Nothing else yet | same as Away |
 | no doorbell by the end of the grace period | | `alert_changed warning`, `take_photo`, "Please be aware this property is monitored and you are on camera." | same as Away (the warning line is spoken at Night too) |
-| `motion` within 120 s after a doorbell (`alerts.visitor_quiet_s`) | nothing | `outlet_on porch_light` only: the visitor is there, never a warning or an alarm | same as Away |
+| `motion` within 60 s after a doorbell (`alerts.visitor_quiet_s`) | nothing | `outlet_on porch_light` only: the visitor is there, never a warning or an alarm | same as Away |
 | `motion` 8 to 60 s after the warning, no doorbell in between | nothing | `alert_changed alarm`, also `outlet_on living_room_lamp`, `take_photo`, "This property is protected. You are being recorded and the owner has been notified. Please leave now.", then a confrontation | same as Away (the alarm line is spoken at Night too) |
 
 Notes:
 - **Alert levels** (in `modes/`, owner 2026-11-15: a visitor who walks up and rings is never warned or alarmed). The same in Away and Night:
-  - Motion while the alert is normal: the porch light goes on at once, and a grace period starts (`alerts.motion_grace_s`, 15 s).
-  - A doorbell within the grace period cancels the warning, and the alert stays normal. After a doorbell, motion doesn't escalate for `alerts.visitor_quiet_s` (120 s).
+  - Motion while the alert is normal: the porch light goes on at once, and a grace period starts (`alerts.motion_grace_s`, 15 s), counted from the motion's first radio packet (its `timestamp`). A timer in `brain/pipeline.py` ends it by itself. Owner, Mac test: the warning has to come 15 s after the wave.
+  - A doorbell within the grace period cancels the warning, and the alert stays normal. After a doorbell, motion doesn't escalate for `alerts.visitor_quiet_s` (60 s; owner, Mac test: waves 80 and 117 s after a doorbell were swallowed at 120 s).
+  - Every motion prints why on the console: `[motion] porch light on; warning in 15 s unless the doorbell rings`, `[motion] ignored: a visitor rang 20 s ago ...`, `[motion] ignored: the same wave ...`.
   - No doorbell by the end of the grace period: `warning`, with the warning line, the photo and the threat label.
   - `alarm` only from motion at least `alerts.min_gap_s` (8 s) and at most `alerts.alarm_window_s` (60 s) after the warning, with no doorbell in between. Sooner is the same wave. Later is a new walk-up: a new grace period, and if nobody rings the warning steps run again (the level stays warning), so a courier who trips the sensor long after an old warning and then rings is never alarmed.
   - The doorbell radio reports a press after the burst ends, so a press counts until about 2.5 s after the grace period (`flipper.burst_gap_s` + 1 s).

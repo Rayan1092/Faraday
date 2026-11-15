@@ -118,9 +118,10 @@ class Pipeline:
         modes = ModeState(passphrase(settings), alerts.get("alarm_window_s", 60), mode,
                           min_gap_s=alerts.get("min_gap_s", 8),
                           motion_grace_s=alerts.get("motion_grace_s", 15),
-                          visitor_quiet_s=alerts.get("visitor_quiet_s", 120),
-                          # the doorbell radio reports a press after the burst ends
-                          doorbell_settle_s=float(settings.get("flipper", {}).get("burst_gap_s", 1.5)) + 1.0)
+                          visitor_quiet_s=alerts.get("visitor_quiet_s", 60),
+                          # Owner, Mac test: the warning comes 15 s after the wave. The grace
+                          # counts from the motion's first packet, with no margin by default.
+                          doorbell_settle_s=float(alerts.get("doorbell_settle_s", 0.0)))
         rules = callbacks.pop("rules", None) or RuleStore.from_settings(settings)
         for problem in rules.skipped:
             say(f"[rules] {problem}")
@@ -213,6 +214,7 @@ class Pipeline:
             motion_id = self.modes.grace_ended
             if motion_id is None:
                 return None
+            self.say(f"[motion] no doorbell within {self.modes.motion_grace_s:.0f} s: warning")
             result = Result()
             mode = self.modes.mode
             for e in events:          # [] when an old warning is given again: no level change
@@ -224,6 +226,11 @@ class Pipeline:
             return result
 
     def _start_grace_timer(self, delay: Optional[float] = None) -> None:
+        """The warning fires by itself when the grace period is over, with no other
+        event needed (owner, Mac test). The grace counts from the motion's first
+        packet, so the delay is what's left of it."""
+        if delay is None:
+            delay = self.modes.grace_remaining()
         if delay is None:
             delay = self.modes.motion_grace_s + self.modes.doorbell_settle_s
         timer = threading.Timer(max(0.0, delay) + 0.05, self._grace_timer_fired)
@@ -275,8 +282,12 @@ class Pipeline:
         done: List[Action] = []
         greet = event.type == EventType.DOORBELL and self._greet_visitor(event, alert)
         outcome = self.modes.last_outcome if event.type == EventType.MOTION else None
+        if event.type == EventType.MOTION:
+            self.say(f"[motion] {self.modes.last_reason}")     # what it did, or why it was ignored
+        elif event.type == EventType.DOORBELL and mode in Mode.ARMED:
+            self.say(f"[doorbell] {self.modes.last_reason}")
         if outcome == MotionOutcome.GRACE:
-            self._start_grace_timer()   # no doorbell in time: the warning (tick)
+            self._start_grace_timer(self.modes.grace_remaining())   # no doorbell in time: the warning
         for action in baseline_actions(event, mode, alert, outcome):
             if (action.type == ActionType.SPEAK and action.args.get("text") == DOORBELL_GREETING
                     and not greet):

@@ -7,16 +7,18 @@ Mode rules:
 
 Alert rules (FORMATS.md alert_changed), the same in away and night. A visitor
 who walks up (motion) and then rings is never warned or alarmed (owner, 2026-11-15):
-- Motion while the alert is normal starts a grace period (motion_grace_s, 15 s).
-  The porch light goes on at once (rules/baseline.py), nothing else yet.
-- A doorbell within the grace period: a visitor. The pending warning is
-  cancelled and the alert stays normal. The doorbell radio only reports a press
-  after the burst ends (about 1.5 s), so a press counts until doorbell_settle_s
-  (2.5 s) after the grace period.
-- No doorbell by the end of it (end_grace(), called by the pipeline's timer):
-  normal -> warning, and `grace_ended` names the motion. The pipeline then speaks
-  the warning, takes the photo and runs the threat label.
-- After a doorbell, motion doesn't escalate for visitor_quiet_s (120 s).
+- Motion while the alert is normal starts a grace period (motion_grace_s, 15 s),
+  counted from when the sensor first fired: NV's radio stamps the event with its
+  first packet and reports it 2 to 3 s later (owner, Mac test: the warning has to
+  come 15 s after the wave, not 15 s after the report). The porch light goes on
+  at once (rules/baseline.py), nothing else yet.
+- A doorbell that arrives within the grace period: a visitor. The pending warning
+  is cancelled and the alert stays normal. doorbell_settle_s (default 0) can add
+  a margin for a press reported late.
+- No doorbell by the end of it (end_grace(), called by the pipeline's own timer,
+  which fires by itself): normal -> warning, and `grace_ended` names the motion.
+  The pipeline then speaks the warning, takes the photo and runs the threat label.
+- After a doorbell, motion doesn't escalate for visitor_quiet_s (60 s).
 - Alarm only from motion after a warning: at least min_gap_s (8 s) and at most
   alarm_window_s (60 s) after the warning, with no doorbell in between. Sooner is
   the same wave (ignored). Later is a new walk-up: a new grace period, and if
@@ -29,11 +31,13 @@ who walks up (motion) and then rings is never warned or alarmed (owner, 2026-11-
 
 Every method returns the events it produced (possibly none). The caller puts
 them on the bus; this class never does I/O. `last_outcome` says what the last
-motion did (MotionOutcome), so the baseline knows which steps to run.
+motion did (MotionOutcome), so the baseline knows which steps to run, and
+`last_reason` says why in words, for the console.
 """
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from typing import Callable, List, Optional, Tuple
 
 from shared import (AlertLevel, ChangedBy, Event, EventType, Mode, Source,
@@ -42,6 +46,31 @@ from shared import (AlertLevel, ChangedBy, Event, EventType, Mode, Source,
 from .passphrase import find_passphrase, redact
 
 Clock = Callable[[], float]
+Wall = Callable[[], datetime]
+
+# The radio's real report delay is 2 to 4 s. Outside this range (a clock quirk, a
+# typed sim event, the milliseconds between creating and handling an event in a test)
+# the event counts as just now.
+MIN_REPORT_DELAY_S = 0.5
+MAX_REPORT_DELAY_S = 10.0
+
+
+def _now() -> datetime:
+    return datetime.now().astimezone()
+
+
+def report_delay_s(event: Event, now: datetime) -> float:
+    """Seconds between the sensor's first packet (the event's timestamp, set by NV's
+    radio driver) and now. 0 if the timestamp is missing, unreadable, in the future or
+    implausibly old."""
+    try:
+        ts = datetime.fromisoformat(str(event.timestamp))
+        if ts.tzinfo is None:
+            ts = ts.astimezone()
+        delay = (now - ts).total_seconds()
+    except (TypeError, ValueError):
+        return 0.0
+    return delay if MIN_REPORT_DELAY_S <= delay <= MAX_REPORT_DELAY_S else 0.0
 
 
 class MotionOutcome:
@@ -58,7 +87,8 @@ class ModeState:
     def __init__(self, passphrase: str, alarm_window_s: float = 60,
                  mode: str = Mode.HOME, clock: Clock = time.monotonic,
                  min_gap_s: float = 8, motion_grace_s: float = 15,
-                 visitor_quiet_s: float = 120, doorbell_settle_s: float = 2.5):
+                 visitor_quiet_s: float = 60, doorbell_settle_s: float = 0.0,
+                 wall: Optional[Wall] = None):
         if mode not in Mode.ALL:
             raise ValueError(f"unknown mode {mode!r}")
         self._passphrase = passphrase
@@ -70,11 +100,14 @@ class ModeState:
         self._mode = mode
         self._alert = AlertLevel.NORMAL
         self._clock = clock
+        self._wall = wall or _now                     # wall clock, for the radio's timestamps
         self._grace_since: Optional[float] = None    # a warning is pending since then
         self._grace_cause: Optional[str] = None      # the motion event that started it
         self._warned_at: Optional[float] = None      # when the alarm window started
         self._last_doorbell: Optional[float] = None
+        self._alarm_gap = 0.0                          # seconds from the warning to the alarm motion
         self.last_outcome: Optional[str] = None
+        self.last_reason = ""                         # why, in words: "[motion] ..." on the console
         self.grace_ended: Optional[str] = None       # set by end_grace: the motion to warn about
 
     @property
@@ -107,45 +140,74 @@ class ModeState:
             self._on_doorbell()
             return []
         if event.type == EventType.MOTION:
-            self.last_outcome = self._on_motion(event) if self.armed else MotionOutcome.NONE
+            if self.armed:
+                self.last_outcome = self._on_motion(event)
+            else:
+                self.last_outcome = self._why(MotionOutcome.NONE,
+                                              "ignored: Home mode (motion only counts in Away or Night)")
             if self.last_outcome == MotionOutcome.ALARM:
-                since = self._clock() - (self._warned_at or 0)
                 return [self._alert_to(AlertLevel.ALARM,
-                                       f"Motion again {since:.0f} s after the warning.", event.id)]
+                                       f"Motion again {self._alarm_gap:.0f} s after the warning.", event.id)]
         return []
 
+    def _why(self, outcome: str, reason: str) -> str:
+        self.last_reason = reason
+        return outcome
+
     def _on_doorbell(self) -> None:
-        """A visitor: cancel a pending warning, and motion is quiet for a while."""
+        """A visitor: cancel a pending warning, and motion is quiet for a while. The
+        time is when the press is handled, so a press reported just after a warning
+        still counts as "a doorbell in between" (never an alarm)."""
+        pending = self._grace_since is not None
         self._last_doorbell = self._clock()
         self._grace_since = self._grace_cause = None
+        self.last_reason = (("a visitor: the pending warning is cancelled, " if pending else "")
+                            + f"motion stays quiet for {self.visitor_quiet_s:.0f} s")
 
     def _on_motion(self, event: Event) -> str:
-        now = self._clock()
+        # When the sensor first fired, not when the report arrived (2 to 3 s later).
+        t = self._clock() - report_delay_s(event, self._wall())
         if self._alert == AlertLevel.ALARM:
-            return MotionOutcome.NONE
-        if self._last_doorbell is not None and now - self._last_doorbell <= self.visitor_quiet_s:
-            return MotionOutcome.QUIET
+            return self._why(MotionOutcome.NONE, "ignored: the alarm is already on")
+        if self._last_doorbell is not None and t - self._last_doorbell <= self.visitor_quiet_s:
+            ago = max(0.0, t - self._last_doorbell)
+            return self._why(MotionOutcome.QUIET,
+                             f"ignored: a visitor rang {ago:.0f} s ago (motion stays quiet for "
+                             f"{self.visitor_quiet_s:.0f} s after a doorbell)")
         if self._alert == AlertLevel.NORMAL:
             if self._grace_since is None:
-                self._grace_since, self._grace_cause = now, event.id
-                return MotionOutcome.GRACE
-            return MotionOutcome.PENDING
+                return self._start_grace(t, event.id)
+            return self._why(MotionOutcome.PENDING, "ignored: already waiting for a doorbell "
+                             f"(warning in {max(0.0, self.grace_remaining() or 0):.0f} s)")
         # warning
-        if self._warned_at is None or now - self._warned_at > self.alarm_window_s:
+        if self._warned_at is None or t - self._warned_at > self.alarm_window_s:
             # A warning from long ago: this is a new walk-up. Grace again, so a visitor
             # who then rings is never alarmed; nobody rings -> the warning steps again.
             if self._grace_since is None:
-                self._grace_since, self._grace_cause = now, event.id
-                return MotionOutcome.GRACE
-            return MotionOutcome.PENDING
+                return self._start_grace(t, event.id)
+            return self._why(MotionOutcome.PENDING, "ignored: already waiting for a doorbell "
+                             f"(warning in {max(0.0, self.grace_remaining() or 0):.0f} s)")
         if (self._last_doorbell is not None and self._last_doorbell >= self._warned_at):
-            return MotionOutcome.QUIET       # a doorbell in between: never an alarm
-        if now - self._warned_at < self.min_gap_s:
-            return MotionOutcome.IGNORED     # the same wave as before
-        return MotionOutcome.ALARM
+            return self._why(MotionOutcome.QUIET,      # a doorbell in between: never an alarm
+                             "ignored: the doorbell rang after the warning, so no alarm")
+        gap = t - self._warned_at
+        if gap < self.min_gap_s:
+            return self._why(MotionOutcome.IGNORED,    # the same wave as before
+                             f"ignored: the same wave, {max(0.0, gap):.0f} s after the warning "
+                             f"(the alarm needs motion {self.min_gap_s:.0f} to "
+                             f"{self.alarm_window_s:.0f} s after it)")
+        self._alarm_gap = gap
+        return self._why(MotionOutcome.ALARM, f"ALARM: motion again {gap:.0f} s after the warning")
+
+    def _start_grace(self, t: float, motion_id: str) -> str:
+        self._grace_since, self._grace_cause = t, motion_id
+        left = max(0.0, self.grace_remaining() or 0)
+        return self._why(MotionOutcome.GRACE,
+                         f"porch light on; warning in {left:.0f} s unless the doorbell rings")
 
     def grace_remaining(self) -> Optional[float]:
-        """Seconds until the pending grace period ends (radio margin included), or None."""
+        """Seconds until the pending grace period ends (15 s after the sensor first
+        fired, plus doorbell_settle_s), or None."""
         if self._grace_since is None:
             return None
         return self.motion_grace_s + self.doorbell_settle_s - (self._clock() - self._grace_since)

@@ -130,10 +130,10 @@ class PipelineTests(unittest.TestCase):
         restarted = []
         p._start_grace_timer = lambda delay=None: restarted.append(delay)
         p.handle(events.motion())
-        self.assertEqual(restarted, [None])
+        self.assertEqual(restarted, [15.0])                                # what's left of the grace
         self.clock.t += 10
         p._grace_timer_fired()                                             # 5 s early
-        self.assertEqual(restarted, [None, 5.0])
+        self.assertEqual(restarted, [15.0, 5.0])
         self.assertEqual(p.modes.alert, AlertLevel.NORMAL)
         self.clock.t += 5
         p._grace_timer_fired()
