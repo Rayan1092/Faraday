@@ -54,7 +54,7 @@ class Step3(unittest.TestCase):
         brain.client = client
         self.clock = Clock()
         self.emitted = []
-        return Pipeline(brain, ModeState(PASSPHRASE, 60, mode, self.clock),
+        return Pipeline(brain, ModeState(PASSPHRASE, 60, mode, self.clock, doorbell_settle_s=0),
                         EventLog(self.dir / "events.jsonl", PASSPHRASE),
                         on_action=self.emitted.append, say=lambda _m: None,
                         rules=RuleStore(self.dir / "rules.json"))

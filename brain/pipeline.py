@@ -45,6 +45,7 @@ from modes import MotionOutcome
 from rules import instructions as owner_instructions
 
 from . import lines, look, owner, summary, threat
+from . import threat as threat_rules
 from .threat import ThreatAssessor
 from .core import Brain, _age_s
 from .settings import load_settings, passphrase
@@ -112,7 +113,9 @@ class Pipeline:
         modes = ModeState(passphrase(settings), alerts.get("alarm_window_s", 60), mode,
                           min_gap_s=alerts.get("min_gap_s", 8),
                           motion_grace_s=alerts.get("motion_grace_s", 15),
-                          visitor_quiet_s=alerts.get("visitor_quiet_s", 120))
+                          visitor_quiet_s=alerts.get("visitor_quiet_s", 120),
+                          # the doorbell radio reports a press after the burst ends
+                          doorbell_settle_s=float(settings.get("flipper", {}).get("burst_gap_s", 1.5)) + 1.0)
         rules = callbacks.pop("rules", None) or RuleStore.from_settings(settings)
         for problem in rules.skipped:
             say(f"[rules] {problem}")
@@ -136,6 +139,8 @@ class Pipeline:
 
     def handle(self, event: Event) -> Result:
         with self.lock:
+            if self.modes.grace_due():
+                self.tick()   # a grace period that should have ended already (a missed timer)
             result = Result()
             self._process(event, result, 0)
             return result
@@ -192,11 +197,12 @@ class Pipeline:
         (the backup demo at rehearsal speed)."""
         with self.lock:
             events = self.modes.end_grace(force)
-            if not events:
+            motion_id = self.modes.grace_ended
+            if motion_id is None:
                 return None
             result = Result()
-            mode, motion_id = self.modes.mode, events[0].caused_by
-            for e in events:
+            mode = self.modes.mode
+            for e in events:          # [] when an old warning is given again: no level change
                 self._process(e, result, 0)
             for action in warning_actions(motion_id, mode):
                 self._emit(action, result, [])
@@ -204,13 +210,20 @@ class Pipeline:
                     self._photo_cause[action.id] = (EventType.MOTION, mode, self.modes.alert)
             return result
 
-    def _start_grace_timer(self) -> None:
-        timer = threading.Timer(self.modes.motion_grace_s + 0.05, self._grace_timer_fired)
+    def _start_grace_timer(self, delay: Optional[float] = None) -> None:
+        if delay is None:
+            delay = self.modes.motion_grace_s + self.modes.doorbell_settle_s
+        timer = threading.Timer(max(0.0, delay) + 0.05, self._grace_timer_fired)
         timer.daemon = True
         timer.start()
 
     def _grace_timer_fired(self) -> None:
         try:
+            with self.lock:
+                left = self.modes.grace_remaining()
+            if left is not None and left > 0:
+                self._start_grace_timer(left)     # woke early (or the clock jumped): wait the rest
+                return
             self.tick()
         except Exception as e:  # a timer thread must never crash the app
             self.say(f"[pipeline] grace timer failed: {e!r}")
@@ -258,7 +271,13 @@ class Pipeline:
         for action in merge(done, lights_off_on_disarm(event, self.log.recent(500))):
             self._emit(action, result, done)
         if self.rules is not None:
-            for action in merge(done, self.rules.fire(event, mode)):
+            extra = merge(done, self.rules.fire(event, mode))
+            if outcome in (MotionOutcome.GRACE, MotionOutcome.PENDING, MotionOutcome.QUIET):
+                # No rule photo while we wait for a doorbell or a visitor is there: its
+                # label ("no doorbell yet") would warn a visitor before they ring. The
+                # grace period's own photo covers it if nobody rings.
+                extra = [a for a in extra if a.type != ActionType.TAKE_PHOTO]
+            for action in extra:
                 self._emit(action, result, done)
         if event.type == EventType.PHOTO_DESCRIBED:
             cause = self._photo_cause.get(event.caused_by or "")
@@ -284,8 +303,11 @@ class Pipeline:
             threat = self._assess(event, mode)
             self._process(threat, result, depth + 1)
             mode = self.modes.mode
-            if (threat.data["category"] == ThreatCategory.SUSPICIOUS and mode in Mode.ARMED):
-                self._confront_later(event)  # early: don't wait for the alarm
+            if (threat.data["category"] == ThreatCategory.SUSPICIOUS and mode in Mode.ARMED
+                    and threat_rules.STRONG.search(str(event.data.get("description", "")))):
+                # Warning signs in the photo (a mask, forcing the door): confront now. Just
+                # staying without ringing gets the warning; the alarm brings the confrontation.
+                self._confront_later(event)
             if event.caused_by in self._owner_photos:
                 how = self._owner_photos.pop(event.caused_by)
                 timer = self._look_timers.pop(event.caused_by or "", None)

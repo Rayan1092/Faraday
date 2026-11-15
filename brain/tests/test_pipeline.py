@@ -8,6 +8,8 @@ from shared import (ActionType, AlertLevel, EventType, Mode, Source,
                     validate_action, validate_event)
 
 from brain.pipeline import Pipeline
+from modes import MotionOutcome
+from rules import RuleStore
 from rules.baseline import DOORBELL_GREETING
 
 FILLER = "One moment, please."  # gone (owner, Mac test): checked that it never comes back
@@ -65,7 +67,7 @@ class PipelineTests(unittest.TestCase):
         if use_client:
             brain.client = SpyClient(rec, reply if reply is not None else {"content": ""})
         self.clock = Clock()
-        modes = ModeState(PASSPHRASE, 60, mode, self.clock)
+        modes = ModeState(PASSPHRASE, 60, mode, self.clock, doorbell_settle_s=0)
         p = Pipeline(brain, modes, EventLog(self.log_path, PASSPHRASE),
                      on_event=rec.event, on_action=rec.action, say=lambda _m: None)
         return p, rec, brain.client
@@ -102,8 +104,48 @@ class PipelineTests(unittest.TestCase):
         self.clock.t += 10
         again = p.handle(events.motion())
         self.assertEqual([a.type for a in again.actions], [ActionType.OUTLET_ON])
-        self.assertNotIn(EventType.ALERT_CHANGED, [e.type for e in again.events])
+        self.assertEqual(p.modes.last_outcome, MotionOutcome.QUIET)       # not a new grace period
+        self.clock.t += 30
+        self.assertIsNone(p.tick())
         self.assertEqual(p.modes.alert, AlertLevel.NORMAL)
+
+    def test_a_rule_photo_never_warns_a_visitor_before_they_ring(self):
+        """Review: "when there's motion at night, take a photo" took a photo in the grace
+        period, its label (no doorbell yet) said suspicious, and the visitor was warned."""
+        p, _, _ = self.pipeline(None, Mode.NIGHT, use_client=False)
+        p.rules = RuleStore(Path(self.tmp.name) / "rules.json")
+        p.rules.add({"when": {"event": "motion", "modes": ["night"]},
+                     "then": [{"type": "take_photo", "args": {"reason": "rule"}},
+                              {"type": "outlet_on", "args": {"outlet": "living_room_lamp"}}]})
+        walk = p.handle(events.motion())
+        self.assertEqual([a.type for a in walk.actions], [ActionType.OUTLET_ON, ActionType.OUTLET_ON])
+        self.clock.t += 5
+        p.handle(events.doorbell())
+        self.assertEqual(p.modes.alert, AlertLevel.NORMAL)
+        self.clock.t += 30
+        self.assertIsNone(p.tick())
+
+    def test_the_timer_waits_again_if_it_woke_early(self):
+        p, _, _ = self.pipeline(None, Mode.AWAY, use_client=False)
+        restarted = []
+        p._start_grace_timer = lambda delay=None: restarted.append(delay)
+        p.handle(events.motion())
+        self.assertEqual(restarted, [None])
+        self.clock.t += 10
+        p._grace_timer_fired()                                             # 5 s early
+        self.assertEqual(restarted, [None, 5.0])
+        self.assertEqual(p.modes.alert, AlertLevel.NORMAL)
+        self.clock.t += 5
+        p._grace_timer_fired()
+        self.assertEqual(p.modes.alert, AlertLevel.WARNING)
+
+    def test_a_missed_timer_is_caught_by_the_next_event(self):
+        p, _, _ = self.pipeline(None, Mode.AWAY, use_client=False)
+        p._start_grace_timer = lambda delay=None: None                     # the timer never fires
+        p.handle(events.motion())
+        self.clock.t += 20
+        p.handle(events.motion())
+        self.assertEqual(p.modes.alert, AlertLevel.WARNING)
 
     def test_walk_up_no_ring_then_lingering(self):
         p, _, _ = self.pipeline(None, Mode.AWAY, use_client=False)
@@ -173,6 +215,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(client.calls, [])                                 # Bonsai only replies to speech
         motion = p.handle(events.motion()).actions                         # the visitor moves about
         self.assertEqual([a.type for a in motion], [ActionType.OUTLET_ON])  # never warned
+        self.assertEqual(p.modes.last_outcome, MotionOutcome.QUIET)
 
     def test_motion_photo_traced_even_after_a_busy_log(self):
         p, _, client = self.pipeline(tool_calls(("speak", {"text": "Hello visitor!"})), Mode.AWAY)

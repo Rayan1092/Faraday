@@ -10,14 +10,17 @@ who walks up (motion) and then rings is never warned or alarmed (owner, 2026-11-
 - Motion while the alert is normal starts a grace period (motion_grace_s, 15 s).
   The porch light goes on at once (rules/baseline.py), nothing else yet.
 - A doorbell within the grace period: a visitor. The pending warning is
-  cancelled and the alert stays normal.
+  cancelled and the alert stays normal. The doorbell radio only reports a press
+  after the burst ends (about 1.5 s), so a press counts until doorbell_settle_s
+  (2.5 s) after the grace period.
 - No doorbell by the end of it (end_grace(), called by the pipeline's timer):
-  normal -> warning. The pipeline then speaks the warning, takes the photo and
-  runs the threat label.
+  normal -> warning, and `grace_ended` names the motion. The pipeline then speaks
+  the warning, takes the photo and runs the threat label.
 - After a doorbell, motion doesn't escalate for visitor_quiet_s (120 s).
 - Alarm only from motion after a warning: at least min_gap_s (8 s) and at most
   alarm_window_s (60 s) after the warning, with no doorbell in between. Sooner is
-  the same wave (ignored); later starts a new window (still warning, no event).
+  the same wave (ignored). Later is a new walk-up: a new grace period, and if
+  nobody rings the warning steps run again (no event: the level stays warning).
 - A 'suspicious' threat label while armed raises normal to warning at once.
 - Only the passphrase disarm returns to normal. It sends mode_changed, then
   alert_changed, both with the same caused_by.
@@ -55,7 +58,7 @@ class ModeState:
     def __init__(self, passphrase: str, alarm_window_s: float = 60,
                  mode: str = Mode.HOME, clock: Clock = time.monotonic,
                  min_gap_s: float = 8, motion_grace_s: float = 15,
-                 visitor_quiet_s: float = 120):
+                 visitor_quiet_s: float = 120, doorbell_settle_s: float = 2.5):
         if mode not in Mode.ALL:
             raise ValueError(f"unknown mode {mode!r}")
         self._passphrase = passphrase
@@ -63,6 +66,7 @@ class ModeState:
         self.min_gap_s = float(min_gap_s)
         self.motion_grace_s = float(motion_grace_s)
         self.visitor_quiet_s = float(visitor_quiet_s)
+        self.doorbell_settle_s = float(doorbell_settle_s)
         self._mode = mode
         self._alert = AlertLevel.NORMAL
         self._clock = clock
@@ -71,6 +75,7 @@ class ModeState:
         self._warned_at: Optional[float] = None      # when the alarm window started
         self._last_doorbell: Optional[float] = None
         self.last_outcome: Optional[str] = None
+        self.grace_ended: Optional[str] = None       # set by end_grace: the motion to warn about
 
     @property
     def mode(self) -> str:
@@ -127,29 +132,46 @@ class ModeState:
             return MotionOutcome.PENDING
         # warning
         if self._warned_at is None or now - self._warned_at > self.alarm_window_s:
-            self._warned_at = now            # too late: a new window, still warning
-            return MotionOutcome.IGNORED
+            # A warning from long ago: this is a new walk-up. Grace again, so a visitor
+            # who then rings is never alarmed; nobody rings -> the warning steps again.
+            if self._grace_since is None:
+                self._grace_since, self._grace_cause = now, event.id
+                return MotionOutcome.GRACE
+            return MotionOutcome.PENDING
         if (self._last_doorbell is not None and self._last_doorbell >= self._warned_at):
             return MotionOutcome.QUIET       # a doorbell in between: never an alarm
         if now - self._warned_at < self.min_gap_s:
             return MotionOutcome.IGNORED     # the same wave as before
         return MotionOutcome.ALARM
 
+    def grace_remaining(self) -> Optional[float]:
+        """Seconds until the pending grace period ends (radio margin included), or None."""
+        if self._grace_since is None:
+            return None
+        return self.motion_grace_s + self.doorbell_settle_s - (self._clock() - self._grace_since)
+
     def grace_due(self) -> bool:
-        return (self._grace_since is not None
-                and self._clock() - self._grace_since >= self.motion_grace_s)
+        left = self.grace_remaining()
+        return left is not None and left <= 0
 
     def end_grace(self, force: bool = False) -> List[Event]:
-        """The grace period is over with no doorbell: normal -> warning. Returns
-        [alert_changed] (caused_by the motion), or [] if nothing is pending or due.
+        """The grace period is over with no doorbell. Sets `grace_ended` to the motion
+        that started it when the warning steps should run (else None), and returns
+        [alert_changed normal -> warning] (caused_by that motion), or [] if the
+        alert was already warning (a new walk-up long after an old warning: warned
+        again, no level change) or nothing was pending or due.
         force=True ends it early (the backup demo's rehearsal speed)."""
+        self.grace_ended = None
         if self._grace_since is None or not (force or self.grace_due()):
             return []
         cause = self._grace_cause
         self._grace_since = self._grace_cause = None
-        if not self.armed or self._alert != AlertLevel.NORMAL:
+        if not self.armed or self._alert == AlertLevel.ALARM:
             return []
         self._warned_at = self._clock()
+        self.grace_ended = cause
+        if self._alert == AlertLevel.WARNING:
+            return []
         return [self._alert_to(AlertLevel.WARNING,
                                f"Motion with no doorbell for {self.motion_grace_s:.0f} s.", cause)]
 

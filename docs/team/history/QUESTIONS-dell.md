@@ -34,3 +34,5 @@ Each one has the default I used. Answer inline and I'll adjust.
 17. **Night warning is spoken now.** Your walk-up rule says "speak the warning" when no doorbell comes; before, a Night warning was silent (porch light + photo). *Default:* spoken in both modes, like the alarm line (item 8).
 18. **A mode change starts a new visit.** A doorbell in Away followed by switching to Night no longer keeps Night motion quiet for 120 s, and a pending warning is dropped (the alert itself stays: only the passphrase lowers it). *Default:* on.
 19. **Motion during an alarm** turns on both lights again but doesn't repeat the alarm line or take another photo. *Default:* on (before, every motion during an alarm repeated the alarm line).
+
+20. **A courier who doesn't ring while armed.** Following your rule ("stayed at the door without ringing = suspicious"), someone with a box who never rings gets the warning after the grace period and the label suspicious. One who rings is a delivery. *Default:* as you wrote it.

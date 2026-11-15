@@ -25,4 +25,13 @@ Owner's required logic fix: a visitor who walks up (motion) and then rings must 
 
 **Tests:** new `modes` tests (walk up then ring, walk up no ring, lingering after the warning, boundaries, a doorbell after the warning, quiet ending, a mode change as a new visit). Pipeline tests for the same three scenarios. About 15 tests updated to drive time with `tick()` and a fake clock. My suite is all green.
 
+**Review fixes** (fresh reviewer agent):
+- A user rule's photo during the grace period was labelled "suspicious" (nobody rang yet) and warned the visitor before they rang. Rule photos are now dropped while the grace period or a visitor's quiet period runs.
+- The label counted doorbells from the last 3 minutes, so someone who stayed without ringing was "a visitor who rang" after an earlier visitor (this happened in the backup demo). A photo from motion now counts only doorbells from that motion on. "Stayed without ringing while armed" now comes before "carrying a box".
+- Motion long after an old warning restarted the alarm window silently, so a courier who tripped the sensor twice before ringing got the alarm. Late motion is now a new walk-up: a new grace period, then the warning steps again if nobody rings.
+- The doorbell radio reports a press about 1.5 s after the burst ends, so a press near 15 s arrived too late. Fix: a 2.5 s margin (`flipper.burst_gap_s` + 1).
+- The timer now re-arms if it wakes early, and any event ends a grace period that's overdue (a missed timer).
+- "Stayed without ringing" is now always suspicious, which would have brought the early confrontation forward at every warning. The early confrontation now needs warning signs in the photo (mask, forcing the door); otherwise the alarm brings the confrontation, as you laid out.
+- Tests that passed for the wrong reason were fixed: the QUIET checks now assert the outcome, the baseline merge test matches what the pipeline does, and demo step 2 now checks that the doorbell cancelled the grace period.
+
 **NV:** 5 tests in `integration/tests/test_app.py` assumed an instant warning. The patch is ready: `docs/team/patches/nv-test-app-walk-up-grace.patch` (26/26 pass here). PLAN Q33.

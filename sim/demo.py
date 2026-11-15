@@ -101,6 +101,8 @@ def steps() -> List[Step]:
         d.say("\n    Visitor presses the doorbell")
         d.pause(1.0)
         d.sim.send(events.doorbell())
+        if d.pipeline.tick(force=True) is not None:     # the grace period, cut short: must be gone
+            d.notes.append("step 2: the visitor who walked up and rang was warned")
 
     def message(d: DemoRunner) -> None:
         d.speak("Package for Sam, I left it by the side door.", who="Visitor")

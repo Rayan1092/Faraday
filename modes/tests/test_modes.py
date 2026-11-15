@@ -36,9 +36,10 @@ class AlertRules(unittest.TestCase):
         motion = motion or events.motion()
         self.assertEqual(s.on_event(motion), [])
         self.assertEqual(s.last_outcome, MotionOutcome.GRACE)
-        clock.t += 15
+        clock.t += 17.5                                            # 15 s grace + 2.5 s radio margin
         out = s.end_grace()
         self.assertEqual(levels(out), [("normal", "warning")])
+        self.assertEqual(s.grace_ended, motion.id)
         return out
 
     def test_walk_up_then_ring_is_never_warned(self):
@@ -62,10 +63,11 @@ class AlertRules(unittest.TestCase):
         clock.t += 5
         self.assertEqual(s.on_event(events.motion()), [])          # still pending, not extended
         self.assertEqual(s.last_outcome, MotionOutcome.PENDING)
-        clock.t += 9
+        clock.t += 12
         self.assertFalse(s.grace_due())
-        self.assertEqual(s.end_grace(), [])                        # 14 s: not yet
-        clock.t += 1
+        self.assertEqual(s.end_grace(), [])                        # 17 s: not yet
+        self.assertIsNone(s.grace_ended)
+        clock.t += 0.5
         out = s.end_grace()
         self.assertEqual(levels(out), [("normal", "warning")])
         self.assertEqual(out[0].caused_by, motion.id)
@@ -96,14 +98,51 @@ class AlertRules(unittest.TestCase):
         clock.t += 60
         self.assertEqual(levels(s.on_event(events.motion())), [("warning", "alarm")])   # 60 s counts
 
-    def test_late_motion_restarts_the_window(self):
+    def test_late_motion_is_a_new_walk_up(self):
+        """Motion long after a warning: a grace period again, then the warning steps again
+        (no event, the level stays warning), and only then can the alarm come."""
         s, clock = state()
         self.warn(s, clock)
         clock.t += 61
-        self.assertEqual(s.on_event(events.motion()), [])          # stays warning, no event
-        self.assertEqual(s.alert, AlertLevel.WARNING)
-        clock.t += 30                                              # within 60 s of the late one
+        late = events.motion()
+        self.assertEqual(s.on_event(late), [])
+        self.assertEqual((s.last_outcome, s.alert), (MotionOutcome.GRACE, AlertLevel.WARNING))
+        clock.t += 9
+        self.assertEqual(s.on_event(events.motion()), [])          # no alarm while we wait
+        self.assertEqual(s.last_outcome, MotionOutcome.PENDING)
+        clock.t += 9
+        self.assertEqual(s.end_grace(), [])                        # warned again: no level change
+        self.assertEqual(s.grace_ended, late.id)
+        clock.t += 9
         self.assertEqual(levels(s.on_event(events.motion())), [("warning", "alarm")])
+
+    def test_old_warning_then_a_courier_who_rings_is_never_alarmed(self):
+        """Review: warning at 10:00; at 14:00 a courier trips the sensor twice, 9 s apart,
+        then rings. Before, that was an alarm."""
+        s, clock = state(Mode.AWAY)
+        self.warn(s, clock)
+        clock.t += 240
+        s.on_event(events.motion())
+        clock.t += 9
+        self.assertEqual(s.on_event(events.motion()), [])
+        clock.t += 3
+        s.on_event(events.doorbell())
+        clock.t += 30
+        self.assertEqual(s.end_grace(), [])
+        self.assertIsNone(s.grace_ended)
+        self.assertEqual(s.alert, AlertLevel.WARNING)              # never alarm
+
+    def test_a_press_near_the_end_still_counts(self):
+        """The doorbell radio reports a press about 1.5 s after the burst: a press at
+        14.5 s arrives at about 16.5 s and still means a visitor."""
+        s, clock = state(Mode.AWAY)
+        s.on_event(events.motion())
+        clock.t += 16.5
+        self.assertFalse(s.grace_due())
+        s.on_event(events.doorbell())
+        clock.t += 5
+        self.assertEqual(s.end_grace(), [])
+        self.assertEqual(s.alert, AlertLevel.NORMAL)
 
     def test_a_doorbell_after_the_warning_means_no_alarm(self):
         s, clock = state()
@@ -131,7 +170,7 @@ class AlertRules(unittest.TestCase):
 
     def test_settings_values(self):
         s, clock = state(window=10)
-        s.motion_grace_s = 5
+        s.motion_grace_s, s.doorbell_settle_s = 5, 0
         s.on_event(events.motion())
         clock.t += 5
         self.assertTrue(s.end_grace())
