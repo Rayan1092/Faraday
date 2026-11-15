@@ -1,4 +1,4 @@
-/* Faraday dashboard. Calm, dark, frosted glass. Readable on a projector.
+/* Faraday dashboard. Calm, dark, frosted glass. Readable across a room.
    Fully offline: system fonts only, no external assets. Spacing on an 8px grid
    (0.5rem steps); sizes scale with the screen so 1280x720 and 1920x1080 both work. */
 
@@ -34,7 +34,7 @@ body[data-status="red"]    { --status: var(--red); }
 
 * { box-sizing: border-box; }
 
-/* 16px at ~1100px wide, ~21px at 1920: big enough for the back of the room. */
+/* 16px at ~1100px wide, ~21px at 1920: readable from across the room. */
 html { font-size: clamp(14px, calc(0.62vw + 9px), 22px); }
 
 body {
@@ -207,9 +207,6 @@ body[data-alert="warning"] .alert-row, body[data-alert="alarm"] .alert-row { col
   font-weight: 600;
   letter-spacing: 0.08em;
 }
-.net .dot { background: var(--green); box-shadow: 0 0 8px var(--green); }
-.net.online { border-color: rgba(255, 69, 58, 0.5); color: #ffb3ad; }
-.net.online .dot { background: var(--red); box-shadow: 0 0 8px var(--red); animation: breathe 1.2s ease-in-out infinite; }
 .link { font-size: 0.75rem; color: var(--text-3); }
 .link.down { color: var(--red); }
 
@@ -316,6 +313,28 @@ body[data-alert="warning"] .alert-row, body[data-alert="alarm"] .alert-row { col
 .threat.cat-visitor .threat-pill { --c: var(--green); }
 .threat.cat-nobody .threat-pill { --c: var(--text-3); }
 .threat.cat-suspicious .threat-pill { --c: var(--red); border-color: rgba(255, 69, 58, 0.5); color: #ffb3ad; }
+.threat.cat-unknown .threat-pill { --c: var(--text-3); border-style: dashed; color: var(--text-2); }
+/* The live camera's badge, the detector's chips and "Recording saved" under it. */
+.live-badge {
+  position: absolute; top: 0.75rem; left: 0.75rem;
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.2rem 0.65rem; border-radius: 999px; background: rgba(0, 0, 0, 0.55); color: #fff;
+  font-size: 0.75rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+}
+.live-badge[hidden] { display: none; }
+.live-badge .dot, .recording .dot {
+  width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--red); box-shadow: 0 0 8px var(--red);
+  animation: breathe 1.6s ease-in-out infinite;
+}
+.chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.35rem; }
+.chips[hidden] { display: none; }
+.chip {
+  padding: 0.12rem 0.6rem; border-radius: 999px; font-size: 0.8rem; font-weight: 600; color: var(--text-2);
+  background: rgba(255, 255, 255, 0.06); border: 1px solid var(--stroke);
+}
+.recording { display: flex; align-items: center; gap: 0.45rem; margin-top: 0.45rem;
+             font-size: 0.9rem; font-weight: 700; color: #ffb3ad; }
+.recording[hidden] { display: none; }
 @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
 
 /* ---- heard & said ------------------------------------------------------ */
@@ -330,6 +349,12 @@ body[data-alert="warning"] .alert-row, body[data-alert="alarm"] .alert-row { col
 .talk-list .ico { grid-row: 1 / span 2; width: 1.1rem; height: 1.1rem; margin-top: 0.15rem; color: var(--text-3); }
 .talk-list .who { font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); }
 .talk-list .who time { font-variant-numeric: tabular-nums; margin-left: 0.4rem; }
+.talk-list .voice {            /* NV's owner-voice check, display only */
+  margin-left: 0.5rem; padding: 0 0.45rem; border-radius: 999px;
+  text-transform: none; letter-spacing: 0; font-weight: 600;
+}
+.talk-list .voice.owner { color: var(--green); border: 1px solid rgba(52, 199, 89, 0.4); }
+.talk-list .voice.other { color: var(--amber); border: 1px solid rgba(255, 159, 10, 0.4); }
 .talk-list .line { font-size: 1.1rem; }
 .talk-list li.said .ico { color: var(--status); }
 
@@ -353,6 +378,11 @@ body.toast-on .timeline-card .card-head { display: none; }
   gap: 0.75rem;
   align-items: start;
   padding: 0.45rem 0;
+}
+.timeline li.has-thumb { grid-template-columns: 2rem 1fr auto auto; }
+.timeline .thumb {             /* photos and alarm recordings, small */
+  grid-column: 3; width: 3.4rem; height: 2.4rem; object-fit: cover; border-radius: 0.45rem;
+  border: 1px solid var(--stroke); margin-top: 0.15rem;
 }
 .timeline li::before {             /* the thin line joining the nodes */
   content: "";
@@ -468,10 +498,6 @@ a.pill-btn:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.7); outline-
 .pill-btn.primary { background: var(--text); color: #0b0e14; border-color: transparent; }
 .pill-btn.ghost { background: transparent; }
 .pill-btn[hidden] { display: none; }
-.listen { padding: 0.5rem 1rem; font-size: 0.9rem; color: var(--text-2); }
-.listen .ico { width: 1rem; height: 1rem; }
-.listen.on { color: var(--green); border-color: rgba(52, 199, 89, 0.45); background: rgba(52, 199, 89, 0.10); cursor: default; }
-.listen:disabled { opacity: 1; }
 .link-row { display: inline-flex; align-items: center; gap: 0.5rem; }
 .mic-open {                    /* subtle: a small green mic while a listening window is open */
   display: inline-grid; place-items: center; width: 1.6rem; height: 1.6rem; border-radius: 50%;
@@ -490,23 +516,6 @@ a.pill-btn:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.7); outline-
 .icon-btn .ico { width: 1.2rem; height: 1.2rem; }
 button:focus-visible, input:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.7); outline-offset: 2px; }
 
-/* ---- backup popover --------------------------------------------------------- */
-
-.popover {
-  position: fixed;
-  right: 1.5rem;
-  bottom: 6.5rem;
-  width: min(32rem, calc(100vw - 3rem));
-  padding: 1rem 1.1rem 1.1rem;
-  background: var(--glass-strong);
-  z-index: 8;
-  animation: rise 220ms var(--ease);
-}
-.popover[hidden] { display: none; }
-.popover-title { font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); margin-bottom: 0.75rem; font-weight: 600; }
-.popover-row { display: flex; gap: 0.5rem; margin-bottom: 0.9rem; }
-.say label { display: block; font-size: 0.8rem; color: var(--text-3); margin-bottom: 0.4rem; }
-.say-row { display: flex; gap: 0.5rem; }
 input[type="text"], input[type="password"] {
   flex: 1;
   font: inherit;

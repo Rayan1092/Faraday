@@ -138,12 +138,15 @@ class Rehearsal(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="faraday-rehearsal-"))
         s = json.loads((CONFIG_DIR / "settings.example.json").read_text(encoding="utf-8"))
         self.passphrase = s["security"]["passphrase"]
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.lm = FakeLMStudio(content=DESCRIPTION)
+        self.addCleanup(self.lm.close)
         for prof in s["llm"]["profiles"].values():
             prof["base_url"] = self.lm.url
         s["flipper"].update(burst_gap_s=0.3, led_refresh_s=0, led_settle_s=0.3)
         s["alerts"] = dict(s.get("alerts", {}), motion_grace_s=1.0, min_gap_s=0.4, visitor_quiet_s=2.0)
-        s["audio"]["listen"] = {"max_s": 15, "silence_s": 1.0, "no_speech_s": 3.0, "after_speech_s": 0.2}
+        # no_speech_s 6.0 = 1.5 s of wall time at the mic's 4x speed: room for a busy machine
+        s["audio"]["listen"] = {"max_s": 15, "silence_s": 1.0, "no_speech_s": 6.0, "after_speech_s": 0.2}
         s["audio"]["wake"] = {"enabled": True, "phrase": "hey faraday", "silence_s": 0.6, "max_s": 10}
         s["audio"]["voice_check"] = {"enrollment": str(self.tmp / "no-enrollment.wav")}
         s["camera"].update(alarm_record_s=1.0, idle_s=30, stream_fps=20)
@@ -174,28 +177,24 @@ class Rehearsal(unittest.TestCase):
         (self.tmp / "logs").mkdir(parents=True)
         self.errors = Errors()
         logging.getLogger().addHandler(self.errors)
+        self.addCleanup(logging.getLogger().removeHandler, self.errors)
         self.thread_errors = []
-        self._old_hook = threading.excepthook
+        old_hook = threading.excepthook
         threading.excepthook = lambda a: self.thread_errors.append(f"{a.thread.name}: {a.exc_value!r}")
+        self.addCleanup(setattr, threading, "excepthook", old_hook)
         self.out = []
         self.app = build_app(args, s, parts={
             "flipper": self.fl, "capture_factory": lambda *a: SampleCapture([scene]),
             "speaker": lambda gate: RecordingTTS(gate, self.said),
             "stream_factory": self.mic, "stt": self.stt, "chime": lambda: self.chimes.append(1)})
-        self.app.out = self.out.append
+        self.app.out = self.out.append       # Dell's pipeline prints through it too
+        self.addCleanup(self.app.stop)
 
     def tearDown(self):
         import os
         dump = os.environ.get("FARADAY_REHEARSAL_DUMP")      # debugging: the whole console
         if dump:
             Path(dump).write_text("\n".join(self.out + ["--- said ---"] + self.said), encoding="utf-8")
-        try:
-            self.app.stop()
-        finally:
-            threading.excepthook = self._old_hook
-            logging.getLogger().removeHandler(self.errors)
-            self.lm.close()
-            shutil.rmtree(self.tmp, ignore_errors=True)
 
     # ---- helpers ----------------------------------------------------------------------
     def log(self):
@@ -208,8 +207,11 @@ class Rehearsal(unittest.TestCase):
         self.mic.say(tone(freq, seconds, self.tmp / f"line{freq}-{time.monotonic_ns()}.wav"))
 
     def quiet(self):
-        """Faraday has finished talking and nothing is queued."""
-        return wait_until(lambda: not self.app.speech_busy() and self.app.voice.recorder.gate.quiet_for(0.3))
+        """Faraday has finished talking, nothing is queued, no photo is in progress."""
+        self.assertTrue(wait_until(lambda: not self.app.speech_busy()
+                                   and self.app._photos.unfinished_tasks == 0
+                                   and self.app.voice.recorder.gate.quiet_for(0.3), 20),
+                        f"Faraday never went quiet\nconsole: {self.out[-15:]}")
 
     def step(self, name, cond, timeout=15.0):
         self.assertTrue(wait_until(cond, timeout), f"rehearsal step failed: {name}\n"
@@ -238,12 +240,12 @@ class Rehearsal(unittest.TestCase):
         fl.device.press_doorbell()
         self.step("doorbell greeting spoken", lambda: DOORBELL_GREETING in self.said)
         self.step("visitor window opens", lambda: any("listening (doorbell)" in s for s in self.out))
+        self.speak(420)                                                    # "Hi, I have a package for Sam."
         self.step("doorbell photo described", lambda: any(
             e["data"].get("described_by") for e in self.events("photo_described")))
         photo = self.events("photo_described")[-1]
         self.assertEqual(photo["data"]["description"], DESCRIPTION)
         self.assertIn("detections", photo["data"])                       # the detector ran
-        self.speak(420)                                                    # "Hi, I have a package for Sam."
         self.step("visitor reply heard", lambda: any(
             e["data"].get("channel") == "visitor" for e in self.events("speech_heard")))
         visitor = [e for e in self.events("speech_heard") if e["data"].get("channel") == "visitor"][-1]
@@ -255,10 +257,15 @@ class Rehearsal(unittest.TestCase):
         # 3. Walk-up then ring: motion, then the doorbell within the grace period -> no warning
         time.sleep(2.2)                                                    # past visitor_quiet_s
         n_alerts = len(self.events("alert_changed"))
+        n_motion, n_bells, n_tx = len(self.events("motion")), len(self.events("doorbell")), len(fl.device.tx)
         fl.device.wave(packets=4, gap_s=0.05)
-        time.sleep(0.6)
+        self.step("walk-up motion arrives", lambda: len(self.events("motion")) > n_motion)
+        # the porch light goes on (rx pauses for the send); ring once the radio listens again
+        self.step("porch light sent, radio back", lambda: "outlet1_on" in fl.device.tx[n_tx:]
+                  and fl.device.rx and fl._cmds.empty())
         n_windows = sum("listening (doorbell)" in s for s in self.out)
         fl.device.press_doorbell()
+        self.step("the ring arrives", lambda: len(self.events("doorbell")) > n_bells)
         # a repeat ring gets no greeting: the visitor's window still opens within ~2 s
         self.step("window after a ring with no greeting", lambda: sum(
             "listening (doorbell)" in s for s in self.out) > n_windows, 5)
@@ -283,11 +290,16 @@ class Rehearsal(unittest.TestCase):
         self.assertGreaterEqual(rec["data"]["frames"], 2)
         self.quiet()
 
-        # 5. The owner disarms with the passphrase (a wake request, in one breath)
+        # 5. Someone rings during the alarm; the owner arrives and disarms with the passphrase
+        #    while that visitor window is open (the wake phrase inside a visitor window)
+        n_windows = sum("listening (doorbell)" in s for s in self.out)
+        fl.device.press_doorbell()
+        self.step("visitor window open", lambda: sum("listening (doorbell)" in s for s in self.out) > n_windows)
         self.speak(540, 1.6)
         self.step("passphrase disarms", lambda: modes.mode == Mode.HOME and modes.alert == "normal")
         disarm = [e for e in self.events("speech_heard") if "[passphrase]" in e["data"]["text"]][-1]
         self.assertEqual(disarm["data"]["channel"], "owner", "the owner's wake request, even in a visitor window")
+        self.assertTrue(any("(in a visitor window)" in s for s in self.out), "heard in the visitor window")
         self.step("lights off after disarm", lambda: not fl.device.outlet_lit[1] and not fl.device.outlet_lit[2])
         self.step("LED off", lambda: fl.device.rgb == [0, 0, 0])
         self.assertFalse(any(self.passphrase in json.dumps(e) for e in self.log()),
@@ -302,15 +314,16 @@ class Rehearsal(unittest.TestCase):
         ask = [e for e in self.events("speech_heard") if "what happened" in e["data"]["text"].lower()][-1]
         def summary_spoken():
             entries = self.log()
-            causes = {ask["id"]} | {e["id"] for e in entries if e.get("caused_by") == ask["id"]}
-            return any(e["kind"] == "action" and e["type"] == "speak" and e.get("caused_by") in causes
+            summaries = {e["id"] for e in entries if e["kind"] == "action" and e["type"] == "summarize_log"
+                         and e.get("caused_by") == ask["id"]}
+            return any(e["kind"] == "action" and e["type"] == "speak" and e.get("caused_by") in summaries
                        for e in entries)
         self.step("summary spoken", summary_spoken)
         self.assertGreater(len(self.said), n_said)
         self.quiet()
 
         # 7. "Hey Faraday, who's at the door?" -> fresh photo, description spoken
-        n_photos = len(self.events("photo_described"))
+        n_photos, n_said = len(self.events("photo_described")), len(self.said)
         self.speak(780, 1.4)
         self.step("look photo taken", lambda: len(self.events("photo_described")) > n_photos)
         self.step("description spoken", lambda: any("box" in line.lower() for line in self.said[n_said:]))
@@ -322,7 +335,9 @@ class Rehearsal(unittest.TestCase):
         with urllib.request.urlopen(app.board.url + "api/state", timeout=5) as r:
             state = json.loads(r.read())
         self.assertIn("listening", state)
-        self.assertFalse(any("pipeline failed" in s for s in self.out), self.out)
+        import re
+        failures = [s for s in self.out if re.search(r"\bfailed\b|crashed|traceback", s, re.I)]
+        self.assertEqual(failures, [], "a part reported a failure")
         self.assertEqual(self.thread_errors, [], "a thread crashed")
         self.assertEqual(self.errors.records, [], "a part logged an error")
 
