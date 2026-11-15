@@ -85,7 +85,8 @@ class App:
         self.flipper.on_event = self.submit
         self.pipeline = pipeline or Pipeline.from_settings(
             settings, use_llm=use_llm, log=event_log, mode=mode, rules=rules,
-            on_event=self._on_pipeline_event, on_action=self._on_action, say=out)
+            on_event=self._on_pipeline_event, on_action=self._on_action,
+            say=lambda line: self.out(line))       # late-bound: whoever reads app.out sees it all
         self.pipeline.on_event = self._on_pipeline_event
         self.pipeline.on_action = self._on_action
         # What each outlet was last told, from the log (or from the archived log with
@@ -274,6 +275,21 @@ class App:
                     self._spoken_photos += 1       # its answer will be spoken
             self._photos.put(action)
 
+    def _request_behind(self, action: Action) -> Optional[str]:
+        """The event a spoken line answers. Usually its caused_by; but a line made by
+        another action (the summary is spoken by summarize_log, caused by the owner's
+        question) answers that action's cause: one more hop, so a "?" at the end of
+        the owner's summary opens an *owner* window, not a visitor's."""
+        cause = action.caused_by
+        if not cause:
+            return cause
+        for entry in reversed(self.pipeline.log.recent(200)):
+            if entry.get("id") == cause:
+                if entry.get("kind") == "action" and entry.get("caused_by"):
+                    return entry["caused_by"]
+                break
+        return cause
+
     def _check_send(self, fut, action: Action) -> None:
         try:
             ok, out = fut.result()
@@ -329,7 +345,7 @@ class App:
                 if self.voice is not None:
                     # a question opens a listening window; caused_by tells whose question
                     try:
-                        self.voice.on_said(text, caused_by=action.caused_by)
+                        self.voice.on_said(text, caused_by=self._request_behind(action))
                     except Exception:
                         log.exception("voice.on_said failed")
             finally:

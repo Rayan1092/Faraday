@@ -11,7 +11,8 @@ segments, so nothing is lost between them:
   else the segment recording now, which becomes the owner's request window
   (with a soft chime if the owner hasn't started talking yet). Anything else,
   including plain "Faraday", is dropped and its audio deleted.
-- Visitor windows: after a doorbell (once Faraday has greeted, or after 10 s),
+- Visitor windows: after a doorbell (once Faraday has greeted, or ~2 s after the
+  ring when Faraday has nothing to say),
   after every line Faraday says that ends with "?", and after the owner used
   the intercom. A window opens only when Faraday has nothing left to say
   (speech queue empty, nothing being generated) and the speaker has been quiet
@@ -509,11 +510,14 @@ class Voice:
             rest = strip_wake(text, self.wake_phrase)
             if rest == "":                     # just "Hey Faraday" in a visitor window
                 self.out("  [wake] yes? (heard in a visitor window)")
-                self.listen_once("wake", purpose=OWNER)
+                if self.listen_once("wake", purpose=OWNER):
+                    self._chime_on_open = True  # chime once the owner window opens
                 return
             if rest is not None:               # "Hey Faraday, ..." while a visitor window was open
                 self.out("  [wake] owner request heard (in a visitor window)")
                 text, channel = rest, OWNER
+                voices_thread = None           # the voice count is for visitors
+                check = self._start_voice_check(wav)    # the owner voice check, as for any owner request
         if not text:
             self.out("  [stt] no words recognized" + ("" if self.stt.available
                                                       else " (no STT on this OS)"))

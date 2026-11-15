@@ -46,18 +46,18 @@ Tests: `python -m unittest integration.tests.test_start_mac` (uses Git Bash on W
 
 ## Hands-free voice
 
-There is no push-to-talk. The mic opens only in **listening windows**:
-- after a doorbell (once Faraday has greeted, or after 4 s),
-- after every line Faraday says that ends with "?",
-- from the dashboard Listen button (`board.listen_hook`) or console `r`,
-- for the **wake listener**: while idle, short windows run back to back, and a transcript counts only if it starts with "hey faraday". Plain "Faraday" does nothing, and that audio is deleted. Off on Windows (no STT).
+There is no push-to-talk and no Listen button. One mic stream stays open, and speech is used only in **listening windows**:
+- after a doorbell (once Faraday has greeted, or about 2 s after the ring when Faraday has nothing to say),
+- after every line Faraday says that ends with "?" (an *owner* window when that line answers an owner request),
+- after the owner lets go of the intercom button, or console `r`,
+- for the **wake listener** (continuous, no gaps): a transcript counts only if it starts with "hey faraday". "Hey Faraday" alone plays a soft chime and the next words are the request. Plain "Faraday" does nothing, and that audio is deleted. Off on Windows (no STT).
 
-A window records up to 6 s and ends about 0.8 s after the speaker stops (energy VAD), or after 3 s if nobody spoke. The mic is always muted while Faraday speaks. Settings: `audio.listen`, `audio.wake`. Tests: `python -m unittest hardware.tests.test_listen integration.tests.test_voice`.
+A window opens only once Faraday has nothing left to say plus 0.3 s, records up to 15 s, and ends 1.8 s after the speaker stops, or after 8 s if nobody spoke. The mic is always muted while Faraday speaks. Every `speech_heard` has `channel` "owner" or "visitor". Settings: `audio.listen`, `audio.wake`. Tests: `python -m unittest hardware.tests.test_listen integration.tests.test_voice`.
 
 ## Dashboard hooks
 
 Set on the `Dashboard` object by `integration/__main__.py` (PLAN Q26):
-- `board.listen_hook()` opens one listening window (`talk_hook` does the same, for the existing Talk button).
+- `board.listening_hook()` is True while a visitor/owner window is recording (the mic indicator). The Listen button and its `listen_hook` are gone (owner 2026-11-14).
 - `board.control_hook(outlet, on)` switches an outlet through the normal dispatcher, with the same never-resend rule, and logs it as a `dashboard` action.
 
 ## Controls server (camera, intercom, lights)
@@ -66,13 +66,12 @@ Started with the app on **dashboard port + 1** (`http://127.0.0.1:8081`, `--cont
 
 | Route | Does |
 |---|---|
-| `GET /` | reference Controls page: live camera, hold-to-talk intercom, lights, Listen |
+| `GET /` | reference Controls page: live camera, hold-to-talk intercom, lights |
 | `GET /stream.mjpg`, `GET /frame.jpg` | live camera (MJPEG) / one frame. The webcam has one owner (`CameraFeed`), shared with photos |
 | `POST /api/intercom` | raw int16 mono PCM chunk, header `X-Sample-Rate`. Plays live on the door speaker; the door mic is muted meanwhile |
 | `POST /api/intercom/end` | owner released the button |
 | `POST /api/control {"outlet", "on"}` | outlet through the dispatcher (never resends) |
-| `POST /api/listen` | open one listening window |
-| `GET /api/status` | camera / intercom / listen available, outlet states |
+| `GET /api/status` | camera / intercom available, outlet states, part health |
 
 POSTs need `X-Faraday: 1`. CORS only for pages on the dashboard's port or this one.
 

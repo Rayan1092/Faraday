@@ -555,6 +555,29 @@ class Hooks(unittest.TestCase):
         self.assertTrue(wait_until(lambda: "outlet1_on" in self.fl.device.tx))
         self.assertFalse(self.app.control("porch_light", True))       # already on
 
+    def test_question_spoken_by_another_action_is_traced_to_the_owner(self):
+        """Cross-review of Dell's #46: the summary is spoken by a speak action caused by
+        summarize_log, which is caused by the owner's question. One more hop, so a
+        summary ending in "?" opens an owner window, not a visitor's."""
+        from shared import Action, make_event
+        got = []
+
+        class Voice:
+            def on_said(self, text, caused_by=None):
+                got.append(caused_by)
+
+            def stop(self):
+                pass
+        self.app.voice = Voice()
+        ask = make_event("speech_heard", {"text": "what happened while I was out?", "channel": "owner"}, "speech")
+        summary = Action("summarize_log", "brain", {"minutes": 1440}, caused_by=ask.id)
+        self.app.pipeline.log.write(ask)
+        self.app.pipeline.log.write(summary)
+        self.app._on_action(Action("speak", "brain", {"text": "Want to hear the message?"}, caused_by=summary.id))
+        self.app._on_action(Action("speak", "brain", {"text": "Away mode on."}, caused_by=ask.id))
+        self.assertTrue(wait_until(lambda: len(got) == 2))
+        self.assertEqual(got, [ask.id, ask.id])
+
     def test_on_said_failing_does_not_stop_the_speech_worker(self):
         class Broken:
             def on_said(self, text, caused_by=None):
