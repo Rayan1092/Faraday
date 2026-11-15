@@ -120,7 +120,7 @@ class Step3(unittest.TestCase):
         actions = p.handle(events.speech("What happened while I was out?")).actions
         self.assertEqual(actions[0].type, ActionType.SUMMARIZE_LOG)
         text = actions[-1].args["text"]
-        self.assertTrue(text.startswith("While you were out: the doorbell rang once"), text)
+        self.assertIn("the doorbell rang once", text)
 
     def test_summary_from_bonsai_skips_the_tool_call(self):
         client = SlowClient("A visitor rang once and someone moved at the door.", delay=0)

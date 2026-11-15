@@ -31,7 +31,7 @@ from shared import Action, ActionType, EventType, Mode, Source, make_action, mak
 
 from sim import events
 
-from . import owner, threat
+from . import owner, summary, threat
 from .core import Brain, Decision
 from rules import instructions as owner_instructions
 from .threat import ThreatAssessor
@@ -108,11 +108,13 @@ def _decide(event: Any, mode: str, recent: Optional[List[dict]] = None):
     return run
 
 
-FACTS = ["The house was armed at 15:09.", "The doorbell rang once.",
-         "Motion at the door twice. The alarm went off.",
-         f"The camera saw: {events.FAKE_DESCRIPTION}",
-         "Visitor message: Package for Sam, I left it by the side door.",
-         "Lights turned on: porch light, living room lamp."]
+# What happened, as collect() gives it from a log: times and counts are the log's.
+HAPPENED = summary.Happened(doorbells=1, doorbell_times=["15:20"], motions=2, alarm=True, alarm_at="15:31",
+                            warning=True, warning_at="15:30",
+                            messages=["Package for Sam, I left it by the side door."],
+                            lights=["porch light", "living room lamp"], armed_at="15:09",
+                            threats={"delivery": 1, "suspicious": 1})
+FACTS = summary.facts(HAPPENED)
 
 
 def _free_text(fn: Callable[[Brain], Optional[str]]):
@@ -130,11 +132,16 @@ def _line_mentions(*words: str) -> Callable[[Optional[str]], bool]:
 
 
 def _summary_ok(text: Optional[str]) -> bool:
-    if not text:
+    """Bonsai alone: every time and count matches the log, and the message is in it."""
+    if not text or not summary.verified(text, HAPPENED):
         return False
-    numbers = set(re.findall(r"\b(three|four|five|six|\d+)\b", text.lower())) - {"15", "09", "1509"}
-    mentions_message = any(w in text.lower() for w in ("message", "sam", "package"))
-    return mentions_message and not numbers  # the visitor's message is in it, no invented counts
+    return any(w in text.lower() for w in ("message", "sam", "package"))
+
+
+def _summary_final_ok(text: Optional[str]) -> bool:
+    """What Faraday says: Bonsai's wording if it matches the log, else code's summary."""
+    said, _ = summary.final_text(text, HAPPENED)
+    return summary.verified(said, HAPPENED) and any(w in said.lower() for w in ("message", "sam"))
 
 
 def cases() -> List[Case]:
@@ -225,12 +232,16 @@ def cases() -> List[Case]:
                    "One person is at the door.", Mode.AWAY, "doorbell", 1, "unknown", people=1, faces=1,
                    detections=[_P], vision_ok=False),
         Case("summary", "Owner: summary of the log (free text)", Mode.HOME,
-             _free_text(lambda b: b.summarize(FACTS)), _summary_ok, _summary_ok),
+             _free_text(lambda b: b.summarize(FACTS)), _summary_ok, _summary_final_ok),
         Case("i_speech_delivery", 'Instruction, away visitor: "Hi, I have a package for Sam." '
              '(owner: "ask them to leave it by the side door")', Mode.AWAY,
              _speech_with_instruction("If a delivery comes, ask them to leave it by the side door.",
                                       "Hi, I have a package for Sam."),
              _says("side door"), _says("side door")),
+        Case("i_delivery_no_instruction", 'Delivery, away visitor, no owner instruction: '
+             '"Hi, I have a package, where should I leave it?"', Mode.AWAY,
+             _speech_with_instruction("", "Hi, I have a package, where should I leave it?"),
+             _says("leave"), _says("leave it by the door", "let the owner know")),
         Case("confrontation", "Alarm: one line that mentions what the camera sees (free text)",
              Mode.AWAY, _free_text(lambda b: b.confront(events.FAKE_DESCRIPTION)),
              _line_mentions("jacket", "box", "cardboard", "dark"),
@@ -245,7 +256,8 @@ class _MemoryInstructions:
     """Just enough of rules.InstructionStore for a bench case, without a file."""
 
     def __init__(self, text: str):
-        self.items = [dict(owner_instructions.parse_instruction(text), id="ins_bench")]
+        """text "" = the owner stored no instruction."""
+        self.items = [dict(owner_instructions.parse_instruction(text), id="ins_bench")] if text else []
 
     def relevant(self, label: str = "") -> List[Dict[str, Any]]:
         want = {"delivery": ("delivery", "anyone")}.get(label, ("visitor", "anyone"))
@@ -414,7 +426,8 @@ def run_bench(brain: Brain, runs: int, only: Optional[List[str]] = None,
                 dropped = [why for _, why in decision.dropped] + decision.fixups
                 role = decision.role
             else:
-                model_ok = final_ok = case.model_check(text)  # type: ignore[arg-type]
+                model_ok = case.model_check(text)  # type: ignore[arg-type]
+                final_ok = case.final_check(text)  # type: ignore[arg-type]
                 unsafe, fallback, sample, dropped = False, text is None, text, []
                 role = brain.force_role or "smart"   # confrontation and summary use the smart model
             rows.append({"model_ok": model_ok, "final_ok": final_ok, "unsafe": unsafe,

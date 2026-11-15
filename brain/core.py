@@ -222,9 +222,12 @@ class Brain:
         actions = self._confirm_mode(actions, event, mode, allowed)
         if len(actions) != before:
             fixups.append("added a spoken confirmation")
+        self._delivery_reworded = False
         actions, passed = self._pass_on_delivery(actions, event, mode, allowed, ins, recent)
         if passed:
-            fixups.append("corrected: passed on the owner's delivery instruction")
+            fixups.append("corrected: code's delivery reply")
+        elif self._delivery_reworded:
+            fixups.append("reworded: code's delivery reply")      # not counted against the model
         return Decision(actions, "bonsai", elapsed, dropped, fixups=fixups, role=role)
 
     def instructions_for(self, event: Event, mode: str, cause: str, label: str,
@@ -246,30 +249,47 @@ class Brain:
 
     def _pass_on_delivery(self, actions: List[Action], event: Event, mode: str, allowed: List[str],
                           ins: Iterable[Dict[str, Any]], recent: Iterable[Any]) -> Tuple[List[Action], bool]:
-        """Code's guarantee (Mac test: a visitor with a package only got "I saved your
-        message"): visitor speech that mentions a delivery, or follows a delivery label,
-        gets the owner's delivery instruction in the reply."""
+        """Code's guarantee for a visitor talking about a delivery (Mac tests: a visitor
+        with a package only got "I saved your message"; with no instruction, "where
+        should I leave it?" got "I can take a picture of the package and save it for
+        you"). The reply is code's, Bonsai's own lines are dropped:
+        - with the owner's delivery instruction: "Please leave it by the side door.
+          I'll let the owner know it arrived."
+        - without: "You can leave it by the door. I'll let the owner know it arrived."
+        The visitor's words are saved for the owner. Said once per visit; after that a
+        delivery mention just gets "Thank you. I'll pass that along." and is saved."""
         if event.type != EventType.SPEECH_HEARD or ActionType.SPEAK not in allowed:
             return actions, False
-        delivery_ins = next((i for i in ins if i["audience"] == oi.DELIVERY), None)
-        if delivery_ins is None:
-            return actions, False
+        channel = event.data.get("channel")
+        if channel == SpeechChannel.OWNER or (channel is None and mode == Mode.HOME):
+            return actions, False            # the owner, not a courier
         text = str(event.data.get("text", ""))
         recent = list(recent)
         if not (fb.mentions_delivery(text)
                 or latest_label(recent, event.timestamp, VISIT_S) == ThreatCategory.DELIVERY):
             return actions, False
-        if any(a.type == ActionType.SPEAK and oi.mentions(a.args["text"], delivery_ins) for a in actions):
-            return actions, False
-        spoken = oi.spoken_line(delivery_ins).lower()   # the line to visitors, not the owner's confirmation
-        if any(spoken in line.lower() for line in _said_since(recent, event.timestamp, VISIT_S)):
-            return actions, False     # already said in this visit: once is enough
-        # Drop a conflicting drop-off spot (never the message confirmation), then the owner's words.
-        actions = [a for a in actions if not (a.type == ActionType.SPEAK
-                                              and fb.mentions_dropoff(a.args["text"])
-                                              and "message" not in a.args["text"].lower())]
-        extra, _ = filter_actions([fb._speak(oi.spoken_line(delivery_ins))], event, mode, allowed)
-        return actions + extra, bool(extra)
+        delivery_ins = next((i for i in ins if i["audience"] == oi.DELIVERY), None)
+        line = (spoken.delivery_line(oi.spoken_line(delivery_ins)) if delivery_ins
+                else spoken.DELIVERY_DEFAULT)
+        said = [l.lower() for l in _said_since(recent, event.timestamp, VISIT_S)]
+        first = (oi.spoken_line(delivery_ins) if delivery_ins else spoken.DELIVERY_DEFAULT).lower()
+        if any(first in l for l in said):
+            line = spoken.MESSAGE_SAVED     # already told this visit: once is enough
+        kept = [a for a in actions if a.type != ActionType.SPEAK]
+        items: List[RawItem] = []
+        if (ActionType.SAVE_MESSAGE in allowed
+                and not any(a.type == ActionType.SAVE_MESSAGE for a in kept)):
+            items.append({"type": ActionType.SAVE_MESSAGE, "args": {"text": text[:500], "sender": "visitor"}})
+        items.append(fb._speak(line))
+        extra, _ = filter_actions(items, event, mode, allowed)
+        # For the benchmark: did Bonsai itself do the part that matters (save the message,
+        # and say the owner's words if there are some)? Then code only reworded the line,
+        # which isn't a correction of the model.
+        bonsai_ok = any(a.type == ActionType.SAVE_MESSAGE for a in actions) and (
+            delivery_ins is None or any(a.type == ActionType.SPEAK and oi.mentions(a.args["text"], delivery_ins)
+                                        for a in actions))
+        self._delivery_reworded = bonsai_ok
+        return kept + extra, not bonsai_ok
 
     # ---- free-text calls (no tools) ----------------------------------------
 
@@ -559,8 +579,13 @@ def _log_line(entry: Any) -> str:
     kind, info = entry["type"], entry.get("data") or entry.get("args") or {}
     if not isinstance(info, dict):
         info = {}
-    detail = (info.get("text") or info.get("description") or info.get("outlet")
-              or info.get("mode") or info.get("reason") or "")
+    if kind == EventType.PHOTO_DESCRIBED:
+        detail = "a photo"            # never the description: nothing spoken describes the person
+    elif kind == EventType.THREAT_ASSESSED:
+        detail = str(info.get("category", ""))
+    else:
+        detail = (info.get("text") or info.get("outlet") or info.get("mode")
+                  or info.get("reason") or "")
     detail = str(detail)
     if len(detail) > 60:
         detail = detail[:57] + "..."

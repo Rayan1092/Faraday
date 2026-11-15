@@ -2,11 +2,14 @@
 
 1. window(): the log entries since the house was last armed ("while I was
    out"), capped at `minutes`.
-2. collect(): counts and highlights in plain code (doorbells, motion, alarm,
-   messages, what the camera saw, lights, new rules).
-3. facts(): those as short lines for Bonsai, which turns them into a spoken
-   summary (Brain.summarize).
-4. spoken_list(): the plain-code fallback, a simple list that always works.
+2. collect(): counts, times and highlights in plain code (doorbells, motion,
+   warning, alarm, deliveries, messages, lights, new rules).
+3. facts(): those as short lines for Bonsai, which only phrases them
+   (Brain.summarize). Times and counts come from the log, never from the model
+   (owner, Mac test: it said "the alarm went off at 03:40", the log said 03:49).
+4. final_text(): Bonsai's wording is used only if every time, count and event in it
+   matches the log (verified()); otherwise spoken_list(), code's own summary.
+Never what the camera saw: spoken lines never describe the person (owner, Mac test).
 """
 from __future__ import annotations
 
@@ -14,7 +17,7 @@ import re
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from shared import ActionType, EventType, Mode
 
@@ -55,43 +58,57 @@ def window(entries: Iterable[Entry], minutes: int = 60,
 @dataclass
 class Happened:
     doorbells: int = 0
+    doorbell_times: List[str] = field(default_factory=list)   # "HH:MM", in order
     motions: int = 0
     alarm: bool = False
+    alarm_at: str = ""
     warning: bool = False
+    warning_at: str = ""
     messages: List[str] = field(default_factory=list)
     seen: List[str] = field(default_factory=list)
     lights: List[str] = field(default_factory=list)
     rules: List[str] = field(default_factory=list)
     armed_at: str = ""
     disarmed: bool = False
-    threats: Dict[str, int] = field(default_factory=dict)  # threat label -> count
+    threats: Dict[str, int] = field(default_factory=dict)  # threat label -> count (one per photo)
 
     @property
     def empty(self) -> bool:
-        return not (self.doorbells or self.motions or self.messages or self.seen or self.rules
-                    or self.threats)
+        return not (self.doorbells or self.motions or self.messages or self.rules or self.threats)
+
+    def times(self) -> List[str]:
+        return [t for t in [self.armed_at, self.warning_at, self.alarm_at] + self.doorbell_times if t]
+
+
+def _clock(entry: Entry) -> str:
+    return str(entry.get("timestamp", ""))[11:16]
 
 
 def collect(entries: Iterable[Entry]) -> Happened:
     h = Happened()
+    labels: Dict[str, str] = {}          # photo -> its latest label (a relabel replaces it)
     for e in entries:
         kind, info = e.get("type"), (e.get("data") or e.get("args") or {})
         if kind == EventType.DOORBELL:
             h.doorbells += 1
+            h.doorbell_times.append(_clock(e))
         elif kind == EventType.MOTION:
             h.motions += 1
         elif kind == EventType.ALERT_CHANGED:
-            h.alarm |= info.get("level") == "alarm"
-            h.warning |= info.get("level") in ("warning", "alarm")
+            level = info.get("level")
+            if level == "alarm":
+                h.alarm = True
+                h.alarm_at = h.alarm_at or _clock(e)
+            if level in ("warning", "alarm"):
+                h.warning = True
+                h.warning_at = h.warning_at or _clock(e)
         elif kind == EventType.MODE_CHANGED:
             if info.get("mode") in Mode.ARMED and not h.armed_at:
                 h.armed_at = str(e.get("timestamp", ""))[11:16]
             if info.get("changed_by") == "passphrase":
                 h.disarmed = True
         elif kind == EventType.THREAT_ASSESSED:
-            cat = str(info.get("category", ""))
-            if cat and cat not in ("nobody", "unknown"):
-                h.threats[cat] = h.threats.get(cat, 0) + 1
+            labels[str(e.get("caused_by") or e.get("id"))] = str(info.get("category", ""))
         elif kind == EventType.PHOTO_DESCRIBED:
             text = str(info.get("description", "")).strip()
             if text and text not in h.seen:
@@ -104,23 +121,27 @@ def collect(entries: Iterable[Entry]) -> Happened:
                 h.lights.append(name)
         elif kind == ActionType.ADD_RULE:
             h.rules.append(str(info.get("description", "")).strip() or "a new rule")
+    for cat in labels.values():
+        if cat and cat not in ("nobody", "unknown"):
+            h.threats[cat] = h.threats.get(cat, 0) + 1
     return h
 
 
 def facts(h: Happened) -> List[str]:
-    """Short lines for Bonsai. Kept small: Bonsai is small."""
+    """Short lines for Bonsai, with the exact times. Kept small: Bonsai is small."""
     if h.empty:
         return ["Nothing happened."]
     out = []
     if h.armed_at:
         out.append(f"The house was armed at {h.armed_at}.")
     if h.doorbells:
-        out.append(f"The doorbell rang {_times(h.doorbells)}.")
+        out.append(f"The doorbell rang {_times(h.doorbells)}, at {_and(_unique(h.doorbell_times)[-3:])}.")
     if h.motions:
-        level = " The alarm went off." if h.alarm else (" A warning was raised." if h.warning else "")
-        out.append(f"Motion at the door {_times(h.motions)}.{level}")
-    for text in h.seen[-2:]:
-        out.append(f"The camera saw: {_short(text, 100)}")
+        out.append(f"Motion at the door {_times(h.motions)}.")
+    if h.warning_at and h.warning_at != h.alarm_at:
+        out.append(f"A warning at {h.warning_at}.")
+    if h.alarm_at:
+        out.append(f"The alarm went off at {h.alarm_at}.")
     for text in h.messages[-3:]:
         out.append(f"Visitor message: {_short(text, 120)}")
     if h.threats:
@@ -134,15 +155,19 @@ def facts(h: Happened) -> List[str]:
 
 
 def spoken_list(h: Happened) -> str:
-    """The plain-code fallback: a simple list, max 240 characters."""
+    """Code's own summary, with the log's times and counts: max 240 characters."""
     if h.empty:
         return NOTHING_HAPPENED
     parts = []
     if h.doorbells:
-        parts.append(f"the doorbell rang {_times(h.doorbells)}")
-    if h.motions:
-        parts.append(f"there was motion {_times(h.motions)}"
-                     + (" and the alarm went off" if h.alarm else ""))
+        last = h.doorbell_times[-1] if h.doorbell_times else ""
+        parts.append(f"the doorbell rang {_times(h.doorbells)}" + (f", last at {last}" if last else ""))
+    if h.alarm_at:
+        parts.append(f"the alarm went off at {h.alarm_at}")
+    elif h.warning_at:
+        parts.append(f"a warning at {h.warning_at}")
+    elif h.motions:
+        parts.append(f"there was motion {_times(h.motions)}")
     if h.threats.get("suspicious"):
         n = h.threats["suspicious"]
         parts.append(f"{n} suspicious visit" + ("s" if n > 1 else ""))
@@ -153,10 +178,55 @@ def spoken_list(h: Happened) -> str:
         parts.append(f"{len(h.messages)} message" + ("s" if len(h.messages) > 1 else ""))
     if h.rules:
         parts.append(f"{len(h.rules)} new rule" + ("s" if len(h.rules) > 1 else ""))
-    text = "While you were out: " + ", ".join(parts) + "."
+    text = (f"Since you armed the house at {h.armed_at}: " if h.armed_at else "While you were out: ")
+    text += ", ".join(parts) + "."
     if h.messages:
         text += f" Latest message: {h.messages[-1]}"
     return _short(text, 240)
+
+
+_TIME = re.compile(r"\b(\d{1,2})[:.](\d{2})\b")
+_WORDS = {"once": 1, "twice": 2, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+          "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
+
+
+def _hm(hour: str, minute: str) -> Tuple[int, int]:
+    return int(hour) % 12, int(minute)
+
+
+def verified(text: str, h: Happened) -> bool:
+    """Does Bonsai's summary only say what the log says? Every time must be one of the
+    log's, every count one of its counts (or a number in a visitor's message), the
+    alarm and the warning mentioned exactly when they happened."""
+    lowered = (text or "").lower()
+    if not lowered.strip():
+        return False
+    allowed_times = {_hm(*t.split(":")) for t in h.times() if ":" in t}
+    for m in _TIME.finditer(lowered):
+        if _hm(m.group(1), m.group(2)) not in allowed_times:
+            return False
+    rest = _TIME.sub(" ", lowered)
+    counts = {h.doorbells, h.motions, len(h.messages), len(h.rules), len(h.lights), *h.threats.values()}
+    quoted = " ".join(h.messages + h.rules).lower()
+    for n in re.findall(r"\b\d+\b", rest):
+        if int(n) not in counts and n not in quoted:
+            return False
+    for word in re.findall(r"\b(" + "|".join(_WORDS) + r")\b", rest):
+        if _WORDS[word] not in counts and word not in quoted and word not in ("one",):
+            return False
+    if ("alarm" in lowered) != h.alarm:
+        return False
+    if "warning" in lowered and not h.warning:
+        return False
+    return True
+
+
+def final_text(bonsai: Optional[str], h: Happened) -> Tuple[str, str]:
+    """(what to say, "bonsai" or "code"). Bonsai only phrases: its text is used only
+    if verified(); else code's own summary, which always matches the log."""
+    if bonsai and verified(bonsai, h):
+        return ensure_messages(bonsai, h), "bonsai"
+    return spoken_list(h), "code"
 
 
 # Words too common to prove the message was mentioned ("door" is in most summaries).
@@ -186,6 +256,14 @@ def ensure_messages(text: str, h: Happened) -> str:
 
 def _times(n: int) -> str:
     return {1: "once", 2: "twice"}.get(n, f"{n} times")
+
+
+def _unique(items: List[str]) -> List[str]:
+    return list(dict.fromkeys(i for i in items if i))
+
+
+def _and(items: List[str]) -> str:
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
 
 
 def _short(text: str, limit: int) -> str:

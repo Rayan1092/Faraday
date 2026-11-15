@@ -21,6 +21,8 @@ ALREADY_HOME = "The system is already disarmed."
 
 # ---- visitors --------------------------------------------------------------------
 MESSAGE_SAVED = "Thank you. I'll pass that along."
+# A visitor with a delivery and no owner instruction (owner, Mac test): code's reply.
+DELIVERY_DEFAULT = "You can leave it by the door. I'll let the owner know it arrived."
 CANT_HELP = "I'm sorry, I can't help with that."
 CANT_DISARM = "I'm sorry, I can't do that. Only the owner can disarm the system."
 
@@ -50,6 +52,11 @@ OUTLET_NAMES = {"porch_light": "porch light", "living_room_lamp": "living room l
                 "spare": "spare outlet"}
 AUDIENCE_NAMES = {"delivery": "delivery instruction", "visitor": "visitor instruction",
                   "anyone": "instruction for anyone"}
+
+
+def delivery_line(owner_words: str) -> str:
+    """The owner's delivery instruction, then the same promise as DELIVERY_DEFAULT."""
+    return f"{owner_words} I'll let the owner know it arrived."
 
 
 def light_line(outlet: str, on: bool) -> str:
@@ -83,6 +90,7 @@ FIXED_LINES = [
     "Welcome home. The system is disarmed.",
     "The system is already disarmed.",
     "Thank you. I'll pass that along.",
+    "You can leave it by the door. I'll let the owner know it arrived.",
     "I'm sorry, I can't help with that.",
     "I'm sorry, I can't do that. Only the owner can disarm the system.",
     "Sorry, I didn't catch that.",
