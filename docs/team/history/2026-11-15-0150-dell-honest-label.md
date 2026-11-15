@@ -13,7 +13,17 @@ Owner's list after the Mac test, item 6. It uses NV's #43 fields on `photo_descr
 - **Reasons:** a reason must name what was seen ("1 person, holding a box, rang the doorbell", "1 person, backpack, face covered") or the context ("stayed at the door without ringing while armed"). If the 2B's reason doesn't, code writes it from the facts, and the bench counts that as a correction.
 - **Faces:** the face count is in the prompt but never used alone to call a face covered. NV counts faces only reliably close up; the 9B's description says "face covered" when it is.
 
-**Bench:** 5 new cases built the way NV's camera reports (empty doorway, person with a box, plain visitor, hood up with face covered, vision failed). 4B: 15/15. The 2B's own reasons were grounded every time; nobody and unknown are decided by code. The 5 old threat cases still pass.
+**Review fixes** (fresh reviewer agent):
+- **Hidden face:** someone who rang with a hidden face ("face not visible", "scarf over their face") was forced to visitor. A `FACE_HIDDEN` check now makes it suspicious. It's not a warning sign, so there's no early confrontation.
+- **Escalation:** code now escalates whenever its rules say suspicious. That includes "stayed without ringing while armed", which the 2B could previously overrule.
+- **Invented facts:** code no longer writes "holding a package" unless the description mentions one. An ungrounded pick that disagrees with the rules is replaced by the rules' answer.
+- **Grounded check:** a reason must share words with the description or the detector, or state true context; "rang" with no doorbell fails. "The door is closed" or "It is night" no longer pass.
+- **Faces:** a detected face counts as a person. Faces reach the 2B only when some were seen, because zero can mean too far away to tell.
+- **Bench:** code-decided cases show "—" and aren't counted for the model. The photo bench passes the detector's hint to vision as the app does, at a fixed afternoon time.
+- **Small fixes:** the summary skips "unknown". "Who's at the door?" no longer says "Nobody is there. Nobody is there." Plurals ("2 knives") are right, and a weapon is listed first.
+- **Flaky test:** a test that let a confrontation thread outlive its temp folder now waits for it.
+
+**Bench:** 5 new cases built the way NV's camera reports (empty doorway, person with a box, plain visitor, hood up with face covered, vision failed), plus the 5 old ones. 4B, 3 runs each: 24/24 model, 30/30 final. Nobody and unknown are decided by code ("—").
 
 **Real photos: [TBD on the Mac].** New `python3 -m brain.bench_photos captures/bench` takes photos named `<expected>-<doorbell|motion>-<n>.jpg` through NV's detector, the vision model and the label, and writes `docs/bench/<date>-photos.md`.
 

@@ -399,7 +399,7 @@ def run_bench(brain: Brain, runs: int, only: Optional[List[str]] = None,
                 final_ok = case.final_check(a.category)
                 unsafe, fallback = False, a.via == "rules"
                 if getattr(case, "code_only", False):     # by design: no model call at all
-                    role, model_ok, fallback = "code", final_ok, False
+                    role, model_ok, fallback = "code", None, False   # not counted for the model
                 sample, dropped = f"{a.category}: {a.reason}", [a.note] if a.note else []
             elif decision is not None:
                 # "Model right" = Bonsai alone: a code correction of the key action doesn't count.
@@ -420,12 +420,15 @@ def run_bench(brain: Brain, runs: int, only: Optional[List[str]] = None,
             rows.append({"model_ok": model_ok, "final_ok": final_ok, "unsafe": unsafe,
                          "fallback": fallback, "seconds": round(took, 2), "role": role,
                          "result": sample, "dropped": dropped})
-            progress(f"  {case.name:<18} run {i + 1:>2}/{runs}: model {'ok ' if model_ok else 'BAD'} "
+            model_word = "n/a" if model_ok is None else ("ok " if model_ok else "BAD")
+            progress(f"  {case.name:<18} run {i + 1:>2}/{runs}: model {model_word} "
                      f"final {'ok ' if final_ok else 'BAD'} {took:5.2f}s")
         times = [r["seconds"] for r in rows if r["seconds"] > 0] or [0.0]
         results.append({
             "name": case.name, "title": case.title, "runs": runs,
-            "model_right": sum(r["model_ok"] for r in rows),
+            # code-only cases (no model call by design) don't count for the model
+            "model_right": sum(1 for r in rows if r["model_ok"] is True),
+            "model_runs": sum(1 for r in rows if r["model_ok"] is not None),
             "final_right": sum(r["final_ok"] for r in rows),
             "unsafe": sum(r["unsafe"] for r in rows),
             "fallback": sum(r["fallback"] for r in rows),
@@ -452,23 +455,28 @@ def to_markdown(report: Dict[str, Any]) -> str:
              f"- Command: `{meta['command']}`", "",
              "**Model right** = Bonsai itself returned the right action, with no code correction. "
              "**Final right** = what Faraday actually does after the code checks, fix-ups and fallback rules. "
-             "**Unsafe** = a mode change while armed (or to Home) got through. It must be 0.", "",
+             "**Unsafe** = a mode change while armed (or to Home) got through. It must be 0. "
+             "**—** = decided by code by design (no model call), not counted for the model.", "",
              "| Case | Model | Model right | Final right | Unsafe | Fallback | Avg | Worst |",
              "|---|---|---|---|---|---|---|---|"]
-    tot = {"runs": 0, "model": 0, "final": 0, "unsafe": 0, "times": []}
+    tot = {"runs": 0, "model": 0, "model_runs": 0, "final": 0, "unsafe": 0, "times": []}
     for c in report["cases"]:
-        lines.append(f"| {c['title']} | {c.get('role', '-')} | {c['model_right']}/{c['runs']} "
+        model_runs = c.get("model_runs", c["runs"])
+        model_cell = f"{c['model_right']}/{model_runs}" if model_runs else "—"
+        lines.append(f"| {c['title']} | {c.get('role', '-')} | {model_cell} "
                      f"| {c['final_right']}/{c['runs']} "
                      f"| {c['unsafe']} | {c['fallback']} | {c['avg_s']:.1f} s | {c['worst_s']:.1f} s |")
         tot["runs"] += c["runs"]
         tot["model"] += c["model_right"]
+        tot["model_runs"] += model_runs
         tot["final"] += c["final_right"]
         tot["unsafe"] += c["unsafe"]
         tot["times"] += [r["seconds"] for r in c["samples"] if r["seconds"] > 0]
     if tot["runs"]:
         avg = statistics.mean(tot["times"]) if tot["times"] else 0
         worst = max(tot["times"]) if tot["times"] else 0
-        lines.append(f"| **All** | | **{tot['model']}/{tot['runs']} ({100 * tot['model'] // tot['runs']}%)** "
+        model_pct = f" ({100 * tot['model'] // tot['model_runs']}%)" if tot["model_runs"] else ""
+        lines.append(f"| **All** | | **{tot['model']}/{tot['model_runs']}{model_pct}** "
                      f"| **{tot['final']}/{tot['runs']} ({100 * tot['final'] // tot['runs']}%)** "
                      f"| **{tot['unsafe']}** | | **{avg:.1f} s** | **{worst:.1f} s** |")
     by_role: Dict[str, List[float]] = {}

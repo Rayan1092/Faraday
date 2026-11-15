@@ -56,6 +56,20 @@ NOBODY = re.compile(r"\b(no one|nobody|empty|no person|no people|no visible pers
                     r"nothing (is )?(there|visible))\b", re.I)
 PACKAGE = re.compile(r"\b(package|parcel|box|boxes|delivery|courier|carton|envelope|mail|"
                      r"uniform|delivering)\b", re.I)
+# A face the camera can't see. Not a warning sign by itself (so no early confrontation),
+# but it isn't "a plain face" either: someone who rang with it is not simply a visitor.
+FACE_HIDDEN = re.compile(
+    r"\b(face (is |was )?(not visible|hidden|obscured|concealed|turned away|out of view|covered by \w+)|"
+    r"hidden face|no face (is )?visible|(can'?t|cannot) see (the|his|her|their) face|"
+    r"(scarf|hood|hat|cap) (pulled )?(down )?(over|covering) (the|his|her|their) face)\b", re.I)
+_WEAPONS = {"knife", "scissors", "baseball bat"}
+_STOP = {"this", "that", "with", "from", "they", "them", "there", "their", "look", "looks", "like",
+         "likely", "appears", "seems", "door", "front", "porch", "camera", "photo", "image", "scene",
+         "night", "visible", "detected", "someone", "something", "probably", "maybe", "about", "near",
+         "into", "while", "just", "standing"}
+_NEG_RING = re.compile(r"\b(without (ringing|a ring|the bell|the doorbell|a doorbell)|didn'?t ring|did not ring|"
+                       r"no ring\w*|no doorbell|no bell|never rang|not ring\w*|didn'?t use the (door)?bell)\b", re.I)
+_POS_RING = re.compile(r"\b(rang|rings?|ringing|doorbell|bell)\b", re.I)
 REASON_MAX = 160
 SYSTEM_PROMPT = (
     "You judge one photo of a home's front door for a home guard. Call classify once. "
@@ -71,12 +85,6 @@ TOOL = {"type": "function", "function": {
     "parameters": {"type": "object", "properties": {
         "category": {"type": "string", "enum": sorted(C.ALL - {C.UNKNOWN})},
         "reason": {"type": "string"}}, "required": ["category", "reason"]}}}
-# Words that show a reason is about what was seen or the context, not a guess.
-GROUNDED = re.compile(r"\b(\d+|one|two|three|person|people|man|woman|face|hood\w*|mask\w*|box\w*|"
-                      r"package|parcel|envelope|bag|backpack|uniform|holding|carrying|waving|"
-                      r"standing|stood|stayed|walk\w*|ring\w*|rang|doorbell|bell|knock\w*|armed|"
-                      r"night|window|door|handle|lock|hiding|crouch\w*|nobody|no one|empty|"
-                      r"detected|visible|camera)\b", re.I)
 
 
 @dataclass
@@ -110,18 +118,64 @@ class Context:
         return hour >= 21 or hour < 6
 
 
+def people_seen(ctx: Context) -> Optional[int]:
+    """The detector's people count; a visible face counts as a person too (the face
+    detector saw someone the object detector missed). None: no detector ran."""
+    if ctx.people is None:
+        return None
+    return max(ctx.people, ctx.faces or 0)
+
+
+def _plural(label: str, n: int) -> str:
+    if n == 1:
+        return label
+    if label.endswith(("s", "x", "ch", "sh")):
+        return f"{n} {label}es"
+    if label.endswith("fe"):
+        return f"{n} {label[:-2]}ves"
+    if label.endswith("y") and label[-2:-1] not in "aeiou":
+        return f"{n} {label[:-1]}ies"
+    return f"{n} {label}s"
+
+
 def facts(ctx: Context) -> str:
-    """What the detector saw, short: "1 person, backpack" ("" without a detector)."""
+    """What the detector saw, short: "1 person, backpack" ("" without a detector).
+    Anything that could be a weapon comes first, so it's never cut off."""
     if ctx.people is None and not ctx.detections:
         return ""
-    people = ctx.people if ctx.people is not None else next(
-        (int(d.get("count", 0)) for d in ctx.detections or [] if d.get("label") == "person"), 0)
+    people = people_seen(ctx)
+    if people is None:
+        people = next((int(d.get("count", 0)) for d in ctx.detections or [] if d.get("label") == "person"), 0)
     parts = [f"{people} {'person' if people == 1 else 'people'}"] if people else []
-    for d in ctx.detections or []:
-        label, n = str(d.get("label", "")), int(d.get("count", 1) or 1)
-        if label and label != "person" and len(parts) < 3:
-            parts.append(label if n == 1 else f"{n} {label}s")
+    things = [d for d in ctx.detections or [] if str(d.get("label", "")) not in ("", "person")]
+    things.sort(key=lambda d: str(d.get("label")) not in _WEAPONS)        # weapons first, stable
+    for d in things[:3]:
+        parts.append(_plural(str(d["label"]), int(d.get("count", 1) or 1)))
     return ", ".join(parts)
+
+
+def grounded(reason: str, ctx: Context) -> bool:
+    """Does this reason name what was seen (words from the description or the detector)
+    or true context (rang / didn't ring)? A reason that claims a ring that didn't happen,
+    or the other way round, is not grounded."""
+    text = (reason or "").lower()
+    if not text:
+        return False
+    neg = _NEG_RING.search(text)
+    if neg:
+        return not ctx.doorbells and ctx.cause == EventType.MOTION
+    if _POS_RING.search(text):
+        return bool(ctx.doorbells)
+    if NOBODY.search(text):     # "No one visible": true only if the photo agrees
+        return people_seen(ctx) == 0 or bool(NOBODY.search(ctx.description or ""))
+    seen = set(re.findall(r"[a-z]+", (ctx.description or "").lower()))
+    for d in ctx.detections or []:
+        seen.update(re.findall(r"[a-z]+", str(d.get("label", "")).lower()))
+    if people_seen(ctx):
+        seen.update({"person", "people"})
+    stems = {w[:5] for w in seen if len(w) >= 4 and w not in _STOP}
+    words = {w[:5] for w in re.findall(r"[a-z]+", text) if len(w) >= 4 and w not in _STOP}
+    return bool(words & stems)
 
 
 _BOXY = re.compile(r"\b(package|parcel|box|boxes|carton|envelope)\b", re.I)
@@ -132,7 +186,7 @@ def reason_for(ctx: Context, category: str, sign: str = "") -> str:
     doorbell, the mode. Never a guess."""
     seen = facts(ctx)
     if category == C.NOBODY:
-        parts = ["No person detected" if ctx.people == 0 else "No one visible"]
+        parts = ["No person detected" if people_seen(ctx) == 0 else "No one visible"]
         objects = [p for p in seen.split(", ") if p and "person" not in p and "people" not in p]
         parts += [f"{', '.join(objects)} in view"] if objects else []
     elif category == C.UNKNOWN:
@@ -142,11 +196,17 @@ def reason_for(ctx: Context, category: str, sign: str = "") -> str:
         text = ctx.description or ""
         if category == C.SUSPICIOUS:
             parts.append(sign or ("stayed at the door without ringing while armed"
-                                  if ctx.cause == EventType.MOTION and not ctx.doorbells else "warning signs"))
+                                  if ctx.cause == EventType.MOTION and not ctx.doorbells
+                                  else "behaving suspiciously"))
         elif category == C.DELIVERY:
             box = _BOXY.search(text)
-            word = box.group(0).lower() if box else "package"
-            parts.append(f"holding a {'box' if word == 'boxes' else word}")
+            if box:
+                word = box.group(0).lower()
+                parts.append(f"holding a {'box' if word == 'boxes' else word}")
+            else:     # only the description's own words: never an invented package
+                word = (_first(PACKAGE, text) or "delivery").lower()
+                parts.append({"courier": "a courier", "uniform": "in a uniform", "mail": "carrying mail",
+                              "delivery": "a delivery", "delivering": "delivering"}.get(word, word))
         if category in (C.DELIVERY, C.VISITOR):
             parts.append("rang the doorbell" if ctx.doorbells else "at the door")
     line = ", ".join(p for p in parts if p)
@@ -156,12 +216,14 @@ def reason_for(ctx: Context, category: str, sign: str = "") -> str:
 def rules(ctx: Context) -> Tuple[str, str]:
     """The plain-code answer. Also the fallback when Bonsai can't be used."""
     text = ctx.description or ""
-    if ctx.people == 0:
+    if people_seen(ctx) == 0:
         return C.NOBODY, reason_for(ctx, C.NOBODY)        # zero people detected: always nobody
     if not ctx.vision_ok:
         return C.UNKNOWN, reason_for(ctx, C.UNKNOWN)      # vision failed: never a guess
     if STRONG.search(text):
         return C.SUSPICIOUS, reason_for(ctx, C.SUSPICIOUS, _first(STRONG, text))
+    if FACE_HIDDEN.search(text):
+        return C.SUSPICIOUS, reason_for(ctx, C.SUSPICIOUS, _first(FACE_HIDDEN, text))
     if ctx.people is None and (NOBODY.search(text) or not PERSON.search(text)):
         return C.NOBODY, reason_for(ctx, C.NOBODY)
     if ctx.cause == EventType.MOTION and ctx.mode in Mode.ARMED and not ctx.doorbells:
@@ -189,8 +251,8 @@ def prompt(ctx: Context) -> str:
         lines.append(f"Voices heard: {ctx.voices}")
     if ctx.people is not None:
         seen = facts(ctx) or "no people, no objects"
-        lines.append(f"Object detector: {seen}"
-                     + (f"; faces visible: {ctx.faces}" if ctx.faces is not None else ""))
+        # Faces only when some were seen: zero can just mean too far away to tell.
+        lines.append(f"Object detector: {seen}" + (f"; faces visible: {ctx.faces}" if ctx.faces else ""))
     lines.append(f"Camera sees: {ctx.description}")
     return "\n".join(lines)
 
@@ -230,24 +292,27 @@ def parse(reply: Any) -> Tuple[Optional[str], str]:
 def check(category: str, reason: str, ctx: Context) -> Tuple[str, str, str]:
     """Code's say on Bonsai's answer. Returns (category, reason, note)."""
     rule_cat, rule_reason = rules(ctx)
-    if ctx.people == 0 or not ctx.vision_ok:
+    if people_seen(ctx) == 0 or not ctx.vision_ok:
         return rule_cat, rule_reason, ("" if category == rule_cat else f"code: {rule_cat}, not a guess")
     if category == C.UNKNOWN:
         return rule_cat, rule_reason, "code: the photo was analysed, so not unknown"
-    if STRONG.search(ctx.description or "") and category != C.SUSPICIOUS:
+    if rule_cat == C.SUSPICIOUS and category != C.SUSPICIOUS:
+        # warning signs, a hidden face, or stayed without ringing while armed: code escalates
         return C.SUSPICIOUS, rule_reason, f"code escalated {category} to suspicious"
-    if category == C.NOBODY and ((ctx.people or 0) > 0 or (
+    if category == C.NOBODY and ((people_seen(ctx) or 0) > 0 or (
             PERSON.search(ctx.description or "") and not NOBODY.search(ctx.description or ""))):
         return rule_cat, rule_reason, "code rejected nobody: a person is detected or described"
     if category == C.SUSPICIOUS and ctx.doorbells and rule_cat in (C.VISITOR, C.DELIVERY):
-        # Owner 2026-11-15: walked up and rang, no warning signs = a visitor or a delivery.
+        # Owner 2026-11-15: walked up and rang, plain face, no warning signs = visitor/delivery.
         return rule_cat, rule_reason, "code: rang the doorbell with no warning signs"
     clean = _clean_line(reason) or ""
     note = ""
-    if not GROUNDED.search(clean):
-        # Bonsai's reason doesn't say what was seen: code's, from the facts.
-        clean = rule_reason if category == rule_cat else reason_for(ctx, category)
-        note = "code wrote the reason"
+    if not grounded(clean, ctx):
+        if category != rule_cat:
+            # A pick with nothing seen behind it: the rules decide, from the facts.
+            return rule_cat, rule_reason, f"code: {category} named nothing seen, so the rules decided"
+        note = f"code wrote the reason (2B said: {clean[:60]})" if clean else "code wrote the reason"
+        clean = rule_reason
     if len(clean) > REASON_MAX:
         clean = clean[:REASON_MAX - 3].rsplit(" ", 1)[0] + "..."
     return category, clean, note
@@ -267,7 +332,7 @@ class ThreatAssessor:
         return cls(BonsaiClient.from_config(cfg, log) if use_llm else None, cfg["model"], log)
 
     def assess(self, ctx: Context) -> Assessment:
-        if self.client is None or ctx.people == 0 or not ctx.vision_ok:
+        if self.client is None or people_seen(ctx) == 0 or not ctx.vision_ok:
             # No model, nobody detected, or nothing to judge (vision failed): plain code.
             cat, why = rules(ctx)
             return Assessment(cat, why, "rules")

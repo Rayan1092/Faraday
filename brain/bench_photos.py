@@ -44,10 +44,13 @@ def parse_name(path: Path) -> Optional[Tuple[str, str]]:
     return None
 
 
+WHEN = datetime(2026, 11, 15, 15, 0)   # a fixed afternoon, so the bench doesn't depend on the clock
+
+
 def run(photos: Sequence[Path], analyse: Callable[[Path], Optional[Dict[str, Any]]],
-        describe: Callable[[Path], Optional[str]], assessor: Any,
+        describe: Callable[..., Optional[str]], assessor: Any,
         from_detector: Callable[[Dict[str, Any]], str] = lambda info: "",
-        mode: str = Mode.AWAY) -> List[Dict[str, Any]]:
+        mode: str = Mode.AWAY, hint: Optional[Callable[[Dict[str, Any]], str]] = None) -> List[Dict[str, Any]]:
     """One row per photo. analyse: NV's detector summary or None; describe: the vision
     model's sentence or None (failed); from_detector: NV's description from detections."""
     rows = []
@@ -58,11 +61,13 @@ def run(photos: Sequence[Path], analyse: Callable[[Path], Optional[Dict[str, Any
         expected, cause = named
         started = time.perf_counter()
         info = analyse(path)
-        text = describe(path)
+        # as hardware/camera.py does: the detector's counts as a hint, only when it saw something
+        line = hint(info) if (hint is not None and info and info.get("detections")) else None
+        text = describe(path, line) if line else describe(path)
         vision_ok = bool(text)
         description = text or (from_detector(info) if info else "") or "Photo saved."
         ctx = threat.Context(description, mode, cause=cause, doorbells=1 if cause == EventType.DOORBELL else 0,
-                             motions=1, people=None if info is None else int(info.get("people") or 0),
+                             motions=1, when=WHEN, people=None if info is None else int(info.get("people") or 0),
                              faces=None if info is None or "faces" not in info else int(info["faces"]),
                              detections=None if info is None else list(info.get("detections") or []),
                              vision_ok=vision_ok)
@@ -102,7 +107,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     try:   # NV's camera side: needs OpenCV and the detector models (the Mac has them)
         import cv2
-        from hardware.detect import Detector, describe_from
+        from hardware.detect import Detector, describe_from, hint
         from hardware.vision import Vision
     except Exception as e:
         print(f"Needs OpenCV and NV's detector (hardware/detect.py): {e!r}. Run it on the Mac.")
@@ -116,7 +121,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         frame = cv2.imread(str(path))
         return detector.analyse(frame) if (detector is not None and frame is not None) else None
 
-    rows = run(photos, analyse, vision.describe, assessor, describe_from)
+    rows = run(photos, analyse, lambda p, h=None: vision.describe(p, hint=h), assessor, describe_from,
+               hint=hint)
     meta = {"model": str(assessor.model), "date": datetime.now().astimezone().isoformat(timespec="minutes"),
             "command": "python -m brain.bench_photos " + " ".join(argv or sys.argv[1:])}
     md = to_markdown(rows, meta)
