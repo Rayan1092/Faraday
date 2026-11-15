@@ -41,10 +41,11 @@ from modes import ModeState
 from rules import InstructionStore, RuleStore, baseline_actions, lights_off_on_disarm, merge
 from rules import instructions as owner_instructions
 
-from . import look, summary, threat
+from . import lines, look, owner, summary, threat
 from .threat import ThreatAssessor
 from .core import Brain
 from .settings import load_settings, passphrase
+from modes.passphrase import REDACTED
 
 FILLER = "One moment, please."
 SNAPSHOT_REASON = "Snapshot from the dashboard"
@@ -68,7 +69,8 @@ class Pipeline:
                  say: Callable[[str], None] = print,
                  rules: Optional[RuleStore] = None,
                  assessor: Optional[Any] = None,
-                 instructions: Optional[InstructionStore] = None):
+                 instructions: Optional[InstructionStore] = None,
+                 router: Optional[owner.OwnerRouter] = None):
         self.brain = brain
         self.modes = modes
         self.log = log
@@ -79,6 +81,8 @@ class Pipeline:
         brain.instructions = instructions
         # Threat label after every photo. Rules-only by default; from_settings gives it Bonsai.
         self.assessor = assessor if assessor is not None else ThreatAssessor(None)
+        # The owner's requests ("Hey Faraday, ..."). Keywords only by default; from_settings gives it the 2B.
+        self.router = router if router is not None else owner.OwnerRouter(None)
         self.on_event = on_event
         self.on_action = on_action
         self.say = say
@@ -91,6 +95,7 @@ class Pipeline:
         # door?), "late" (already answered "I can't see the door", drop it when it comes)
         self._owner_photos: Dict[str, str] = {}
         self._look_timers: Dict[str, threading.Timer] = {}
+        self._rules_stored: set = set()  # add_rule action ids the owner router already stored
         self.look_timeout_s = 25.0  # vision on the Mac takes a few seconds; then give up
 
     @classmethod
@@ -110,8 +115,12 @@ class Pipeline:
         instructions = callbacks.pop("instructions", None) or InstructionStore.from_settings(settings)
         for problem in instructions.skipped:
             say(f"[instructions] {problem}")
+        router = callbacks.pop("router", None) or owner.OwnerRouter(
+            brain.fast_client if use_llm else None, brain.fast_model, log=say)
+        if use_llm:
+            brain.warm_up(getattr(assessor, "client", None))
         return cls(brain, modes, log or EventLog.from_settings(settings), rules=rules,
-                   assessor=assessor, instructions=instructions, **callbacks)
+                   assessor=assessor, instructions=instructions, router=router, **callbacks)
 
     # ---- entry points ------------------------------------------------------
 
@@ -242,14 +251,20 @@ class Pipeline:
                                            Source.BRAIN, caused_by=event.id), result, done)
                 return  # the owner asked for this photo: there's no visitor to answer
 
-        if (event.type == EventType.SPEECH_HEARD and mode in (Mode.HOME, Mode.NIGHT)
-                and look.is_look_request(str(event.data.get("text", "")))):
-            self._look(event, result, done)  # the owner is in: plain code answers
-            return
-        if (event.type == EventType.SPEECH_HEARD and mode == Mode.HOME
-                and self.instructions is not None and self._owner_instruction(event, result, done)):
-            return  # plain code stored (or refused) it and answered
+        if owner.is_owner_speech(event, mode):
+            # "Hey Faraday, ...": the owner's own router, never the visitor conversation.
+            self._owner_request(event, result, done, mode)
+        elif (event.type == EventType.SPEECH_HEARD and mode == Mode.NIGHT
+              and event.data.get("channel") is None
+              and look.is_look_request(str(event.data.get("text", "")))):
+            self._look(event, result, done)   # typed at Night (dashboard box, sim): as before
+        else:
+            self._decide(event, mode, result, done, filler)
+        self._software_actions(result, done, depth)
 
+    def _decide(self, event: Event, mode: str, result: Result, done: List[Action],
+                filler: Optional[Callable[[Event, str], None]] = None) -> None:
+        """Bonsai (or the fallback rules) for everything that isn't an owner request."""
         # A wide window so caused_by chains (photo -> take_photo -> doorbell) can be
         # traced; the prompt itself only shows the last brain.recent_lines entries.
         recent = [e for e in self.log.recent(TRACE_WINDOW) if e.get("id") != event.id]
@@ -267,13 +282,17 @@ class Pipeline:
         for action in added:
             self._emit(action, result, done)
 
+    def _software_actions(self, result: Result, done: List[Action], depth: int) -> None:
+        """set_mode back through modes/ (which refuses unsafe changes), add_rule stored,
+        summarize_log spoken."""
         for action in list(done):
             if action.type == ActionType.SET_MODE:
                 by = ChangedBy.RULE if action.source == Source.RULES else ChangedBy.BRAIN
                 for e in self.modes.arm(action.args["mode"], by,
                                         f"{by.capitalize()} chose set_mode.", caused_by=action.id):
                     self._process(e, result, depth + 1)
-            elif action.type == ActionType.ADD_RULE and self.rules is not None:
+            elif (action.type == ActionType.ADD_RULE and self.rules is not None
+                  and action.id not in self._rules_stored):
                 heard = next((str(e.data.get("text", "")) for e in result.events
                               if e.id == action.caused_by and e.type == EventType.SPEECH_HEARD), "")
                 rule = self.rules.add(action.args, description=heard, caused_by=action.id)
@@ -294,6 +313,81 @@ class Pipeline:
             self._photo_cause[action.id] = (cause, self.modes.mode, self.modes.alert)
         if self.on_action:
             self.on_action(action)
+
+    def _owner_request(self, event: Event, result: Result, done: List[Action], mode: str) -> None:
+        """One owner request, one fixed intent (brain/owner.py). Plain code does it and
+        answers with a fixed line. Owner speech is never saved as a visitor message."""
+        text = str(event.data.get("text", ""))
+        if REDACTED in text:
+            return   # the passphrase: modes/ has already disarmed (or refused); nothing to add
+        route = self.router.route(text)
+
+        def say(text: str) -> None:
+            self._emit(make_action(ActionType.SPEAK, {"text": text}, Source.BRAIN,
+                                   caused_by=event.id), result, done)
+
+        def act(kind: str, args: Dict[str, Any]) -> None:
+            self._emit(make_action(kind, args, Source.BRAIN, caused_by=event.id), result, done)
+
+        intent = route.intent
+        if mode in Mode.ARMED:
+            # Armed: a wake request changes nothing. Only the passphrase does (modes/).
+            if intent in owner.ARMED_OK.get(mode, set()):
+                self._look(event, result, done)
+            elif intent == owner.PASSPHRASE:
+                say(lines.SAY_PASSPHRASE)
+            elif intent == owner.UNCLEAR:
+                say(lines.REPEAT if route.cut_off else lines.SORRY)
+            else:
+                say(lines.ARMED_NO_CHANGE)
+            return
+        if intent in (owner.ARM_AWAY, owner.ARM_NIGHT):
+            target = Mode.AWAY if intent == owner.ARM_AWAY else Mode.NIGHT
+            say(lines.AWAY_ON if target == Mode.AWAY else lines.NIGHT_ON)
+            act(ActionType.SET_MODE, {"mode": target})
+        elif intent == owner.PASSPHRASE:
+            say(lines.ALREADY_HOME)
+        elif intent == owner.SUMMARY:
+            act(ActionType.SUMMARIZE_LOG, {"minutes": 1440})
+        elif intent == owner.LOOK:
+            self._look(event, result, done)
+        elif intent == owner.LIGHT:
+            for outlet, on in route.lights:
+                act(ActionType.OUTLET_ON if on else ActionType.OUTLET_OFF, {"outlet": outlet})
+            say(" ".join(lines.light_line(outlet, on) for outlet, on in route.lights))
+        elif intent == owner.ADD_INSTRUCTION:
+            if self.instructions is None or not self._owner_instruction(event, result, done):
+                say(lines.REPEAT)
+        elif intent == owner.ADD_RULE:
+            rule = route.rule or self._rule_from_model(event)
+            stored = None
+            if rule is not None and self.rules is not None:
+                try:
+                    action = make_action(ActionType.ADD_RULE, rule, Source.BRAIN, caused_by=event.id)
+                except ValueError as e:
+                    self.say(f"  [rules] refused: {e}")
+                else:
+                    # Stored now, so the spoken line tells the truth; _software_actions skips it.
+                    stored = self.rules.add(action.args, description=text, caused_by=action.id)
+                    self.say(f"  [rules] {'stored ' + stored['id'] if stored else 'refused'}: {text}")
+                    if stored:
+                        self._rules_stored.add(action.id)
+                        self._emit(action, result, done)
+            say(lines.RULE_SAVED if stored else lines.REPEAT)
+        else:
+            say(lines.REPEAT if route.cut_off else lines.SORRY)
+
+    def _rule_from_model(self, event: Event) -> Optional[Dict[str, Any]]:
+        """add_rule args written by Bonsai when the keyword parser couldn't. Only the
+        add_rule action is taken from the answer; the guard rails have checked it."""
+        recent = [e for e in self.log.recent(TRACE_WINDOW) if e.get("id") != event.id]
+        try:
+            decision = self.brain.decide(event, Mode.HOME, recent)
+        except Exception as e:
+            self.say(f"[pipeline] rule from Bonsai failed: {e!r}")
+            return None
+        rule = next((a for a in decision.actions if a.type == ActionType.ADD_RULE), None)
+        return dict(rule.args) if rule else None
 
     def _owner_instruction(self, event: Event, result: Result, done: List[Action]) -> bool:
         """'If a delivery comes, ask them to leave it by the side door.' At Home only (the
