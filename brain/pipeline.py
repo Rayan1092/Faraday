@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from shared import (Action, ActionType, AlertLevel, ChangedBy, Event, EventType, Mode,
@@ -43,8 +44,11 @@ from rules import InstructionStore, RuleStore, baseline_actions, lights_off_on_d
 from rules.baseline import DOORBELL_GREETING, WARNING_LINE, warning_actions
 from modes import MotionOutcome
 from rules import instructions as owner_instructions
+from rules import tasks as tasks_store
+from rules.tasks import TaskStore
 
 from . import lines, look, owner, summary, threat
+from . import tasks as task_planner
 from . import threat as threat_rules
 from .threat import ThreatAssessor
 from .core import Brain, _age_s
@@ -73,7 +77,8 @@ class Pipeline:
                  rules: Optional[RuleStore] = None,
                  assessor: Optional[Any] = None,
                  instructions: Optional[InstructionStore] = None,
-                 router: Optional[owner.OwnerRouter] = None):
+                 router: Optional[owner.OwnerRouter] = None,
+                 tasks: Optional[TaskStore] = None):
         self.brain = brain
         self.modes = modes
         self.log = log
@@ -105,6 +110,17 @@ class Pipeline:
         self.look_timeout_s = 65.0
         self._activity = 0               # sensor events and speech handled so far
         self._look_activity: Dict[str, int] = {}   # look photo id -> _activity when asked
+        # Standing tasks (rules/tasks.py): reminders, words for visitors, house actions on
+        # an event or at a clock time. from_settings gives the task tool the smart Bonsai.
+        self.tasks: Optional[TaskStore] = tasks
+        if tasks is not None and instructions is None:
+            self.instructions = tasks            # its say_visitor tasks are the visitor's words
+            brain.instructions = tasks
+        if tasks is not None:
+            self.router.tasks_mode = True
+            self.router.has_tasks = lambda: bool(tasks.all())
+        self.task_client: Optional[Any] = None
+        self._clock: Optional[threading.Timer] = None
 
     @classmethod
     def from_settings(cls, settings: Optional[Dict[str, Any]] = None, use_llm: bool = True,
@@ -126,15 +142,26 @@ class Pipeline:
             say(f"[rules] {problem}")
         assessor = callbacks.pop("assessor", None) or ThreatAssessor.from_settings(
             settings, use_llm=use_llm, log=say)
-        instructions = callbacks.pop("instructions", None) or InstructionStore.from_settings(settings)
-        for problem in instructions.skipped:
-            say(f"[instructions] {problem}")
+        # One standing-task tool replaces the separate instructions and reminders (owner,
+        # 2026-11-15): the task store is also where the visitor's words come from.
+        tasks = callbacks.pop("tasks", None)
+        if tasks is None and log is not None and getattr(log, "path", None):
+            # A custom log (tests, integration --log) keeps its tasks next to it (review).
+            tasks = TaskStore(Path(log.path).with_name(Path(log.path).stem + "-tasks.json"))
+        tasks = tasks or TaskStore.from_settings(settings)
+        for problem in tasks.skipped:
+            say(f"[tasks] {problem}")
+        instructions = callbacks.pop("instructions", None)
         router = callbacks.pop("router", None) or owner.OwnerRouter(
             brain.fast_client if use_llm else None, brain.fast_model, log=say)
+        router.tasks_mode = True
         if use_llm:
             brain.warm_up(getattr(assessor, "client", None))
-        return cls(brain, modes, log or EventLog.from_settings(settings), rules=rules,
-                   assessor=assessor, instructions=instructions, router=router, **callbacks)
+        pipeline = cls(brain, modes, log or EventLog.from_settings(settings), rules=rules,
+                       assessor=assessor, instructions=instructions, router=router, tasks=tasks, **callbacks)
+        pipeline.task_client = brain.client if use_llm else None     # the smart Bonsai (9B on the Mac)
+        pipeline._arm_clock()
+        return pipeline
 
     # ---- entry points ------------------------------------------------------
 
@@ -365,6 +392,18 @@ class Pipeline:
             self._look(event, result, done)   # typed at Night (dashboard box, sim): as before
         else:
             self._decide(event, mode, result, done)
+        if self.tasks is not None:
+            # Standing tasks run after Faraday's own reply ("Welcome home. The system is
+            # disarmed." first, then the reminder). Same photo rule as the user rules above.
+            try:
+                extra = merge(done, self.tasks.fire(event, mode))
+            except Exception as e:      # a task must never stop the house (review)
+                self.say(f"[tasks] failed on {event.type}: {e!r}")
+                extra = []
+            if outcome in (MotionOutcome.GRACE, MotionOutcome.PENDING, MotionOutcome.QUIET):
+                extra = [a for a in extra if a.type != ActionType.TAKE_PHOTO]
+            for action in extra:
+                self._emit(action, result, done)
         self._software_actions(result, done, depth)
 
     def _decide(self, event: Event, mode: str, result: Result, done: List[Action]) -> None:
@@ -438,6 +477,15 @@ class Pipeline:
         text = str(event.data.get("text", ""))
         if REDACTED in text:
             return   # the passphrase: modes/ has already disarmed (or refused); nothing to add
+        if self.tasks is not None and mode == Mode.HOME:
+            # "The next time I talk to you, remind me to ...": said first, then the answer.
+            try:
+                reminders = self.tasks.on_owner_speech(mode, caused_by=event.id)
+            except Exception as e:
+                self.say(f"[tasks] reminders failed: {e!r}")
+                reminders = []
+            for action in reminders:
+                self._emit(action, result, done)
         route = self.router.route(text, extract=mode not in Mode.ARMED)
 
         def say(text: str) -> None:
@@ -476,6 +524,12 @@ class Pipeline:
             for outlet, on in route.lights:
                 act(ActionType.OUTLET_ON if on else ActionType.OUTLET_OFF, {"outlet": outlet})
             say(" ".join(lines.light_line(outlet, on) for outlet, on in route.lights))
+        elif intent in (owner.TASK, owner.ADD_INSTRUCTION, owner.ADD_RULE) and self.tasks is not None:
+            try:
+                self._owner_task(event, route, say)
+            except Exception as e:      # never stop the house on a task (review)
+                self.say(f"[tasks] failed: {e!r}")
+                say(lines.TASK_REFUSED)
         elif intent == owner.ADD_INSTRUCTION:
             if self.instructions is None or not self._owner_instruction(event, result, done,
                                                                         route.instruction):
@@ -497,7 +551,87 @@ class Pipeline:
                         self._emit(action, result, done)
             say(lines.RULE_SAVED if stored else lines.REPEAT)
         else:
-            say(lines.REPEAT if route.cut_off else lines.SORRY)
+            say(lines.REPEAT if route.cut_off else lines.cant_do(route.topic) if self.tasks is not None
+                else lines.SORRY)
+
+    def _owner_task(self, event: Event, route: "owner.Route", say: Callable[[str], None]) -> None:
+        """A standing task (rules/tasks.py): the smart Bonsai picks remember / update_task /
+        remove_task / list_tasks, code checks it against the words, and Faraday says back
+        in one sentence what it understood. Without a model, the keywords' instruction or
+        rule becomes the task."""
+        text = str(event.data.get("text", ""))
+        current = self.tasks.all()
+        client = self.task_client or self.router.client
+        plan = task_planner.plan(text, current, client, log=self.say) if client is not None \
+            else task_planner.TaskPlan(note="no model")
+        if not plan.op:
+            fallback = None
+            if route.instruction is not None:
+                fallback = task_planner.from_instruction(route.instruction)
+            elif route.rule is not None:
+                fallback = task_planner.from_rule(route.rule)
+            elif owner_instructions.forget_request(text) is not None:
+                gone = self.tasks.forget(owner_instructions.forget_request(text))
+                say(lines.forgot_line(owner_instructions.forget_request(text)) if gone else lines.NOTHING_TO_FORGET)
+                return
+            if fallback is None:
+                self.say(f"  [tasks] nothing stored: {plan.note}")
+                # Say what was missing, never "I missed the end" when it was heard (review).
+                note = plan.note or ""
+                say(lines.cant_do(owner.topic_for(text)) if note.startswith("out of scope")
+                    else lines.TASK_WHEN if "time" in note
+                    else lines.TASK_WHICH if ("lights" in note or "mode" in note)
+                    else lines.REPEAT if route.cut_off or not note or note.startswith("Bonsai failed")
+                    else lines.TASK_REFUSED)
+                return
+            plan = task_planner.TaskPlan(task_planner.REMEMBER, task=fallback, via="rules")
+        if plan.op == task_planner.REMEMBER:
+            stored = self.tasks.add(plan.task, said=text, caused_by=event.id)
+            self.say(f"  [tasks] {'stored ' + stored['id'] if stored else 'refused'}: {text}")
+            say(tasks_store.confirmation(stored) if stored else lines.TASK_REFUSED)
+        elif plan.op == task_planner.UPDATE:
+            changed = self.tasks.update(plan.task_id, plan.task)
+            self.say(f"  [tasks] {'changed ' + plan.task_id if changed else 'refused'}: {text}")
+            say(tasks_store.updated_line(changed) if changed else lines.TASK_REFUSED)
+        elif plan.op == task_planner.REMOVE:
+            if plan.task_id == "all":
+                gone = self.tasks.clear((plan.task or {}).get("action"))     # "all my reminders"
+                say(lines.ALL_TASKS_REMOVED if gone else lines.NO_TASKS)
+            else:
+                removed = self.tasks.remove(plan.task_id)
+                say(tasks_store.removed_line(plan.task) if removed and plan.task else lines.NO_TASKS)
+        elif plan.op == task_planner.LIST:
+            say(tasks_store.list_line(self.tasks.all()))
+        self._arm_clock()
+
+    def _arm_clock(self) -> None:
+        """A timer for the next clock task ("at 9 PM, switch to night mode")."""
+        if self.tasks is None:
+            return
+        if self._clock is not None:
+            self._clock.cancel()
+            self._clock = None
+        wait = self.tasks.next_time()
+        if wait is None:
+            return
+        self._clock = threading.Timer(max(1.0, wait + 1.0), self._clock_fired)
+        self._clock.daemon = True
+        self._clock.start()
+
+    def _clock_fired(self) -> None:
+        try:
+            with self.lock:
+                result, done = Result(), []
+                for action in self.tasks.due(self.modes.mode):
+                    self._emit(action, result, done)
+                self._software_actions(result, done, 0)
+        except Exception as e:   # a timer thread must never crash the app
+            self.say(f"[tasks] clock failed: {e!r}")
+        finally:
+            try:
+                self._arm_clock()      # the next clock task still runs (review)
+            except Exception as e:
+                self.say(f"[tasks] clock not re-armed: {e!r}")
 
     def _rule_from_model(self, event: Event) -> Optional[Dict[str, Any]]:
         """add_rule args written by Bonsai when the keyword parser couldn't. Only the

@@ -388,6 +388,96 @@ INSTRUCTION_CASES = [
 ]
 
 
+# Owner 2026-11-15: one standing-task tool, no presets, varied phrasings.
+# (name, text, tasks stored before, want). want: ("list",), ("unclear",) for out of scope,
+# or (trigger, action, words that must be in the task's text, outlets or time) for the task
+# that must be stored afterwards (an update changes the stored one).
+_DELIVERY_MAIN = {"trigger": "delivery", "action": "say_visitor", "text": "use the main door"}
+_DELIVERY_SIDE = {"trigger": "delivery", "action": "say_visitor", "text": "leave the package by the side door"}
+_TRASH = {"trigger": "home", "action": "say_owner", "text": "take out the trash"}
+TASK_CASES = [
+    ("k_home", "Remind me to take out the trash when I get home.", [], ("home", "say_owner", ["trash"])),
+    ("k_home_back", "When I get back, remind me to call the plumber.", [], ("home", "say_owner", ["plumber"])),
+    ("k_home_forget", "Don't let me forget to water the plants once I'm home.", [], ("home", "say_owner", ["plants"])),
+    ("k_delivery", "If a delivery comes, tell them to use the main door.", [], ("delivery", "say_visitor", ["main door"])),
+    ("k_delivery_courier", "Any courier who shows up should use the main door.", [],
+     ("delivery", "say_visitor", ["main door"])),
+    ("k_delivery_wanted", "If a delivery comes, I wanted to tell him to put the delivery box next to the side door.",
+     [], ("delivery", "say_visitor", ["side door"])),
+    ("k_ring_night", "Whenever someone rings at night, turn on both lights.", [],
+     ("doorbell", "lights_on", ["porch_light", "living_room_lamp", "night"])),
+    ("k_ring_night_lamp", "At night, if the doorbell goes, switch on the porch light and the lamp.", [],
+     ("doorbell", "lights_on", ["porch_light", "living_room_lamp", "night"])),
+    ("k_clock_night", "At 9 PM, switch to night mode.", [], ("time", "set_mode", ["21:00", "night"])),
+    ("k_clock_tonight", "Put the house in night mode at 10 tonight.", [], ("time", "set_mode", ["22:00", "night"])),
+    ("k_update_side", "Actually, make that the side door.", [_DELIVERY_MAIN], ("delivery", "say_visitor", ["side door"])),
+    ("k_update_gate", "Change that to the back gate.", [_DELIVERY_MAIN], ("delivery", "say_visitor", ["back gate"])),
+    ("k_replace", "Actually, cancel the instruction before and tell the delivery man to leave the package by the "
+                  "main door.", [_DELIVERY_SIDE], ("delivery", "say_visitor", ["main door"])),
+    ("k_list", "What tasks do I have?", [_TRASH], ("list",)),
+    ("k_weather", "What's the weather tomorrow?", [], ("unclear",)),
+    ("k_news", "Can you look up the news for me?", [], ("unclear",)),
+    ("k_text", "Text my sister that I'm running late.", [], ("unclear",)),
+]
+
+
+@dataclass
+class TaskRun:
+    route: Any
+    plan: Any
+    tasks: List[Dict[str, Any]]
+    elapsed: float
+
+
+def _task_case(text: str, before: List[Dict[str, Any]]):
+    def run(router: owner.OwnerRouter) -> Tuple[Optional[Decision], Any, float]:
+        import tempfile
+        from rules.tasks import TaskStore
+        from . import tasks as planner
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TaskStore(Path(tmp) / "tasks.json")
+            for t in before:
+                store.add(dict(t))
+            router.tasks_mode = True
+            r = router.route(text)
+            plan = None
+            if r.intent == owner.TASK:
+                client = getattr(router, "task_client", None) or router.client
+                plan = planner.plan(text, store.all(), client, log=lambda _m: None)
+                if plan.op == planner.REMEMBER:
+                    store.add(plan.task, said=text)
+                elif plan.op == planner.UPDATE:
+                    store.update(plan.task_id, plan.task)
+                elif plan.op == planner.REMOVE:
+                    store.clear() if plan.task_id == "all" else store.remove(plan.task_id)
+            took = (r.elapsed_s or 0.0) + ((plan.elapsed_s or 0.0) if plan else 0.0)
+            return None, TaskRun(r, plan, store.all(), took), took
+    return run
+
+
+def _task_ok(run: "TaskRun", want: Tuple[Any, ...]) -> bool:
+    if want == ("unclear",):
+        return run.route.intent == owner.UNCLEAR and bool(run.route.topic)
+    if want == ("list",):
+        return run.plan is not None and run.plan.op == "list"
+    trigger, action, words = want
+    for t in run.tasks:
+        blob = " ".join([str(t.get("text") or ""), " ".join(t.get("outlets") or []), str(t.get("time") or ""),
+                         str(t.get("to_mode") or ""), "night" if t.get("night") else ""]).lower()
+        if t["trigger"] == trigger and t["action"] == action and all(w in blob for w in words):
+            return len([x for x in run.tasks if x["trigger"] == trigger and x["action"] == action]) == 1
+    return False
+
+
+def task_cases() -> List[Case]:
+    out = []
+    for name, text, before, want in TASK_CASES:
+        check = (lambda w: lambda run: isinstance(run, TaskRun) and _task_ok(run, w))(want)
+        out.append(Case(name, f'Owner task: "Hey Faraday, {text}" -> {" ".join(map(str, want))}',
+                        Mode.HOME, _task_case(text, before), check, check))
+    return out
+
+
 def owner_cases() -> List[Case]:
     out = [Case(name, f'Owner: "Hey Faraday, {text}" -> {want}' + (" (ask to repeat)" if cut else ""),
                 Mode.HOME, _route(text), _intent(want, cut), _intent(want, cut))
@@ -408,15 +498,35 @@ def run_bench(brain: Brain, runs: int, only: Optional[List[str]] = None,
     assessor = assessor or ThreatAssessor(brain.client, getattr(brain.client, "model", None),
                                           log=lambda _m: None)
     router = router or owner.OwnerRouter(brain.fast_client, brain.fast_model, log=lambda _m: None)
-    for case in cases() + owner_cases():
+    if getattr(router, "task_client", None) is None:
+        router.task_client = brain.client      # the task tool runs on the smart Bonsai, as in the app
+    for case in cases() + owner_cases() + task_cases():
         if only and case.name not in only:
             continue
         rows = []
         for i in range(runs):
-            target = assessor if case.name.startswith("t_") else router if case.name.startswith("o_") else brain
+            target = (assessor if case.name.startswith("t_") else router
+                      if case.name.startswith(("o_", "k_")) else brain)
+            router.tasks_mode = case.name.startswith("k_")
             decision, text, took = case.run(target)
             role = None
-            if isinstance(text, owner.Route):
+            if isinstance(text, TaskRun):
+                run = text
+                role = "smart" if run.plan is not None else "fast"
+                final_ok = case.final_check(run)
+                # Bonsai alone: its own tool call already named the stored trigger and action.
+                raw = (run.plan.model.get("args") or {}) if run.plan is not None else {}
+                stored = run.tasks[-1] if run.tasks else {}
+                model_ok = final_ok and (run.plan is None or not stored or (
+                    raw.get("trigger", stored.get("trigger")) == stored.get("trigger")
+                    and raw.get("action", stored.get("action")) == stored.get("action")))
+                unsafe, fallback = False, run.plan is not None and not run.plan.op
+                sample = (f"{run.route.intent}" + (f" topic={run.route.topic!r}" if run.route.topic else "")
+                          + (f" -> {run.plan.op or 'refused'}: {run.plan.note}" if run.plan else "")
+                          + "".join(f" | {t['trigger']}/{t['action']}: {t.get('text') or t.get('outlets') or t.get('to_mode')}"
+                                    for t in run.tasks))
+                dropped = [run.plan.note] if run.plan is not None and run.plan.note else []
+            elif isinstance(text, owner.Route):
                 r = text
                 role = "smart" if brain.force_role == "smart" else "fast"
                 cut = getattr(case.final_check, "cut", None)

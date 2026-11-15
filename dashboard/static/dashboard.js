@@ -313,17 +313,19 @@
   function renderRules(rules, instructions) {
     const list = $("rules");
     list.replaceChildren();
-    $("rules-title").textContent = instructions.length ? "Rules & instructions" : "Rules";
-    // Owner instructions first: words Faraday passes on to visitors (never actions).
+    $("rules-title").textContent = "Tasks";
+    // The owner's standing tasks first (reminders, words for visitors, lights, modes),
+    // each as Faraday said it back.
     for (const ins of instructions) {
       const li = el("li", "instruction");
       const text = el("span", "rule-text");
       text.append(el("span", "ins-who", ins.who), document.createTextNode(ins.text));
-      li.append(text, deleteButton("Delete instruction", "/api/instructions/delete", ins.id));
+      li.append(text, deleteButton("Delete task", "/api/instructions/delete", ins.id));
+      if (ins.said) li.append(el("span", "rule-said", "\u201c" + ins.said + "\u201d"));
       list.append(li);
     }
     if (!rules.length && !instructions.length) {
-      list.append(el("li", "empty", "Say \u201cWhen there's motion at night, turn on the lamp.\u201d"));
+      list.append(el("li", "empty", "Say \u201cRemind me to take out the trash when I get home.\u201d"));
     }
     for (const r of rules) {
       const li = el("li");

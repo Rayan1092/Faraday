@@ -50,10 +50,38 @@ class Card(unittest.TestCase):
         self.assertEqual(self.board.state()["instructions"], [])
         self.assertEqual(self.post("/api/instructions/delete", {"id": shown["id"]})[0], 404)
 
-    def test_page_renders_them_in_the_rules_card(self):
+    def test_page_renders_them_in_the_tasks_card(self):
         js = (STATIC_DIR / "dashboard.js").read_text(encoding="utf-8")
         self.assertIn('"/api/instructions/delete"', js)
-        self.assertIn("Rules & instructions", js)
+        self.assertIn('"Tasks"', js)
+
+
+class TasksCard(unittest.TestCase):
+    """Owner 2026-11-15: the standing tasks show on the dashboard, one line each, as
+    Faraday said it back, and can be deleted there."""
+
+    def setUp(self):
+        from rules.tasks import TaskStore
+        self.tmp = tempfile.TemporaryDirectory()
+        d = Path(self.tmp.name)
+        self.pipeline = Pipeline(Brain(None, SECRET, log=lambda _m: None), ModeState(SECRET),
+                                 EventLog(d / "e.jsonl", SECRET), say=lambda _m: None,
+                                 tasks=TaskStore(d / "tasks.json"))
+        self.pipeline.router.tasks_mode = True
+        self.board = Dashboard(self.pipeline, "127.0.0.1", 0).start()
+
+    def tearDown(self):
+        self.board.stop()
+        self.tmp.cleanup()
+
+    def test_a_spoken_task_shows_and_can_be_deleted(self):
+        said = "Hey Faraday, if a delivery comes, ask them to leave it by the side door."
+        self.pipeline.handle(events.speech(said, "owner"))
+        [shown] = self.board.state()["instructions"]
+        self.assertEqual((shown["who"], shown["text"]),
+                         ("Visitors", "If a delivery comes, I'll tell them to leave it by the side door"))
+        self.assertEqual(self.board.delete_instruction({"id": shown["id"]}), (200, {"ok": True}))
+        self.assertEqual(self.board.state()["instructions"], [])
 
 
 if __name__ == "__main__":

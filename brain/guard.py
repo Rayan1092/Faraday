@@ -203,7 +203,8 @@ _ALLOWED = re.compile(
     r"put\s+(?:it|that|this)\s+in\b|keep\s+(?:watch|(?:it|that)\s+in\s+mind)\b|relay\b|"
     r"share\s+(?:it|that|this|your)\b|say\b|help\s+(?:you\s+)?leave\s+a\s+message\b|"
     r"help\s+(?:you\s+)?with\s+(?:a\s+|the\s+|your\s+)?(?:deliver\w*|packages?|parcels?|messages?)\b|"
-    r"know\b|hear\b|ask\s+(?:the\s+owner|the\s+homeowner|them|him|her)\b)", re.I)
+    r"know\b|hear\b|ask\s+(?:the\s+owner|the\s+homeowner|them|him|her)\b|watch\s+(?:the\s+)?(?:door|house)\b)",
+    re.I)
 _BARE_HELP = re.compile(r"help\b", re.I)
 _SENTENCES = re.compile(r"[^.!?]+[.!?]*")
 

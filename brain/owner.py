@@ -38,23 +38,72 @@ from . import look
 
 ARM_AWAY, ARM_NIGHT, PASSPHRASE, SUMMARY, LOOK = "arm_away", "arm_night", "passphrase", "summary", "look"
 ADD_RULE, ADD_INSTRUCTION, LIGHT, UNCLEAR = "add_rule", "add_instruction", "light", "unclear"
-INTENTS = (ARM_AWAY, ARM_NIGHT, PASSPHRASE, SUMMARY, LOOK, ADD_RULE, ADD_INSTRUCTION, LIGHT, UNCLEAR)
+TASK = "task"     # a standing task: remember, change, cancel or list (brain/tasks.py)
+INTENTS = (ARM_AWAY, ARM_NIGHT, PASSPHRASE, SUMMARY, LOOK, TASK, ADD_RULE, ADD_INSTRUCTION, LIGHT, UNCLEAR)
 # What may run while the house is armed (nothing that changes anything).
 ARMED_OK = {Mode.NIGHT: {LOOK}, Mode.AWAY: set()}
 
 SYSTEM_PROMPT = (
     "You sort one request the owner said to their home guard. Call route once. "
-    "arm_away: leaving the house. arm_night: going to bed. passphrase: wants to disarm. "
+    "arm_away: leaving the house now. arm_night: going to bed now. passphrase: wants to disarm. "
     "summary: what happened, visitors, messages. look: who or what is at the door. "
-    "add_rule: 'when X happens, do Y' with lights or photos. add_instruction: words to pass "
-    "on to a visitor or delivery. light: turn a light on or off. unclear: anything else, "
-    "or a request that stops before the end.")
+    "task: something to remember for later, change or cancel: a reminder, words for a visitor "
+    "or delivery, what to do when something happens or at a time, or which tasks are set. "
+    "light: turn a light on or off now. unclear: anything else (then topic: what they asked "
+    "for, in a few words), or a request that stops before the end.")
 TOOL = {"type": "function", "function": {
     "name": "route", "description": "The owner's request.",
     "parameters": {"type": "object", "properties": {
         "intent": {"type": "string", "enum": list(INTENTS)},
         "outlet": {"type": "string", "enum": sorted(Outlet.ALL)},
-        "on": {"type": "boolean"}}, "required": ["intent"]}}}
+        "on": {"type": "boolean"},
+        "topic": {"type": "string"}}, "required": ["intent"]}}}
+# What makes a standing task plain (routing only; brain/tasks.py reads the task). Review:
+# a time or "actually" alone must not steal "I'm heading out, back at 6 pm", "Actually,
+# turn on the lamp" or "What happened at 2 pm?".
+_WAKE_RX = r"^\s*(?:(?:hey|ok|okay)\s+)?(?:faraday[\s,.!]*)?"
+_PAST_QUESTION = re.compile(_WAKE_RX + r"(?:what|who|did|was|were|has|have|is there|are there|how|"
+                            r"when (?:did|was|were))\b|" + _WAKE_RX + r"any\b.*\?\s*$", re.I)
+_TASK_WORDS = re.compile(r"\bremind (?:me|us)\b(?!\s+(?:what|who|whether|if|how)\b)"
+                         r"|\b(?:set|add) (?:a |an )?(?:reminder|task)\b|\b(?:my|the|any|all) (?:tasks?|reminders?)\b"
+                         r"|\b(?:what|which) (?:tasks?|reminders?)\b|\bnext time (?:i|we) (?:talk|speak)\b", re.I)
+_NUM = r"(?:\d{1,2}(?::\d{2})?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+_TIME_WORDS = re.compile(r"\b(?:at|by|around) (?:" + _NUM + r"|noon|midnight)\b"
+                         r"|\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)(?!\w)"
+                         r"|\bin (?:an?|half an|\d+|one|two|five|ten|fifteen|twenty|thirty) (?:minutes?|mins?|hours?)\b"
+                         r"|\blater (?:tonight|today|on)\b", re.I)
+_TIME_ASIDE = re.compile(r"\b(?:back|return\w*|home|wake me|see you|until|till)\b[^.?!]{0,12}$", re.I)
+_EVENT_CLAUSE = re.compile(r"\b(?:if|when|whenever|every ?time|each time|once)\b[^.?!]*\b(?:door ?bell|bell|rings?|"
+                           r"knocks?|motion|movement|moves|deliver\w*|packages?|parcels?|couriers?|visitors?|guests?|"
+                           r"someone comes|anyone comes|get home|get back|come home|i'?m home|arrive\w*)\b"
+                           r"|^\s*at night\b", re.I)
+_AUDIENCE_SHOULD = re.compile(r"\b(?:couriers?|deliver\w*|visitors?|guests?|drivers?|anyone|someone|whoever)\b"
+                              r"[^.?!]*\b(?:should|must|needs? to|has to)\b", re.I)
+_CORRECTION_START = re.compile(_WAKE_RX + r"(?:actually|instead|change (?:that|it)|make (?:that|it))\b[\s,]*", re.I)
+_NOW_INTENTS = (ARM_AWAY, ARM_NIGHT, LIGHT, LOOK, SUMMARY, PASSPHRASE)
+
+
+def is_task(text: str, has_tasks: bool = False) -> bool:
+    """Is this something to do later (a standing task), not now?"""
+    if _PAST_QUESTION.match(text) and not re.search(r"\b(?:tasks?|reminders?)\b", text, re.I):
+        return False                      # "What happened at 2 pm?", "Did anyone ring at 3 pm?"
+    if _TASK_WORDS.search(text):
+        return True
+    m = _CORRECTION_START.match(text)
+    if m:
+        rest = text[m.end():]
+        if strong(rest) in _NOW_INTENTS and not (_TIME_WORDS.search(rest) or _EVENT_CLAUSE.search(rest)):
+            return False                  # "Actually, I'm heading out", "Make it night mode"
+        if has_tasks:
+            return True                   # "Actually, make that the side door"
+    if _EVENT_CLAUSE.search(text) or _AUDIENCE_SHOULD.search(text):
+        return True
+    t = _TIME_WORDS.search(text)
+    if t:
+        if fb.arm_intent(text) is not None and _TIME_ASIDE.search(text[:t.start()]):
+            return False                  # "I'm heading out, back at 6 pm": arm now
+        return True                       # "Switch to night mode at 9": later, never now
+    return False
 
 # When the keyword parser can't read an instruction, the 2B pulls it out; code checks
 # it (rules/instructions.from_model). Owner, Mac test: "any phrasing".
@@ -78,14 +127,43 @@ _WEAK = {
                            r"stop the alarm|switch off the alarm)\b", re.I),
     SUMMARY: re.compile(r"\b(happen\w*|summar\w*|recap|visitors?|messages?|who came|"
                         r"anyone (come|came|stop\w*|ring|rang)|news|log|while i was)\b", re.I),
-    LOOK: re.compile(r"\b(door|outside|porch|camera|see|look)\b", re.I),
+    # "look up the news" is not a look at the door (bench)
+    LOOK: re.compile(r"\b(door|outside|porch|camera|see)\b|\blook\b(?!\s+(?:up|into|for|forward)\b)", re.I),
     ADD_RULE: re.compile(r"\b(when(ever)?|every time|each time|from now on)\b", re.I),
     ADD_INSTRUCTION: re.compile(r"\b(if|when(ever)?)\b.*\b(deliver\w*|couriers?|parcels?|packages?|visitors?|"
                                 r"someone|anyone|somebody|guests?|friends?|amazon|fedex|ups|dhl|usps|drivers?)\b"
                                 r"|\b(tell|ask|let)\b.*\b(them|him|her|visitors?|deliver\w*|couriers?|drivers?|"
                                 r"anyone|everyone|guests?)\b", re.I),
     LIGHT: re.compile(r"\b(lights?|lamp|porch|outlet)\b", re.I),
+    TASK: re.compile(r"\b(remind\w*|remember|whenever|every ?time|each time|when|if|next time|tell|ask|"
+                     r"let \w+ know|cancel|forget|remove|delete|actually|instead|make (that|it)|"
+                     r"change (that|it)|tasks?|reminders?|instructions?|rules?|noon|midnight)\b"
+                     r"|\b\d{1,2}(:\d{2})?\s*(a\.?m\.?|p\.?m\.?|o'?clock)", re.I),
 }
+# Out of scope: a topic Bonsai named, checked by code, or one plain category, or nothing.
+_VERBS = {"check", "tell", "find", "look", "search", "send", "text", "call", "phone", "play", "order", "buy",
+          "book", "get", "read", "show", "give", "make", "email", "message", "answer", "start", "stop",
+          "open", "translate", "count", "calculate", "recommend", "schedule", "pay", "browse", "stream"}
+_CATEGORIES = [(re.compile(r"\b(weather|forecast|rain\w*|snow\w*|temperature)\b", re.I), "check the weather"),
+               (re.compile(r"\b(texts?|sms|e-?mails?|call|phone|whatsapp)\b", re.I), "send texts or make calls"),
+               (re.compile(r"\b(search|google|look up|internet|online|web|news|website)\b", re.I),
+                "look things up online"),
+               (re.compile(r"\b(music|songs?|playlist|radio|podcasts?)\b", re.I), "play music"),
+               (re.compile(r"\b(order|buy|shop\w*)\b", re.I), "order things")]
+
+
+def topic_for(text: str, model_topic: Any = None) -> str:
+    """What the owner asked for, for "Sorry, I can't <topic>." Bonsai's topic only if it's
+    short, has no numbers and shares a word with what was said; else a plain category."""
+    topic = re.sub(r"^(?:to|wants? to|the owner wants to)\s+", "", " ".join(str(model_topic or "").split()),
+                   flags=re.I).strip().rstrip(".!?").lower()
+    words = re.findall(r"[a-z']+", topic)
+    heard = {w[:4] for w in re.findall(r"[a-z0-9']+", text.lower())}
+    if (1 <= len(words) <= 6 and not re.search(r"[0-9\"<>{}]", topic)
+            and any(len(w) >= 4 and w[:4] in heard for w in words)):
+        topic = re.sub(r"\bmy\b", "your", re.sub(r"\bme\b", "you", topic))
+        return topic if words[0] in _VERBS else f"help with {topic}"
+    return next((name for rx, name in _CATEGORIES if rx.search(text)), "")
 _RULE_EVENT = re.compile(r"\b(motion|movement|moves?|door ?bell|rings?|knocks?)\b", re.I)
 _ON_OFF = re.compile(r"\b(on|off)\b", re.I)
 # A request that stops mid-sentence: "ask them to", "if a delivery comes,".
@@ -113,6 +191,7 @@ class Route:
     rule: Optional[Dict[str, Any]] = None      # add_rule args, when code could build them
     lights: List[tuple] = field(default_factory=list)   # [(outlet, on)] for "light"
     instruction: Optional[Dict[str, str]] = None
+    topic: str = ""                            # unclear: what they asked for ("check the weather")
 
 
 def is_owner_speech(event: Event, mode: str) -> bool:
@@ -176,9 +255,13 @@ def light_slots(text: str) -> tuple:
     return _outlet_in(text), None
 
 
-def strong(text: str) -> Optional[str]:
+def strong(text: str, tasks: bool = False, has_tasks: bool = False) -> Optional[str]:
     """The intent the words make plain, or None. Order matters: a rule or an
-    instruction mentions lights and doors too."""
+    instruction mentions lights and doors too. tasks=True: a standing task ("remind me",
+    "at 9 PM", "actually make that...") comes first, so "at 9 PM switch to night mode"
+    is never arming now."""
+    if tasks and is_task(text, has_tasks):
+        return TASK
     parsed = oi.parse_instruction(text)
     if parsed is not None and oi.is_forbidden(parsed) and fb.parse_rule(text) is not None:
         return ADD_RULE     # "when someone rings, ... turn on the porch light": a rule (review)
@@ -216,12 +299,16 @@ class OwnerRouter:
     def __init__(self, client: Optional[Any] = None, model: Optional[str] = None,
                  log: Callable[[str], None] = print):
         self.client, self.model, self.log = client, model, log
+        # True in the product (Pipeline.from_settings): instructions, rules and reminders are
+        # one standing-task intent, read by the smart Bonsai (brain/tasks.py).
+        self.tasks_mode = False
+        self.has_tasks: Callable[[], bool] = lambda: False   # "actually ..." is a correction only then
 
     def route(self, text: str, extract: bool = True) -> Route:
         """extract=False (while armed, where nothing is stored anyway): never ask the 2B
         to pull out an instruction."""
         text = str(text or "").strip()
-        clear = strong(text)
+        clear = strong(text, self.tasks_mode, self.tasks_mode and self.has_tasks())
         model_intent, args, elapsed, via, failed = None, {}, None, "rules", False
         if self.client is not None and text:
             started = time.perf_counter()
@@ -237,7 +324,20 @@ class OwnerRouter:
         if model_intent is not None:
             via = "bonsai" if intent == model_intent else "code"
         r = Route(intent, via, model_intent, elapsed_s=elapsed, note=note)
+        if r.intent in (TASK, ADD_INSTRUCTION, ADD_RULE) and self.tasks_mode:
+            # A standing task: the smart Bonsai reads it (brain/tasks.py). What the keywords
+            # read stays as the fallback when there's no model.
+            r.intent, r.instruction, r.rule = TASK, oi.parse_instruction(text), fb.parse_rule(text)
+            self.log(f"[owner] {text!r} -> task" + (f" (2B said {model_intent})" if model_intent
+                                                   and model_intent != TASK else "")
+                     + (f", {elapsed:.2f}s" if elapsed is not None else ""))
+            return r
+        if r.intent == TASK:            # no task store (older callers): the keywords decide
+            r.intent = (ADD_INSTRUCTION if oi.parse_instruction(text) or oi.forget_request(text)
+                        else ADD_RULE if fb.parse_rule(text) else UNCLEAR)
         self._fill(r, text, args)
+        if r.intent == UNCLEAR:
+            r.topic = topic_for(text, args.get("topic") if isinstance(args, dict) else None)
         if (extract and not failed and r.intent == UNCLEAR and not cut_off(text) and self.client is not None
                 and (model_intent == ADD_INSTRUCTION or clear == ADD_INSTRUCTION)
                 and oi.names_audience(text)):
