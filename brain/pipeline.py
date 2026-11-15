@@ -17,6 +17,9 @@ For each incoming event, in this order:
 10. At alarm (Away or Night), once the photo description arrives, Bonsai is asked for one
     confrontation line in a background thread. Plain code has already spoken.
 
+Photos the owner asks for (owner_snapshot: the dashboard Snapshot button) get their
+threat label like any photo, but nobody at the door is greeted for them.
+
 Actions and events are passed to on_action / on_event as soon as they exist,
 so integration/ can run hardware without waiting for Bonsai. One lock keeps
 events from the app, the dashboard and background threads from interleaving.
@@ -40,6 +43,7 @@ from .core import Brain
 from .settings import load_settings, passphrase
 
 FILLER = "One moment, please."
+SNAPSHOT_REASON = "Snapshot from the dashboard"
 CHECKING = "Let me check."
 MAX_DEPTH = 4  # event -> action -> follow-up event chains, so nothing can loop
 TRACE_WINDOW = 50  # log entries searched when tracing caused_by
@@ -72,6 +76,7 @@ class Pipeline:
         self._photo_cause: Dict[str, Tuple[str, str, str]] = {}
         self._background: List[threading.Thread] = []
         self._confronted: set = set()  # photo_described ids that already got a confrontation
+        self._owner_photos: Dict[str, bool] = {}  # take_photo id the owner asked for -> speak it
 
     @classmethod
     def from_settings(cls, settings: Optional[Dict[str, Any]] = None, use_llm: bool = True,
@@ -111,6 +116,18 @@ class Pipeline:
         """A typed passphrase. The attempt itself is never logged. None if wrong."""
         with self.lock:
             return self._follow(self.modes.disarm_with_passphrase(attempt))
+
+    def owner_snapshot(self, reason: str = SNAPSHOT_REASON, action: Optional[Action] = None,
+                       speak: bool = False) -> Action:
+        """The owner asked for a photo (dashboard Snapshot). A take_photo with source
+        dashboard goes to integration's camera; its photo_described gets the threat label
+        but no visitor greeting. Pass `action` to know its id before the lock is free."""
+        if action is None:
+            action = snapshot_action(reason)
+        with self.lock:
+            self._owner_photos[action.id] = speak
+            self._emit(action, Result(), [])
+        return action
 
     def wait_background(self, timeout: float = 30) -> None:
         """Wait for background Bonsai calls (the alarm confrontation). For tests and shutdown."""
@@ -173,6 +190,9 @@ class Pipeline:
             mode = self.modes.mode
             if (threat.data["category"] == ThreatCategory.SUSPICIOUS and mode in Mode.ARMED):
                 self._confront_later(event)  # early: don't wait for the alarm
+            if event.caused_by in self._owner_photos:
+                self._owner_photos.pop(event.caused_by)
+                return  # the owner asked for this photo: there's no visitor to answer
 
         # A wide window so caused_by chains (photo -> take_photo -> doorbell) can be
         # traced; the prompt itself only shows the last brain.recent_lines entries.
@@ -294,3 +314,8 @@ class Pipeline:
             cause = self._photo_cause.get(event.caused_by or "")
             return bool(cause) and cause[0] == EventType.DOORBELL
         return False
+
+
+def snapshot_action(reason: str = SNAPSHOT_REASON) -> Action:
+    """The take_photo for an owner snapshot (source dashboard)."""
+    return make_action(ActionType.TAKE_PHOTO, {"reason": reason}, Source.DASHBOARD)

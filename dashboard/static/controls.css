@@ -1,0 +1,177 @@
+/* Faraday Controls page. Same glass look as the dashboard (dashboard.css is loaded
+   first for the colours, glass cards, pills and switches), laid out like a phone app:
+   one column on a phone, two on a laptop or projector. Big touch targets throughout. */
+
+html { font-size: 17px; }
+
+body.controls-page {
+  height: auto;
+  min-height: 100vh;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.cp {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: max(1.25rem, env(safe-area-inset-top)) 1rem 2rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+}
+
+/* ---- top bar ------------------------------------------------------------------ */
+
+.cp-top { display: flex; align-items: center; gap: 0.9rem; padding: 0.25rem 0.25rem 0; }
+.cp-back { width: 3rem; height: 3rem; color: var(--text-2); text-decoration: none; background: rgba(255, 255, 255, 0.05); }
+.cp-back .ico { width: 1.5rem; height: 1.5rem; }
+.cp-title { flex: 1; min-width: 0; }
+.cp-title h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }
+.cp-status { letter-spacing: 0.02em; font-size: 0.85rem; }
+.cp-status .dot { background: var(--status); box-shadow: 0 0 10px var(--status); }
+body[data-alert="warning"] .cp-status, body[data-alert="alarm"] .cp-status { color: var(--status); border-color: var(--status); }
+
+.cp-card { padding: 1rem; min-width: 0; }
+
+/* ---- camera ------------------------------------------------------------------- */
+
+.cam-frame {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  border-radius: calc(var(--radius) - 0.4rem);
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.45);
+}
+.cam-frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.live-badge {
+  position: absolute; top: 0.75rem; left: 0.75rem;
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.25rem 0.65rem; border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55); font-size: 0.75rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+}
+.live-badge .dot { background: var(--red); box-shadow: 0 0 8px var(--red); animation: breathe 1.6s ease-in-out infinite; }
+.live-badge[hidden] { display: none; }
+.cam-off {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.75rem;
+  color: var(--text-3); text-align: center; padding: 1rem;
+}
+.cam-off[hidden] { display: none; }
+.cam-off .ico { width: 2.6rem; height: 2.6rem; }
+
+.big-btn {
+  width: 100%;
+  margin-top: 0.9rem;
+  min-height: 3.6rem;
+  display: flex; align-items: center; justify-content: center; gap: 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--stroke-hi);
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 1.15rem; font-weight: 650;
+  cursor: pointer;
+  transition: background var(--t), transform 120ms var(--ease);
+}
+.big-btn:hover { background: rgba(255, 255, 255, 0.14); }
+.big-btn:active { transform: scale(0.98); }
+.big-btn:disabled { cursor: default; color: var(--text-3); background: rgba(255, 255, 255, 0.04); transform: none; }
+.big-btn .ico { width: 1.5rem; height: 1.5rem; }
+
+.snap { display: flex; gap: 0.9rem; margin-top: 0.9rem; align-items: flex-start; animation: fadein 400ms var(--ease); }
+.snap[hidden] { display: none; }
+.snap img { width: 7.5rem; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 0.75rem; flex: none; }
+.snap img[hidden] { display: none; }
+.snap-words { min-width: 0; flex: 1; }
+.snap-text { font-size: 1.05rem; font-weight: 600; line-height: 1.3; }
+.snap-meta { font-size: 0.8rem; color: var(--text-3); margin-top: 0.25rem; }
+.snap .threat { min-height: 0; flex-wrap: wrap; }
+.snap .threat-reason { white-space: normal; }
+
+/* ---- talk to visitor ---------------------------------------------------------- */
+
+.cp-talk { display: flex; flex-direction: column; align-items: center; gap: 0.9rem; padding: 1.5rem 1rem; text-align: center; }
+.hold {
+  position: relative;
+  width: min(15rem, 70vw); aspect-ratio: 1;
+  border-radius: 50%;
+  border: 1px solid var(--stroke-hi);
+  background: radial-gradient(circle at 50% 35%, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.04) 70%);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.6rem;
+  cursor: pointer;
+  touch-action: none;           /* holding mustn't scroll or zoom */
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  transition: background var(--t), transform 160ms var(--ease), box-shadow var(--t);
+}
+.hold .ico { width: 3rem; height: 3rem; }
+.hold-label { font-size: 1.1rem; font-weight: 650; max-width: 11rem; line-height: 1.25; }
+.hold-ring { position: absolute; inset: -0.5rem; border-radius: 50%; border: 2px solid transparent; pointer-events: none; }
+.hold:disabled { cursor: default; color: var(--text-3); background: rgba(255, 255, 255, 0.03); }
+.hold.live {
+  background: radial-gradient(circle at 50% 35%, rgba(52, 199, 89, 0.55), rgba(52, 199, 89, 0.18) 70%);
+  border-color: rgba(52, 199, 89, 0.8);
+  transform: scale(1.04);
+  box-shadow: 0 0 40px -6px rgba(52, 199, 89, 0.7);
+}
+.hold.live .hold-ring { border-color: rgba(52, 199, 89, 0.6); animation: holdpulse 1.4s ease-out infinite; }
+.hold.starting { opacity: 0.75; }
+@keyframes holdpulse { from { transform: scale(1); opacity: 1; } to { transform: scale(1.15); opacity: 0; } }
+
+.talk-note { color: var(--text-2); font-size: 0.95rem; }
+.talk-note[hidden] { display: none; }
+.talk-note.bad { color: #ffb3ad; }
+
+.mic-help {
+  width: 100%;
+  text-align: left;
+  padding: 0.9rem 1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 69, 58, 0.45);
+  background: rgba(255, 69, 58, 0.10);
+  font-size: 0.95rem; line-height: 1.4;
+}
+.mic-help[hidden] { display: none; }
+.mic-help-title { font-weight: 700; color: #ffb3ad; margin-bottom: 0.25rem; }
+.mic-steps { margin: 0.6rem 0 0; padding-left: 1.3rem; }
+.mic-steps[hidden] { display: none; }
+.mic-steps li { margin: 0.25rem 0; }
+.mic-help code {
+  font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 0.85em;
+  background: rgba(0, 0, 0, 0.35); padding: 0.1rem 0.35rem; border-radius: 0.35rem;
+  word-break: break-all; user-select: all;
+}
+
+/* ---- lights ------------------------------------------------------------------- */
+
+.cp-lights { display: flex; flex-direction: column; gap: 0.6rem; }
+.cp-lights .light { width: 100%; min-height: 4rem; padding: 0.75rem 1rem; }
+.cp-lights .light .words { flex: 1; }
+.cp-lights .light .name { font-size: 1.1rem; }
+.cp-lights .light .state { font-size: 0.85rem; }
+.cp-lights .light .ico { width: 1.7rem; height: 1.7rem; }
+.cp-lights .switch { width: 3.3rem; height: 1.9rem; }
+.cp-lights .switch::after { width: 1.6rem; height: 1.6rem; }
+.cp-lights .light.on .switch::after { transform: translateX(1.4rem); }
+
+/* ---- laptop / projector: camera on the left, talk and lights on the right ------ */
+
+@media (min-width: 900px) {
+  .cp {
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+    grid-template-areas: "top top" "cam talk" "cam lights";
+    grid-template-rows: auto auto 1fr;
+    align-items: start;
+    padding-top: 1.5rem;
+  }
+  .cp-top { grid-area: top; }
+  .cp-cam { grid-area: cam; }
+  .cp-talk { grid-area: talk; }
+  .cp-lights-card { grid-area: lights; }
+  .hold { width: 12rem; }
+  .cam-frame { max-height: 55vh; width: 100%; }
+}
+
+/* ---- narrow phones: keep the title and the status pill on one line ------------- */
+
+@media (max-width: 480px) {
+  .cp-title h1 { font-size: 1.6rem; }
+  .cp-status { font-size: 0.75rem; padding: 0.3rem 0.65rem; }
+}

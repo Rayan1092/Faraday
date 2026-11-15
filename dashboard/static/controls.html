@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Faraday Controls</title>
+  <!-- Fully offline. The live camera and intercom come from integration's controls
+       server on dashboard port + 1 (the page builds that address from its own). -->
+  <link rel="stylesheet" href="/static/dashboard.css">
+  <link rel="stylesheet" href="/static/controls.css">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+</head>
+<body class="controls-page" data-status="green" data-alert="normal">
+  <div id="backdrop" class="backdrop" aria-hidden="true"></div>
+  <div class="status-line" aria-hidden="true"></div>
+  <div class="edge-glow" aria-hidden="true"></div>
+
+  <main class="cp">
+    <header class="cp-top">
+      <a class="icon-btn cp-back" href="/" aria-label="Back to the dashboard"><span data-icon="back"></span></a>
+      <div class="cp-title">
+        <div class="eyebrow">Faraday</div>
+        <h1>Controls</h1>
+      </div>
+      <span class="pill cp-status"><span class="dot" aria-hidden="true"></span><span id="status-text">Connecting…</span></span>
+    </header>
+
+    <!-- Live camera + snapshot -->
+    <section class="glass cp-card cp-cam" aria-label="Front door camera">
+      <div class="cam-frame">
+        <img id="cam" alt="Live view of the front door" hidden>
+        <span id="live" class="live-badge" hidden><span class="dot" aria-hidden="true"></span>Live</span>
+        <div id="cam-off" class="cam-off">
+          <span data-icon="camera"></span>
+          <span id="cam-off-text">Connecting to the camera…</span>
+          <button id="cam-retry" class="pill-btn" type="button" hidden>Try again</button>
+        </div>
+      </div>
+      <button id="btn-snap" class="big-btn" type="button"><span data-icon="aperture"></span><span id="snap-label">Snapshot</span></button>
+      <div id="snap" class="snap" hidden aria-live="polite">
+        <img id="snap-img" alt="The snapshot" hidden>
+        <div class="snap-words">
+          <p id="snap-text" class="snap-text"></p>
+          <p id="snap-meta" class="snap-meta"></p>
+          <p id="snap-threat" class="threat"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Talk to the visitor: hold to speak through the door speaker -->
+    <section class="glass cp-card cp-talk" aria-label="Talk to visitor">
+      <button id="btn-talk" class="hold" type="button" aria-describedby="talk-note">
+        <span class="hold-ring" aria-hidden="true"></span>
+        <span data-icon="mic"></span>
+        <span id="talk-label" class="hold-label">Hold to talk to visitor</span>
+      </button>
+      <p id="talk-note" class="talk-note" role="status" aria-live="polite">The door mic is muted while you talk.</p>
+      <div id="mic-help" class="mic-help" role="alert" hidden>
+        <p id="mic-help-title" class="mic-help-title"></p>
+        <p id="mic-help-text"></p>
+        <ol id="mic-steps" class="mic-steps" hidden>
+          <li>Open <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code> in a new tab.</li>
+          <li>Add <code id="mic-origins"></code></li>
+          <li>Set it to <b>Enabled</b>.</li>
+          <li>Click <b>Relaunch</b>, then come back here.</li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- Lights -->
+    <section class="glass cp-card cp-lights-card" aria-label="Lights">
+      <div class="card-head"><span data-icon="bulb"></span><h2>Lights</h2></div>
+      <div id="cp-lights" class="cp-lights"></div>
+      <p id="lights-note" class="talk-note" hidden>The light switches aren't connected.</p>
+    </section>
+  </main>
+
+  <script src="/static/icons.js"></script>
+  <script src="/static/controls.js"></script>
+</body>
+</html>

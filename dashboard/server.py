@@ -6,6 +6,11 @@ and photos from captures/. Buttons post back to the pipeline:
 - Home          -> pipeline.owner_passphrase(), the only way to disarm
 - text box      -> a speech_heard event (backup if the mic or STT fails)
 - light switch  -> integration's control_hook (outlet_on/off, source dashboard)
+- Snapshot      -> pipeline.owner_snapshot() (take_photo, source dashboard)
+
+/controls is the phone-style Controls page. Its live camera and intercom come from
+integration's controls server on dashboard port + 1 (PLAN Q27); `controls_port` in
+/api/state tells the page where that is.
 
 Safety:
 - POSTs must carry the header "X-Faraday: 1". Browsers won't send a custom header
@@ -26,6 +31,8 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
 from shared import EventType, Mode, Outlet, Source, make_event
+
+from brain.pipeline import snapshot_action
 
 from .netcheck import NetCheck
 from .photos import PhotoWatcher
@@ -79,6 +86,7 @@ class Dashboard:
         # integration/ sets this (PLAN Q26): control_hook(outlet, on) -> bool switches a
         # light through its dispatcher and logs it with source "dashboard".
         self.control_hook: Optional[Any] = None
+        self._controls_port: Optional[int] = None   # settings controls.port, else port + 1
         self.httpd = ThreadingHTTPServer((host, port), _make_handler(self))
         self.httpd.daemon_threads = True
         self._thread: Optional[threading.Thread] = None
@@ -89,11 +97,18 @@ class Dashboard:
         cfg = settings.get("dashboard", {})
         board = cls(pipeline, cfg.get("host", "127.0.0.1"),
                     cfg.get("port", 8080) if port is None else port)
+        if settings.get("controls", {}).get("port"):
+            board._controls_port = int(settings["controls"]["port"])
         for name in board.sensor_keys:
             key = settings.get("sensors", {}).get(name, {}).get("key")
             if key:
                 board.sensor_keys[name] = key
         return board
+
+    @property
+    def controls_port(self) -> int:
+        """Where integration's controls server (camera stream, intercom) listens."""
+        return self._controls_port or self.httpd.server_address[1] + 1
 
     @property
     def url(self) -> str:
@@ -119,7 +134,16 @@ class Dashboard:
                             network=self.netcheck.status(), newest_photo=self.photos.newest())
         state["talk_available"] = self.talk_hook is not None
         state["control_available"] = self.control_hook is not None
+        state["controls_port"] = self.controls_port
         return state
+
+    def snapshot(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+        """Snapshot button: a take_photo with source dashboard. Answers at once with the
+        request id; the page waits for the photo whose `request` matches."""
+        action = snapshot_action()
+        threading.Thread(target=self.pipeline.owner_snapshot, kwargs={"action": action},
+                         daemon=True).start()
+        return 202, {"ok": True, "id": action.id}
 
     def control(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
         """A light switch on the page: {"outlet": "porch_light", "on": true}. Integration
@@ -190,7 +214,8 @@ class Dashboard:
 def _make_handler(app: Dashboard):
     posts = {"/api/mode": app.set_mode, "/api/home": app.go_home,
              "/api/say": app.say, "/api/rules/delete": app.delete_rule,
-             "/api/sensor": app.sensor, "/api/talk": app.talk, "/api/control": app.control}
+             "/api/sensor": app.sensor, "/api/talk": app.talk, "/api/control": app.control,
+             "/api/snapshot": app.snapshot}
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "Faraday"
@@ -202,6 +227,8 @@ def _make_handler(app: Dashboard):
             path = unquote(urlparse(self.path).path)
             if path in ("/", "/index.html"):
                 return self._file(STATIC_DIR / "index.html", STATIC_DIR, STATIC_TYPES)
+            if path in ("/controls", "/controls/"):
+                return self._file(STATIC_DIR / "controls.html", STATIC_DIR, STATIC_TYPES)
             if path.startswith("/static/"):
                 return self._file(STATIC_DIR / path[len("/static/"):], STATIC_DIR, STATIC_TYPES)
             if path == "/api/state":

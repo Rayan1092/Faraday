@@ -101,7 +101,8 @@ def build_state(entries: Iterable[Entry], mode: str, alert: str,
             photo = {"time": clock, "description": str(info.get("description", "")),
                      "url": "/media/" + path if path else None,
                      "reason": photo_reason.get(str(e.get("caused_by")), ""), "path": path,
-                     "taken": _when(e), "id": str(e.get("id"))}
+                     "taken": _when(e), "id": str(e.get("id")),
+                     "request": str(e.get("caused_by") or "")}   # the take_photo it answers
             described[path] = photo
         elif typ == EventType.THREAT_ASSESSED:
             threats[str(e.get("caused_by"))] = {"category": str(info.get("category", "")),
