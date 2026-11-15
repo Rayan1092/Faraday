@@ -120,7 +120,7 @@ class ThreatCategory:
     VISITOR = "visitor"
     SUSPICIOUS = "suspicious"
     NOBODY = "nobody"
-    UNKNOWN = "unknown"        # the photo couldn't be analysed (vision failed): never a guess
+    UNKNOWN = "unknown"        # vision and the detector both failed: never a guess (FORMATS.md)
     ALL = frozenset({DELIVERY, VISITOR, SUSPICIOUS, NOBODY, UNKNOWN})
 
 
