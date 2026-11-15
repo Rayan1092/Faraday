@@ -343,7 +343,10 @@ body[data-alert="warning"] .alert-row, body[data-alert="alarm"] .alert-row { col
 .talk-list {
   flex: 1;
   display: flex; flex-direction: column; gap: 0.6rem;
+  overflow-y: auto;            /* both sides stay: scroll instead of dropping lines */
 }
+.talk-list li.heard.owner .ico { color: var(--green); }
+.talk-list li.heard.visitor .ico { color: var(--amber); }
 .talk-list li:first-child { margin-top: auto; }   /* sit at the bottom, newest last */
 .talk-list li { display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.6rem; align-items: start; flex: none; }
 .talk-list .ico { grid-row: 1 / span 2; width: 1.1rem; height: 1.1rem; margin-top: 0.15rem; color: var(--text-3); }

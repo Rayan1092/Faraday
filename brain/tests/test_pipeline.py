@@ -283,6 +283,8 @@ class PipelineTests(unittest.TestCase):
 
     def test_brain_set_mode_goes_through_modes(self):
         p, _, _ = self.pipeline(tool_calls(("set_mode", {"mode": "away"})), Mode.HOME)
+        from .helpers import FakeClient
+        p.router.client = FakeClient(tool_calls(("route", {"intent": "arm_away"})))   # no keyword arming
         result = p.handle(events.speech("I'm heading out."))
         changes = [e for e in result.events if e.type == EventType.MODE_CHANGED]
         self.assertEqual(changes[0].data["changed_by"], "brain")

@@ -291,20 +291,82 @@ def _merge(old_text: str, new: str) -> str:
     return old_text[:m.start()] + new + old_text[m.end():] if m else new
 
 
+_TOOL_NAMES = ("remember", "update_task", "remove_task", "list_tasks")
+_TOOL_ALIAS = {"add_task": "remember", "new_task": "remember", "create_task": "remember", "add": "remember",
+               "update": "update_task", "change_task": "update_task", "edit_task": "update_task",
+               "remove": "remove_task", "delete_task": "remove_task", "cancel_task": "remove_task",
+               "list": "list_tasks", "show_tasks": "list_tasks"}
+
+
 def _call(reply: Any) -> tuple:
-    """(tool name, args) from a model reply, or ("", {})."""
-    for call in (reply or {}).get("tool_calls") or [] if isinstance(reply, dict) else []:
+    """(tool name, args) from a model reply, or ("", {}). Real tool calls first, then a
+    call written into the text (the Mac's 9B answers through the no-think prompt):
+    JSON ({"name", "arguments"}), or the Qwen XML form."""
+    if not isinstance(reply, dict):
+        return "", {}
+    calls = list(reply.get("tool_calls") or [])
+    content = reply.get("content")
+    if not calls and isinstance(content, str) and content.strip():
+        from .bonsai import tool_calls_in
+        from .guard import _json_objects
+        calls = tool_calls_in(content, TOOLS)
+        for obj in _json_objects(content) if not calls else []:
+            for o in (obj if isinstance(obj, list) else [obj]):
+                if isinstance(o, dict):
+                    fn = o.get("function") if isinstance(o.get("function"), dict) else o
+                    calls.append({"function": {"name": fn.get("name") or fn.get("tool"),
+                                               "arguments": fn.get("arguments", fn.get("parameters", fn.get("args")))}})
+    for call in calls:
         fn = call.get("function") if isinstance(call, dict) else None
         if not isinstance(fn, dict):
             continue
+        name = str(fn.get("name") or "").strip()
+        name = _TOOL_ALIAS.get(name, name)
         raw = fn.get("arguments")
         try:
             args = json.loads(raw) if isinstance(raw, str) else (raw or {})
         except ValueError:
             args = {}
-        if isinstance(args, dict) and fn.get("name") in ("remember", "update_task", "remove_task", "list_tasks"):
-            return fn["name"], args
+        if isinstance(args, dict) and name in _TOOL_NAMES:
+            return name, _tidy_args(args, infer=name == "remember")   # an update leaves fields out on purpose
     return "", {}
+
+
+_ACTION_ALIAS = {"remind": T.SAY_OWNER, "reminder": T.SAY_OWNER, "remind_owner": T.SAY_OWNER, "say": T.SAY_OWNER,
+                 "tell_owner": T.SAY_OWNER, "speak": T.SAY_OWNER, "tell_visitor": T.SAY_VISITOR,
+                 "say_to_visitor": T.SAY_VISITOR, "instruction": T.SAY_VISITOR, "light_on": T.LIGHTS_ON,
+                 "outlet_on": T.LIGHTS_ON, "turn_on": T.LIGHTS_ON, "light_off": T.LIGHTS_OFF,
+                 "outlet_off": T.LIGHTS_OFF, "turn_off": T.LIGHTS_OFF, "mode": T.SET_MODE, "arm": T.SET_MODE,
+                 "photo": T.TAKE_PHOTO, "snapshot": T.TAKE_PHOTO}
+_TRIGGER_ALIAS = {"arrive_home": T.HOME, "owner_home": T.HOME, "get_home": T.HOME, "arrival": T.HOME,
+                  "disarm": T.HOME, "ring": T.DOORBELL, "doorbell_ring": T.DOORBELL, "visitor": T.DOORBELL,
+                  "package": T.DELIVERY, "courier": T.DELIVERY, "clock": T.TIME, "at_time": T.TIME,
+                  "speak": T.OWNER_SPEAKS, "owner_talks": T.OWNER_SPEAKS, "mode": T.MODE_CHANGE}
+
+
+def _tidy_args(args: Dict[str, Any], infer: bool = True) -> Dict[str, Any]:
+    """Close variants the bigger models write ("remind", "arrive_home", "outlets": "both"),
+    and an action left out when the other fields make it plain (Mac: refused a reminder)."""
+    args = dict(args)
+    for key, alias, known in (("action", _ACTION_ALIAS, T.ACTIONS), ("trigger", _TRIGGER_ALIAS, T.TRIGGERS)):
+        v = args.get(key)
+        if isinstance(v, str):
+            v = v.strip().lower().replace(" ", "_")
+            args[key] = v if v in known else alias.get(v, v)
+    if isinstance(args.get("outlets"), str):
+        args["outlets"] = [o.strip() for o in re.split(r"[,\s]+and\s+|,\s*", args["outlets"]) if o.strip()]
+    if args.get("night") in ("true", "false"):
+        args["night"] = args["night"] == "true"
+    if infer and not args.get("action"):
+        if args.get("to_mode"):
+            args["action"] = T.SET_MODE
+        elif args.get("outlets"):
+            args["action"] = T.LIGHTS_ON
+        elif args.get("text") and args.get("trigger") in (T.DELIVERY, T.DOORBELL):
+            args["action"] = T.SAY_VISITOR
+        elif args.get("text"):
+            args["action"] = T.SAY_OWNER
+    return args
 
 
 def summaries(tasks: List[Dict[str, Any]]) -> str:
@@ -355,6 +417,16 @@ def check(name: str, args: Dict[str, Any], text: str, tasks: List[Dict[str, Any]
         changed = T.normalize(changed)
         if not problem and not T.check_task(changed):
             return TaskPlan(UPDATE, task=changed, task_id=old["id"])
+    swap = _MAKE_IT.search(text)
+    if name == "remove_task" and swap and tasks:
+        # "Cancel that leaving it by the side door, make it the main door" (owner, Mac):
+        # a change, not only a removal.
+        old = by_id.get(str(args.get("task_id") or "")) or _named(text, tasks) or last
+        if old.get("text"):
+            changed, problem = check_words({**old, "text": swap.group(1)}, text, old=old)
+            changed = T.normalize(changed)
+            if not problem and not T.check_task(changed):
+                return TaskPlan(UPDATE, task=changed, task_id=old["id"])
     if name == "remove_task":
         if not _CANCEL.search(text):
             return TaskPlan(note="nothing in the words cancels a task")     # review
@@ -369,6 +441,13 @@ def check(name: str, args: Dict[str, Any], text: str, tasks: List[Dict[str, Any]
     raw_trigger, raw_action = args.get("trigger"), args.get("action")
     correction = (name == "remember" and last is not None and _CORRECTION.search(text)
                   and raw_trigger in (None, "", last["trigger"]) and raw_action in (None, "", last["action"]))
+    # "Change the delivery spot to the main door" stored as new: only part of the words of
+    # the task for the same moment, so it changes that task.
+    same = next((t for t in reversed(tasks) if t["trigger"] == raw_trigger and t["action"] == raw_action
+                 and t.get("text")), None) if name == "remember" else None
+    if same is not None and isinstance(args.get("text"), str) and _partial(
+            args["text"].strip(), same["text"], raw_action):
+        correction, args = True, {**args, "task_id": same["id"]}
     if name == "update_task" or correction:
         old = by_id.get(str(args.get("task_id") or "")) or last
         if old is None:
@@ -409,8 +488,18 @@ def _replacement(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+_MAKE_IT = re.compile(r"\b(?:make (?:it|that)|change (?:it|that) to|instead,?)\s+(.+?)[.!]?$", re.I)
+_VAGUE = {"cancel", "that", "thing", "this", "task", "tasks", "one", "remove", "delete", "forget", "please",
+          "actually", "instead", "reminder", "instruction", "the"}
+
+
 def _named(text: str, tasks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """The task the owner's words point at ("the delivery one", "the reminder")."""
+    """The task the owner's words point at ("the delivery one", "the reminder", "the side
+    door thing": the words of the task itself)."""
+    words = {w[:4] for w in re.findall(r"[a-z]+", text.lower()) if len(w) >= 4 and w not in _VAGUE}
+    for t in reversed(tasks):
+        if words & {w[:4] for w in re.findall(r"[a-z]+", str(t.get("text") or "").lower()) if len(w) >= 4}:
+            return t
     for t in reversed(tasks):
         if t["trigger"] == T.DELIVERY and re.search(_TRIGGER_WORDS[T.DELIVERY], text, re.I):
             return t

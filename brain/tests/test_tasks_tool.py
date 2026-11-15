@@ -111,17 +111,27 @@ class Routing(unittest.TestCase):
 
     def test_now_stays_now(self):
         """Review: a time aside, "actually" or a question about the past must not become a task."""
-        for text, want in (("Turn on the porch light.", owner.LIGHT), ("I'm heading out.", owner.ARM_AWAY),
-                           ("I'm heading out, back at 6 pm.", owner.ARM_AWAY),
-                           ("Goodnight, wake me at 7 am.", owner.ARM_NIGHT),
-                           ("Actually, I'm heading out.", owner.ARM_AWAY),
+        for text, want in (("Turn on the porch light.", owner.LIGHT),
                            ("Actually, turn the porch light off.", owner.LIGHT),
                            ("Instead, turn on the lamp.", owner.LIGHT),
                            ("What happened at 2 pm?", owner.SUMMARY),
                            ("Who's at the door?", owner.LOOK)):
             self.assertEqual(owner.strong(text, tasks=True, has_tasks=True), want, text)
+        # Arming is never a keyword shortcut (owner, Mac); the model decides, these words back it.
+        for text, want in (("I'm heading out.", Mode.AWAY), ("I'm heading out, back at 6 pm.", Mode.AWAY),
+                           ("Goodnight, wake me at 7 am.", Mode.NIGHT), ("Actually, I'm heading out.", Mode.AWAY)):
+            self.assertIsNone(owner.strong(text, tasks=True, has_tasks=True), text)
+            self.assertEqual(owner.clearly_arming(text), want, text)
         for text in ("Did anyone ring at 3 pm?", "Remind me what happened today."):
             self.assertNotEqual(owner.strong(text, tasks=True, has_tasks=True), owner.TASK, text)
+
+    def test_never_arms_on_leaving_it(self):
+        """Owner, Mac: this armed the house. Now it's a change of the delivery task."""
+        for text in ("Actually cancel that leaving it by the side door, make it the main door.",
+                     "actually make that the main door", "change the delivery spot to the main door",
+                     "cancel the side door thing"):
+            self.assertIsNone(owner.clearly_arming(text), text)
+            self.assertEqual(owner.strong(text, tasks=True, has_tasks=True), owner.TASK, text)
 
     def test_look_up_is_not_a_look(self):
         self.assertFalse(owner.backed(owner.LOOK, "Can you look up the news for me?"))
@@ -209,6 +219,36 @@ class ReviewFixes(unittest.TestCase):
         p = planner.check("remember", {"trigger": "delivery", "action": "say_owner", "text": "text me"},
                           "Text me when a package arrives.", [])
         self.assertTrue(p.note.startswith("out of scope"))
+
+
+class MacModels(unittest.TestCase):
+    """Owner, Mac: the 9B (no-think prompt) refused "remind me to take out the trash when I
+    get home". Calls written as text, close variants and a missing action now hold."""
+
+    SAID = "Hey Faraday, remind me to take out the trash when I get home."
+
+    def test_calls_written_as_text(self):
+        for reply in ({"content": '{"name": "remember", "arguments": {"trigger": "home", "action": "say_owner", '
+                                  '"text": "take out the trash"}}'},
+                      {"content": "<tool_call>\n<function=remember>\n<parameter=trigger>\nhome\n</parameter>\n"
+                                  "<parameter=text>\ntake out the trash\n</parameter>\n</function>\n</tool_call>"},
+                      tool_calls(("remember", {"trigger": "arrive_home", "action": "remind",
+                                               "text": "take out the trash"}))):
+            name, args = planner._call(reply)
+            p = planner.check(name, args, self.SAID, [])
+            self.assertEqual((p.op, p.task["trigger"], p.task["action"]), (planner.REMEMBER, T.HOME, T.SAY_OWNER),
+                             reply)
+
+    def test_the_owners_corrections(self):
+        side = _task(trigger="delivery", action="say_visitor", text="leave it by the side door")
+        p = planner.check("remove_task", {"task_id": "task_1"},
+                          "Actually cancel that leaving it by the side door, make it the main door.", [side])
+        self.assertEqual((p.op, p.task["text"]), (planner.UPDATE, "leave it by the main door"))
+        p = planner.check("remember", {"trigger": "delivery", "action": "say_visitor", "text": "the main door"},
+                          "Change the delivery spot to the main door.", [side])
+        self.assertEqual((p.op, p.task["text"]), (planner.UPDATE, "leave it by the main door"))
+        p = planner.check("remove_task", {"task_id": "nope"}, "Cancel the side door thing.", [side])
+        self.assertEqual((p.op, p.task_id), (planner.REMOVE, "task_1"))
 
 
 class Words(unittest.TestCase):

@@ -81,6 +81,22 @@ _AUDIENCE_SHOULD = re.compile(r"\b(?:couriers?|deliver\w*|visitors?|guests?|driv
                               r"[^.?!]*\b(?:should|must|needs? to|has to)\b", re.I)
 _CORRECTION_START = re.compile(_WAKE_RX + r"(?:actually|instead|change (?:that|it)|make (?:that|it))\b[\s,]*", re.I)
 _NOW_INTENTS = (ARM_AWAY, ARM_NIGHT, LIGHT, LOOK, SUMMARY, PASSPHRASE)
+_CHANGE = re.compile(r"\b(?:change|move|update|cancel|forget|remove|delete|scrap|swap|replace)\b", re.I)
+_TASK_THING = re.compile(r"\b(?:deliver\w*|door|gate|spot|place|reminders?|tasks?|instructions?|thing|package|parcel|"
+                         r"porch light|lamp|lights?|message)\b", re.I)
+# Words that make a request about a task or the visitor's words, never about leaving now.
+_NOT_LEAVING = re.compile(r"\b(?:cancel|forget|remove|delete|make (?:that|it)|change|instead|door|gate|deliver\w*|"
+                          r"packages?|parcels?|couriers?|reminders?|tasks?|instructions?|spot|tell (?:them|him|her)|"
+                          r"ask (?:them|him|her))\b", re.I)
+
+
+def clearly_arming(text: str) -> Optional[str]:
+    """'away' or 'night' only when the request is plainly about leaving or going to bed now
+    (owner, Mac: "cancel that leaving it by the side door" armed the house). Never a
+    shortcut on its own: the model must pick arming too (OwnerRouter._check)."""
+    if _NEGATION.search(text) or _NOT_LEAVING.search(text):
+        return None
+    return fb.arm_intent(text)
 
 
 def is_task(text: str, has_tasks: bool = False) -> bool:
@@ -92,10 +108,13 @@ def is_task(text: str, has_tasks: bool = False) -> bool:
     m = _CORRECTION_START.match(text)
     if m:
         rest = text[m.end():]
-        if strong(rest) in _NOW_INTENTS and not (_TIME_WORDS.search(rest) or _EVENT_CLAUSE.search(rest)):
+        now = strong(rest) in _NOW_INTENTS or (clearly_arming(rest) is not None)
+        if now and not (_TIME_WORDS.search(rest) or _EVENT_CLAUSE.search(rest)):
             return False                  # "Actually, I'm heading out", "Make it night mode"
         if has_tasks:
             return True                   # "Actually, make that the side door"
+    if has_tasks and _CHANGE.search(text) and _TASK_THING.search(text):
+        return True                       # "change the delivery spot to the main door", "cancel the side door thing"
     if _EVENT_CLAUSE.search(text) or _AUDIENCE_SHOULD.search(text):
         return True
     t = _TIME_WORDS.search(text)
@@ -275,9 +294,8 @@ def strong(text: str, tasks: bool = False, has_tasks: bool = False) -> Optional[
         return PASSPHRASE
     if fb._LIGHT.search(text):
         return LIGHT
-    arm = fb.arm_intent(text)
-    if arm is not None and not _NEGATION.search(text):
-        return ARM_AWAY if arm == Mode.AWAY else ARM_NIGHT
+    # No keyword arming (owner, Mac: "cancel that leaving it by the side door" armed the
+    # house). Arming comes only from the model, backed by plainly leaving or bedtime words.
     if fb.is_summary_request(text) or _SUMMARY_STRONG.search(text):
         return SUMMARY
     return None
@@ -288,7 +306,7 @@ def backed(intent: str, text: str) -> bool:
     it needs the plain words for it ("heading out", "goodnight") and no "don't"."""
     if intent in (ARM_AWAY, ARM_NIGHT):
         want = Mode.AWAY if intent == ARM_AWAY else Mode.NIGHT
-        return fb.arm_intent(text) == want and not _NEGATION.search(text)
+        return clearly_arming(text) == want
     if intent == ADD_RULE:
         return bool(_WEAK[ADD_RULE].search(text) and _RULE_EVENT.search(text))
     rx = _WEAK.get(intent)
@@ -303,6 +321,8 @@ class OwnerRouter:
         # one standing-task intent, read by the smart Bonsai (brain/tasks.py).
         self.tasks_mode = False
         self.has_tasks: Callable[[], bool] = lambda: False   # "actually ..." is a correction only then
+        # The smart Bonsai (9B on the Mac) must agree before the house arms (owner, Mac).
+        self.confirm_client: Optional[Any] = None
 
     def route(self, text: str, extract: bool = True) -> Route:
         """extract=False (while armed, where nothing is stored anyway): never ask the 2B
@@ -321,6 +341,18 @@ class OwnerRouter:
                 failed = True
             elapsed = time.perf_counter() - started
         intent, note = self._check(text, clear, model_intent)
+        if intent in (ARM_AWAY, ARM_NIGHT) and self.confirm_client is not None:
+            started = time.perf_counter()
+            try:
+                second, _ = parse(self.confirm_client.chat(
+                    [{"role": "system", "content": SYSTEM_PROMPT},
+                     {"role": "user", "content": f'Owner said: "{text}"'}], [TOOL]))
+            except Exception as e:
+                self.log(f"[owner] the smart model's check failed: {e}")
+                second = None
+            elapsed = (elapsed or 0.0) + (time.perf_counter() - started)
+            if second != intent:
+                intent, note = UNCLEAR, f"the smart model said {second}, not {intent}: not arming"
         if model_intent is not None:
             via = "bonsai" if intent == model_intent else "code"
         r = Route(intent, via, model_intent, elapsed_s=elapsed, note=note)

@@ -395,6 +395,7 @@ INSTRUCTION_CASES = [
 _DELIVERY_MAIN = {"trigger": "delivery", "action": "say_visitor", "text": "use the main door"}
 _DELIVERY_SIDE = {"trigger": "delivery", "action": "say_visitor", "text": "leave the package by the side door"}
 _TRASH = {"trigger": "home", "action": "say_owner", "text": "take out the trash"}
+_DELIVERY_LEAVE = {"trigger": "delivery", "action": "say_visitor", "text": "leave it by the side door"}
 TASK_CASES = [
     ("k_home", "Remind me to take out the trash when I get home.", [], ("home", "say_owner", ["trash"])),
     ("k_home_back", "When I get back, remind me to call the plumber.", [], ("home", "say_owner", ["plumber"])),
@@ -415,6 +416,20 @@ TASK_CASES = [
     ("k_replace", "Actually, cancel the instruction before and tell the delivery man to leave the package by the "
                   "main door.", [_DELIVERY_SIDE], ("delivery", "say_visitor", ["main door"])),
     ("k_list", "What tasks do I have?", [_TRASH], ("list",)),
+    # The owner's exact phrases (Mac bug report), as speech comes in, no punctuation.
+    ("k_exact_home", "remind me to take out the trash when I get home", [], ("home", "say_owner", ["trash"])),
+    ("k_exact_delivery", "if a delivery comes, tell them to use the main door", [],
+     ("delivery", "say_visitor", ["main door"])),
+    ("k_exact_ring", "whenever someone rings at night turn on both lights", [],
+     ("doorbell", "lights_on", ["porch_light", "living_room_lamp", "night"])),
+    ("k_exact_clock", "at 9 PM switch to night mode", [], ("time", "set_mode", ["21:00", "night"])),
+    ("k_exact_update", "actually make that the side door", [_DELIVERY_MAIN], ("delivery", "say_visitor", ["side door"])),
+    ("k_leaving_it", "actually cancel that leaving it by the side door, make it the main door", [_DELIVERY_LEAVE],
+     ("delivery", "say_visitor", ["main door"])),
+    ("k_make_main", "actually make that the main door", [_DELIVERY_LEAVE], ("delivery", "say_visitor", ["main door"])),
+    ("k_spot_main", "change the delivery spot to the main door", [_DELIVERY_LEAVE],
+     ("delivery", "say_visitor", ["main door"])),
+    ("k_cancel_thing", "cancel the side door thing", [_DELIVERY_LEAVE], ("none", "delivery")),
     ("k_weather", "What's the weather tomorrow?", [], ("unclear",)),
     ("k_news", "Can you look up the news for me?", [], ("unclear",)),
     ("k_text", "Text my sister that I'm running late.", [], ("unclear",)),
@@ -439,6 +454,7 @@ def _task_case(text: str, before: List[Dict[str, Any]]):
             for t in before:
                 store.add(dict(t))
             router.tasks_mode = True
+            router.has_tasks = lambda: bool(store.all())      # as the app wires it
             r = router.route(text)
             plan = None
             if r.intent == owner.TASK:
@@ -460,6 +476,8 @@ def _task_ok(run: "TaskRun", want: Tuple[Any, ...]) -> bool:
         return run.route.intent == owner.UNCLEAR and bool(run.route.topic)
     if want == ("list",):
         return run.plan is not None and run.plan.op == "list"
+    if want[0] == "none":                      # removed: no task for that moment is left
+        return run.route.intent == owner.TASK and not any(t["trigger"] == want[1] for t in run.tasks)
     trigger, action, words = want
     for t in run.tasks:
         blob = " ".join([str(t.get("text") or ""), " ".join(t.get("outlets") or []), str(t.get("time") or ""),

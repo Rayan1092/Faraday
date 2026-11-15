@@ -24,7 +24,9 @@ def _outlet(on: bool, outlet: str) -> RawItem:
             "args": {"outlet": outlet}}
 
 
-_LEAVING = re.compile(r"\b(heading out|leaving|going out|i'?m off(?! to (bed|sleep))|away mode|bye)\b", re.I)
+# "leaving it by the side door" is about a package, not the owner going out (owner, Mac).
+_LEAVING = re.compile(r"\b(heading out|leaving(?!\s+(?:it|them|the|a|an|this|that|my|your|our|packages?|parcels?|"
+                      r"boxes|box|stuff|things?)\b)|going out|i'?m off(?! to (bed|sleep))|away mode|bye)\b", re.I)
 _BED = re.compile(r"\b(good ?night|night night|(going|heading|off|go) to (bed|sleep)|night mode|bed ?time|"
                   r"turning in|time for bed)\b", re.I)
 _SUMMARY = re.compile(r"\b(what happened|while i was (out|away)|summar\w*|any (news|visitors))\b", re.I)

@@ -87,7 +87,10 @@ def build_state(entries: Iterable[Entry], mode: str, alert: str,
                 notice = {"time": clock, "text": "Doorbell at night"}
                 last_night_bell = last_bell
         elif typ == EventType.SPEECH_HEARD:
-            heard = {"time": clock, "who": "heard", "text": str(info.get("text", ""))}
+            # Both sides, as live captions (owner, Mac): the owner after "Hey Faraday", the
+            # visitor, and Faraday below. The log already redacted the passphrase.
+            heard = {"time": clock, "who": "heard", "text": str(info.get("text", "")),
+                     "speaker": {"owner": "owner", "visitor": "visitor"}.get(str(info.get("channel")), "")}
             if info.get("owner_voice") is not None:      # NV's voice check, display only
                 heard["voice"] = "owner" if info["owner_voice"] else "other"
             talk.append(heard)
