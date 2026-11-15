@@ -21,7 +21,7 @@ Owner's list after the Mac test, item 5: "Rewrite every fixed spoken line in one
 - "Understood. If a delivery comes, I'll ask them to ..."
 - "Understood. I've removed the delivery instruction." / "There's no instruction to remove."
 - "I'm sorry, I can't help with that."
-- "Please leave the package by the front door. Thank you." (default drop-off)
+- "The system is armed. I can't make changes right now." (armed, anything but the passphrase)
 - "No one is there." (label words)
 - the light lines ("The porch light is on.")
 - code's confrontation fallback: "I can see ... Please leave now."
@@ -30,6 +30,13 @@ Owner's list after the Mac test, item 5: "Rewrite every fixed spoken line in one
 
 **Prompts:** Bonsai's own lines are now asked for as "a calm, professional home security assistant: one short sentence, never jokes" (both prompt profiles).
 
-**NV's voice cache:** `integration/fixed_lines.py` finds all 35 lines in `FIXED_LINES` and none of the old ones. The startup pre-render renders them, keyed by text. NV's `test_dells_fixed_lines_are_found` names three old lines, so a patch is ready: `docs/team/patches/nv-test-tts-final-lines.patch` (16/16 pass). PLAN Q35.
+**NV's voice cache:** `integration/fixed_lines.py` finds all 31 lines in `FIXED_LINES` and none of the old ones. The startup pre-render renders them, keyed by text. NV's `test_dells_fixed_lines_are_found` names three old lines, so a patch is ready: `docs/team/patches/nv-test-tts-final-lines.patch` (16/16 pass). PLAN Q37.
 
-**Tests:** about 10 tests switched to the final wording. My suite is green; NV's one pinned test is pending their patch.
+**Review fixes:**
+- No armed reply mentions a passphrase. The armed "no changes" line no longer says "Say the passphrase", and a test checks every armed reply.
+- A visitor's message is saved when Bonsai says "I'll pass that along", not only when the reply contains "message".
+- A visitor asking to disarm while at Home gets "I'm sorry, I can't help with that.", not "The system is already disarmed."
+- FIXED_LINES now holds only what the code says, so the delivery and "leave a message?" lines are gone. A test keeps the list and the code in step, and another checks the list stays literal for NV's scanner.
+- The summary's "Nothing happened while you were out." now comes from `lines.py`.
+
+**Tests:** about 10 tests switched to the final wording, plus `brain/tests/test_lines.py`. Full suite: 635 tests. The only failure is NV's pinned test, which is waiting on their patch.

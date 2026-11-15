@@ -21,16 +21,13 @@ ALREADY_HOME = "The system is already disarmed."
 
 # ---- visitors --------------------------------------------------------------------
 MESSAGE_SAVED = "Thank you. I'll pass that along."
-OFFER_MESSAGE = "Would you like to leave a message?"
-DELIVERY_LINE = "Please leave the package by the front door. Thank you."
 CANT_HELP = "I'm sorry, I can't help with that."
 CANT_DISARM = "I'm sorry, I can't do that. Only the owner can disarm the system."
 
 # ---- the owner ("Hey Faraday, ...") ----------------------------------------------
 SORRY = "Sorry, I didn't catch that."
 REPEAT = "Sorry, I missed the end of that. Please say it again."
-ARMED_NO_CHANGE = "The system is armed. Say the passphrase to make changes."
-SAY_PASSPHRASE = "Please say the passphrase to disarm."
+ARMED_NO_CHANGE = "The system is armed. I can't make changes right now."   # never hints a passphrase
 RULE_SAVED = "Understood. The rule is saved."
 LOOKING = "Checking the camera."
 CANT_SEE = "I can't see the door right now."
@@ -86,14 +83,11 @@ FIXED_LINES = [
     "Welcome home. The system is disarmed.",
     "The system is already disarmed.",
     "Thank you. I'll pass that along.",
-    "Would you like to leave a message?",
-    "Please leave the package by the front door. Thank you.",
     "I'm sorry, I can't help with that.",
     "I'm sorry, I can't do that. Only the owner can disarm the system.",
     "Sorry, I didn't catch that.",
     "Sorry, I missed the end of that. Please say it again.",
-    "The system is armed. Say the passphrase to make changes.",
-    "Please say the passphrase to disarm.",
+    "The system is armed. I can't make changes right now.",
     "Understood. The rule is saved.",
     "Checking the camera.",
     "I can't see the door right now.",
@@ -111,7 +105,6 @@ FIXED_LINES = [
     "The living room lamp is off.",
     "The spare outlet is on.",
     "The spare outlet is off.",
-    "Please leave the property now.",
 ]
 
 
@@ -121,13 +114,13 @@ def all_lines() -> Dict[str, str]:
     out.update(DOORBELL_GREETING=DOORBELL_GREETING, ANNOUNCE_DOORBELL=ANNOUNCE_DOORBELL,
                WARNING_LINE=WARNING_LINE, ALARM_LINE=ALARM_LINE)
     for cat, text in LABEL_WORDS.items():
-        out[f"LABEL_{cat.upper()}"] = text
+        if text:                       # "unknown" adds no words
+            out[f"LABEL_{cat.upper()}"] = text
     for outlet in OUTLET_NAMES:
         for on in (True, False):
             out[f"LIGHT_{outlet.upper()}_{'ON' if on else 'OFF'}"] = light_line(outlet, on)
     for audience in AUDIENCE_NAMES:
         out[f"FORGOT_{audience.upper()}"] = forgot_line(audience)
-    out["CONFRONT_NO_DESCRIPTION"] = confront_line("")
     return out
 
 

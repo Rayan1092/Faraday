@@ -147,7 +147,9 @@ class Brain:
             if matched or REDACTED in text:
                 return Decision([], "code")  # passphrase handled by the mode code path
             if is_disarm_request(text):
-                reply = fb.CANT_DISARM if mode in Mode.ARMED else spoken.ALREADY_HOME
+                reply = (fb.CANT_DISARM if mode in Mode.ARMED
+                         else fb.CANT_HELP if channel == SpeechChannel.VISITOR   # a visitor at Home
+                         else spoken.ALREADY_HOME)
                 return self._code(event, mode, allowed, [fb._speak(reply)])
             if mode == Mode.HOME and fb.is_summary_request(text):
                 # Skip one model round trip: the summary itself is Bonsai's job (summarize()).
@@ -371,8 +373,7 @@ class Brain:
                 or any(a.type == ActionType.SAVE_MESSAGE for a in actions)):
             return actions
         text = str(event.data.get("text", ""))[:500]
-        promised = any(a.type == ActionType.SPEAK and "message" in a.args["text"].lower()
-                       for a in actions)
+        promised = any(a.type == ActionType.SPEAK and _PROMISE.search(a.args["text"]) for a in actions)
         last = _last_said(recent).strip()
         # an offer is a question about a message ("Would you like to leave a message?"),
         # not a confirmation ("Thank you. I'll pass that along.")
@@ -432,6 +433,8 @@ def _mode_reply(event: Event) -> List[RawItem]:
     return [fb._speak(text)] if text else []
 
 
+# Bonsai promising to pass something on ("I'll pass that along", "I'll take your message").
+_PROMISE = re.compile(r"\b(message|pass (it|that|this|them) (on|along)|let (the owner|them|him|her) know)\b", re.I)
 _DECLINE = re.compile(r"^\s*(no|nope|nah|not now|no thanks?|no thank you)\b[\s,.!]*(thanks?|thank you)?[\s.!]*$", re.I)
 
 

@@ -10,8 +10,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from shared import ActionType, Event, EventType, Mode
 
-from .lines import (AWAY_ON, CANT_DISARM, CANT_HELP, DELIVERY_LINE, MESSAGE_SAVED,  # noqa: F401
-                    NIGHT_ON, OFFER_MESSAGE, RULE_SAVED)
+from .lines import AWAY_ON, CANT_DISARM, CANT_HELP, MESSAGE_SAVED, NIGHT_ON, RULE_SAVED  # noqa: F401
 
 RawItem = Dict[str, Any]
 
