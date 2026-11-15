@@ -49,6 +49,7 @@ class FakeDevice:
         self.charge_min_off_s = 0.0
         self._rx_off_at = time.monotonic()
         self.tx_time_s = tx_time_s            # how long a tx_from_file takes (real: ~0.9 s)
+        self.led_time_s = 0.0                 # how long each `led` command takes (a busy machine)
         self.charge_state = "charged"
         self.charge_writes = 0
         self._next_poll = time.monotonic() + charge_poll_s
@@ -180,6 +181,8 @@ class FakeDevice:
                 self._say(f"subghz tx_from_file: Error open file {parts[2]}\r\n".encode())
         elif parts[:1] == ["led"] and len(parts) == 3 and parts[1] in "rgb":
             self.rgb["rgb".index(parts[1])] = int(parts[2])
+            self._say(PROMPT, self.led_time_s)
+            return
         elif parts[:1] == ["vibro"] and len(parts) == 2:
             self.vibro = parts[1] == "1"
             self.vibro_count += self.vibro

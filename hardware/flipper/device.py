@@ -383,8 +383,13 @@ class Flipper:
             paused = time.monotonic() - paused_at
             level = logging.DEBUG if all(c.quiet for c in batch) else logging.INFO
             log.log(level, "rx resumed after %.2fs pause", paused)
-            if paused >= LONG_PAUSE_S or not all(c.led_only for c in batch):
-                self._settle_led()      # long pause (send, buzz): charging resumed meanwhile
+            # Long pause (send, buzz): charging resumed meanwhile. A re-send already
+            # pending (e.g. from the connect) restarts its count too: the firmware
+            # rewrites only after rx has been running a while, so a red re-send
+            # that comes too soon after this batch would be wiped right after.
+            if (paused >= LONG_PAUSE_S or not all(c.led_only for c in batch)
+                    or self._refresh_due is not None):
+                self._settle_led()
         else:
             log.error("rx did not restart; reconnecting")
             self.conn.close()

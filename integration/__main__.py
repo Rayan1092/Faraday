@@ -80,9 +80,13 @@ def build_app(args: argparse.Namespace, settings) -> App:
     if app.board is not None:
         # Hooks for Dell's dashboard (PLAN Q26). listen_hook opens one window
         # (Listen button); talk_hook is the old Talk button, same thing now.
+        # listening_hook drives the mic-open indicator exactly (True only while a
+        # visitor/Listen window is recording).
         if app.voice is not None:
-            app.board.listen_hook = app.voice.listen_once
-            app.board.talk_hook = app.voice.listen_once
+            voice = app.voice
+            app.board.listen_hook = voice.listen_once
+            app.board.talk_hook = voice.listen_once
+            app.board.listening_hook = lambda: voice.listening
         app.board.control_hook = app.control
     if feed is not None:
         app.extras.append(feed)

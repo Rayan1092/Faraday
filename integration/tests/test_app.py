@@ -17,6 +17,7 @@ from pathlib import Path
 
 from shared import Mode
 
+from hardware.flipper.device import LONG_PAUSE_S
 from hardware.flipper.fake import FakeFlipper
 from hardware.settings import CONFIG_DIR
 from integration.app import App
@@ -52,7 +53,11 @@ class Flow(unittest.TestCase):
         # The fake models the firmware's charge indicator rewriting red/green
         # after every long rx pause (startup, outlet send, buzz).
         self.fl = FakeFlipper(s, charge_poll_s=0.2, tx_time_s=0.5)
-        self.fl.device.charge_min_off_s = 0.3
+        # The fake notices an rx pause only from LONG_PAUSE_S: exactly the pauses
+        # after which the driver re-sends red. With 0.3 here, an LED re-send slowed
+        # to 0.3-0.6 s by a busy machine was noticed but (by design) not re-sent,
+        # so the reconnect test failed about 1 run in 13 in the full suite.
+        self.fl.device.charge_min_off_s = LONG_PAUSE_S
         self.fl.device.rgb = list(LEFTOVER)
         self.app = App(s, self.fl, camera=StandInCamera(), use_llm=False, mode=Mode.HOME,
                        event_log=EventLog(self.tmp / "events.jsonl", s["security"]["passphrase"]),
@@ -235,6 +240,43 @@ class Flow(unittest.TestCase):
         self.wave()
         self.assertTrue(wait_until(lambda: any("FAILED" in s for s in self.said)))
         self.assertTrue(wait_until(lambda: self.fl.device.rx))
+
+
+class BusyMachine(unittest.TestCase):
+    """Reconnect during an alarm when every `led` command is slow, as on a loaded
+    machine. This used to leave the LED off about 1 full-suite run in 13: the
+    reconnect's own red batch kept rx paused, so the scheduled re-send came
+    before the firmware's rewrite and the rewrite then wiped it."""
+
+    def test_reconnect_during_alarm_restores_red_with_slow_led(self):
+        from shared import Event
+        s = json.loads((CONFIG_DIR / "settings.example.json").read_text(encoding="utf-8"))
+        s["flipper"].update(burst_gap_s=0.3, led_refresh_s=0, led_settle_s=Flow.led_settle_s)
+        fl = FakeFlipper(s, charge_poll_s=0.2)
+        fl.device.charge_min_off_s = LONG_PAUSE_S
+        fl.start()
+        try:
+            self.assertTrue(fl.connected.wait(5))
+            fl.apply_event(Event("alert_changed", "modes",
+                                 {"level": "alarm", "previous": "warning", "reason": ""}))
+            self.assertTrue(wait_until(lambda: fl.device.vibro_count >= 3 and fl.device.rx
+                                       and fl._refresh_due is None and fl._cmds.empty()))
+            for led_time_s in (0.12, 0.18):
+                with self.subTest(led_time_s=led_time_s):
+                    fl.device.led_time_s = led_time_s
+                    fl.device.unplug()
+                    self.assertTrue(wait_until(lambda: not fl.connected.is_set()))
+                    fl.device.rgb = list(OFF)
+                    fl.device.plug()
+                    self.assertTrue(wait_until(lambda: fl.connected.is_set()))
+                    # settled: listening, nothing queued or scheduled, firmware has rewritten
+                    self.assertTrue(wait_until(lambda: fl.device.rx and fl._cmds.empty()
+                                               and fl._refresh_due is None
+                                               and fl.device.charge_state == "not_charging"))
+                    time.sleep(1.0)
+                    self.assertEqual(fl.device.rgb, RED)
+        finally:
+            fl.stop()
 
 
 class WithoutLedSettle(unittest.TestCase):

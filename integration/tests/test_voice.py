@@ -148,6 +148,48 @@ class Windows(Base):
         self.assertEqual(self.got[0].data["text"], "Hi, I have a package for Sam.")
         self.assertIn(b'name="model"', srv.uploads[0]["body"])
 
+    def held_voice(self, wake=None):
+        """A Voice whose mic stream never ends by itself (until cancel)."""
+        class Held(FakeStream):
+            def start(self):
+                pass
+        quiet = self.quiet
+        rec = Recorder(self.gate, audio_dir=self.dir / "out",
+                       stream_factory=lambda **kw: Held(quiet, **kw))
+        return Voice(rec, FakeSTT(), self.got.append, out=self.said.append,
+                     listen={"max_s": 6, "silence_s": 0.8, "no_speech_s": 1.5},
+                     wake={"enabled": True, "window_s": 3, **(wake or {})})
+
+    def test_listening_is_true_only_while_the_window_records(self):
+        """board.listening_hook (Dell's mic indicator) reads Voice.listening."""
+        v = self.held_voice()
+        self.assertFalse(v.listening)
+        self.gate.mute()                                   # Faraday talking: window waits
+        self.assertTrue(v.listen_once("button"))
+        time.sleep(0.3)
+        self.assertFalse(v.listening)                      # asked for, but the mic isn't open
+        self.gate.unmute()
+        self.assertTrue(wait_until(lambda: v.listening))
+        self.gate.mute()
+        self.assertFalse(v.listening)                      # muted mid-window
+        self.gate.unmute()
+        v.recorder.cancel()
+        self.assertTrue(wait_until(lambda: not v.listening))
+        self.assertTrue(wait_until(lambda: any("nobody spoke" in s for s in self.said)))
+
+    def test_wake_window_is_not_listening(self):
+        """The wake listener records all the time on the Mac: that isn't 'listening'."""
+        v = self.held_voice()
+        v.start_wake()
+        try:
+            self.assertTrue(wait_until(lambda: v.recorder.recording))
+            self.assertFalse(v.listening)
+            self.assertTrue(v.listen_once("button"))       # the visitor window takes over
+            self.assertTrue(wait_until(lambda: v.listening))
+        finally:
+            v.recorder.cancel()
+            v.stop_wake()
+
     def test_second_listen_refused_while_open(self):
         v = self.voice(FakeSTT("a", "b"), self.speech, self.speech)
         self.assertTrue(v.listen_once("button"))
@@ -287,6 +329,49 @@ class Hooks(unittest.TestCase):
         self.fl.device.wave(packets=4, gap_s=0.05)
         self.assertTrue(wait_until(lambda: "outlet1_on" in self.fl.device.tx))
         self.assertFalse(self.app.control("porch_light", True))       # already on
+
+
+class BuiltApp(unittest.TestCase):
+    """integration/__main__.build_app wires Dell's dashboard hooks (PLAN Q26)."""
+
+    def test_listening_hook_drives_api_state(self):
+        import argparse
+        import urllib.request
+        from integration.__main__ import build_app
+        tmp = Path(tempfile.mkdtemp(prefix="faraday-built-"))
+        s = json.loads((CONFIG_DIR / "settings.example.json").read_text(encoding="utf-8"))
+        s["flipper"].update(burst_gap_s=0.3, led_refresh_s=0)
+        args = argparse.Namespace(fake=True, log=str(tmp / "events.jsonl"), standin_camera=True,
+                                  print_speech=True, offline=True, mode=Mode.HOME,
+                                  no_dashboard=False, port=0, no_mic=False, no_wake=True,
+                                  no_controls=True, controls_port=None)
+        app = build_app(args, s)
+        board = app.board
+        self.assertIsNotNone(board.listening_hook)
+        self.assertIsNotNone(board.listen_hook)
+        self.assertIs(board.control_hook.__func__, App.control)
+
+        class Held(FakeStream):
+            def start(self):
+                pass
+        quiet = clip(("quiet", 1.0), path=tmp / "quiet.wav")
+        app.voice.recorder.stream_factory = lambda **kw: Held(quiet, **kw)
+        app.voice.recorder.audio_dir = tmp / "out"
+
+        def listening():
+            with urllib.request.urlopen(board.url + "api/state", timeout=5) as r:
+                return json.loads(r.read())["listening"]
+
+        app.start()
+        try:
+            self.assertIs(listening(), False)              # not null: the hook is set
+            self.assertTrue(app.voice.listen_once("button"))
+            self.assertTrue(wait_until(lambda: listening() is True))
+            app.voice.recorder.cancel()
+            self.assertTrue(wait_until(lambda: listening() is False))
+        finally:
+            app.stop()
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":
