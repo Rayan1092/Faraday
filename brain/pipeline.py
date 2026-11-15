@@ -19,6 +19,9 @@ For each incoming event, in this order:
 
 Photos the owner asks for (owner_snapshot: the dashboard Snapshot button) get their
 threat label like any photo, but nobody at the door is greeted for them.
+"Who's at the door?" (Home or Night) is answered by plain code: "Let me look.", a
+fresh photo, then its description and threat label spoken (brain/look.py), or
+"I can't see the door right now." if the camera or vision fails or is too slow.
 
 Actions and events are passed to on_action / on_event as soon as they exist,
 so integration/ can run hardware without waiting for Bonsai. One lock keeps
@@ -38,7 +41,7 @@ from modes import ModeState
 from rules import InstructionStore, RuleStore, baseline_actions, lights_off_on_disarm, merge
 from rules import instructions as owner_instructions
 
-from . import summary, threat
+from . import look, summary, threat
 from .threat import ThreatAssessor
 from .core import Brain
 from .settings import load_settings, passphrase
@@ -84,7 +87,11 @@ class Pipeline:
         self._photo_cause: Dict[str, Tuple[str, str, str]] = {}
         self._background: List[threading.Thread] = []
         self._confronted: set = set()  # photo_described ids that already got a confrontation
-        self._owner_photos: Dict[str, bool] = {}  # take_photo id the owner asked for -> speak it
+        # take_photo ids the owner asked for -> "quiet" (Snapshot), "speak" (who's at the
+        # door?), "late" (already answered "I can't see the door", drop it when it comes)
+        self._owner_photos: Dict[str, str] = {}
+        self._look_timers: Dict[str, threading.Timer] = {}
+        self.look_timeout_s = 25.0  # vision on the Mac takes a few seconds; then give up
 
     @classmethod
     def from_settings(cls, settings: Optional[Dict[str, Any]] = None, use_llm: bool = True,
@@ -136,9 +143,32 @@ class Pipeline:
         if action is None:
             action = snapshot_action(reason)
         with self.lock:
-            self._owner_photos[action.id] = speak
+            self._owner_photos[action.id] = "speak" if speak else "quiet"
             self._emit(action, Result(), [])
         return action
+
+    def _look(self, question: Event, result: Result, done: List[Action]) -> None:
+        """'Who's at the door?': say "Let me look.", take a fresh photo, and answer when
+        its description arrives (or say we can't see, if it doesn't in time)."""
+        self._emit(make_action(ActionType.SPEAK, {"text": look.LOOKING}, Source.BRAIN,
+                               caused_by=question.id), result, done)
+        photo = snapshot_action(look.LOOK_REASON, caused_by=question.id)
+        self._owner_photos[photo.id] = "speak"
+        self._emit(photo, result, done)
+        timer = threading.Timer(self.look_timeout_s, self._look_timed_out, args=(photo,))
+        timer.daemon = True
+        self._look_timers[photo.id] = timer
+        timer.start()
+
+    def _look_timed_out(self, photo: Action) -> None:
+        with self.lock:
+            self._look_timers.pop(photo.id, None)
+            if self._owner_photos.get(photo.id) != "speak":
+                return
+            self._owner_photos[photo.id] = "late"
+            self.say(f"  [look] no photo after {self.look_timeout_s:.0f}s")
+            self._emit(make_action(ActionType.SPEAK, {"text": look.CANT_SEE}, Source.BRAIN,
+                                   caused_by=photo.id), Result(), [])
 
     def wait_background(self, timeout: float = 30) -> None:
         """Wait for background Bonsai calls (the alarm confrontation). For tests and shutdown."""
@@ -202,9 +232,20 @@ class Pipeline:
             if (threat.data["category"] == ThreatCategory.SUSPICIOUS and mode in Mode.ARMED):
                 self._confront_later(event)  # early: don't wait for the alarm
             if event.caused_by in self._owner_photos:
-                self._owner_photos.pop(event.caused_by)
+                how = self._owner_photos.pop(event.caused_by)
+                timer = self._look_timers.pop(event.caused_by or "", None)
+                if timer is not None:
+                    timer.cancel()
+                if how == "speak":  # "who's at the door?": the answer, from plain code
+                    self._emit(make_action(ActionType.SPEAK,
+                                           {"text": look.look_line(event, threat.data["category"])},
+                                           Source.BRAIN, caused_by=event.id), result, done)
                 return  # the owner asked for this photo: there's no visitor to answer
 
+        if (event.type == EventType.SPEECH_HEARD and mode in (Mode.HOME, Mode.NIGHT)
+                and look.is_look_request(str(event.data.get("text", "")))):
+            self._look(event, result, done)  # the owner is in: plain code answers
+            return
         if (event.type == EventType.SPEECH_HEARD and mode == Mode.HOME
                 and self.instructions is not None and self._owner_instruction(event, result, done)):
             return  # plain code stored (or refused) it and answered
@@ -351,6 +392,7 @@ class Pipeline:
         return False
 
 
-def snapshot_action(reason: str = SNAPSHOT_REASON) -> Action:
-    """The take_photo for an owner snapshot (source dashboard)."""
-    return make_action(ActionType.TAKE_PHOTO, {"reason": reason}, Source.DASHBOARD)
+def snapshot_action(reason: str = SNAPSHOT_REASON, caused_by: Optional[str] = None) -> Action:
+    """The take_photo for a photo the owner asked for (source dashboard)."""
+    return make_action(ActionType.TAKE_PHOTO, {"reason": reason}, Source.DASHBOARD,
+                       caused_by=caused_by)

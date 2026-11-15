@@ -1,0 +1,11 @@
+# "Who's at the door?" and live captions (Dell, item 9)
+- Laptop / branch / PR: Dell / `dell/whos-at-door` / PR "who's at the door"
+- What changed:
+  - **`brain/look.py`:** spots the question ("who's at the door?", "what do you see?", "is anyone outside?") and builds the answer.
+  - **Pipeline, Home or Night only** (while away the speaker is a visitor): plain code says "Let me look.", then takes a fresh photo (`take_photo`, source dashboard, `caused_by` the question). When its `photo_described` arrives, it speaks the 9B vision description plus the threat label in words ("It looks like a delivery." / "This looks suspicious." / "Nobody is there."). No Bonsai call and no visitor greeting.
+  - **Failures:** if the camera or vision failed (NV sends an empty `photo_path` or `source: camera`), or nothing arrives within `look_timeout_s` (25 s), it says "I can't see the door right now." A photo that comes after that is dropped quietly.
+  - **Live captions:** a big-text "Live captions" card on the Controls page with everything heard and said at the door. It follows along unless scrolled up, and has `aria-live`. The main dashboard's Heard & Said already shows the same lines live. Controls layout: camera, talk, captions, lights on a phone; two columns on a laptop.
+  - **Docs:** brain/README, PLAN mode notes, dashboard/README.
+- How it was tested: `python -m unittest discover` passes. 11 new tests in `brain/tests/test_look.py`: phrasings, answer wording, camera and vision failure, cutting long descriptions, the full pipeline flow with no Bonsai call, Night, not while Away, the timeout plus a late photo, the answer cancelling the timer, and the captions card. Checked in the offline sim: "Who is at the door?" → "Let me look." → "A person in a dark jacket holding a cardboard box at the front door. It looks like a delivery." Screenshots at 390 px and 1280 px. The words come from plain code and the label is already benched (`t_*` cases), so there's no new bench case.
+- For NV: nothing to change. The camera worker's existing failure events (`NO_CAMERA` / `NO_VISION`) are what trigger "I can't see the door right now."
+- Next: item 10 (docs).

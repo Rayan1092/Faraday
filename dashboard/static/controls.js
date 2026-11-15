@@ -15,6 +15,7 @@
   const H = { "X-Faraday": "1" };
   let controlsPort = null;
   let state = null;
+  let lastVersion;
 
   function el(tag, cls, text) {
     const node = document.createElement(tag);
@@ -51,6 +52,7 @@
         document.body.dataset.alert = s.alert;
         $("status-text").textContent = cap(s.mode) + " · " + (ALERT_TEXT[s.alert] || cap(s.alert));
         renderLights(s.lights, s.control_available);
+        if (s.version !== lastVersion) { lastVersion = s.version; renderCaptions(s.talk || []); }
         checkSnapshot(s.photo);
         if (controlsPort === null && s.controls_port) {
           controlsPort = s.controls_port;
@@ -59,6 +61,23 @@
         }
       })
       .catch(() => { $("status-text").textContent = "App not responding"; });
+  }
+
+  // ---- live captions: everything heard and said at the door ----------------------
+
+  function renderCaptions(talk) {
+    const list = $("captions");
+    const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+    list.replaceChildren();
+    if (!talk.length) list.append(el("li", "empty", "Nothing said at the door yet."));
+    for (const t of talk) {
+      const li = el("li", t.who);
+      const who = el("div", "who", t.who === "heard" ? "Heard" : "Faraday");
+      who.append(el("time", "", t.time));
+      li.append(who, el("div", "line", t.text));
+      list.append(li);
+    }
+    if (atBottom) list.scrollTop = list.scrollHeight;   // follow along unless scrolled up
   }
 
   // ---- live camera ----------------------------------------------------------------
