@@ -208,6 +208,22 @@ def cases() -> List[Case]:
         _threat_case("t_nobody", "Threat, away motion: empty porch",
                      "An empty porch with a doormat and a potted plant. No one is visible.",
                      Mode.AWAY, "motion", 0, "nobody"),
+        _seen_case("t_empty_doorway", "Honest label: empty doorway (detector: 0 people)",
+                   "Nobody is there. An empty doorway with a doormat.", Mode.AWAY, "motion", 0, "nobody",
+                   people=0, faces=0, detections=[]),
+        _seen_case("t_box_person", "Honest label: person with a box who rang",
+                   "One person holding a cardboard box at the front door, face visible.", Mode.AWAY,
+                   "doorbell", 1, "delivery", people=1, faces=1, detections=[_P]),
+        _seen_case("t_plain_visitor", "Honest label: plain visitor who rang",
+                   "One woman in a red coat waving at the camera, face visible.", Mode.AWAY, "doorbell", 1,
+                   "visitor", people=1, faces=1, detections=[_P]),
+        _seen_case("t_hood_covered", "Honest label: hood up, face covered, no ring (night)",
+                   "One person with the hood up and the face covered, standing close to the door.",
+                   Mode.NIGHT, "motion", 0, "suspicious", people=1, faces=0,
+                   detections=[_P, {"label": "backpack", "count": 1, "confidence": 0.55}]),
+        _seen_case("t_vision_failed", "Honest label: vision failed (detector text only)",
+                   "One person is at the door.", Mode.AWAY, "doorbell", 1, "unknown", people=1, faces=1,
+                   detections=[_P], vision_ok=False),
         Case("summary", "Owner: summary of the log (free text)", Mode.HOME,
              _free_text(lambda b: b.summarize(FACTS)), _summary_ok, _summary_ok),
         Case("i_speech_delivery", 'Instruction, away visitor: "Hi, I have a package for Sam." '
@@ -274,6 +290,30 @@ def _threat_case(name: str, title: str, description: str, mode: str, cause: str,
 
     check = lambda category: category == want  # noqa: E731
     return Case(name, title, mode, run, check, check)
+
+
+_P = {"label": "person", "count": 1, "confidence": 0.91}
+
+
+def _seen_case(name: str, title: str, description: str, mode: str, cause: str, doorbells: int,
+               want: str, **detector: Any) -> "Case":
+    """A threat case with what NV's camera adds: people, faces, detections, vision_ok.
+    "Model right" also needs a reason that names what was seen (code didn't rewrite it)."""
+    hour = 23 if mode == Mode.NIGHT else 15
+
+    def run(assessor: ThreatAssessor):
+        ctx = threat.Context(description, mode, cause=cause, doorbells=doorbells,
+                             motions=0 if cause == "doorbell" else 1,
+                             when=datetime(2026, 11, 14, hour, 5), **detector)
+        started = time.perf_counter()
+        a = assessor.assess(ctx)
+        return None, a, (a.elapsed_s if a.elapsed_s is not None else time.perf_counter() - started)
+
+    check = lambda category: category == want  # noqa: E731
+    case = Case(name, title, mode, run, check, check)
+    # Nobody detected, or vision failed: code decides without asking the model, by design.
+    case.code_only = detector.get("people") == 0 or detector.get("vision_ok") is False  # type: ignore[attr-defined]
+    return case
 
 
 def _unsafe(actions: List[Action], mode: str) -> bool:
@@ -358,6 +398,8 @@ def run_bench(brain: Brain, runs: int, only: Optional[List[str]] = None,
                 model_ok = a.via == "bonsai" and not a.note and case.model_check(a.category)
                 final_ok = case.final_check(a.category)
                 unsafe, fallback = False, a.via == "rules"
+                if getattr(case, "code_only", False):     # by design: no model call at all
+                    role, model_ok, fallback = "code", final_ok, False
                 sample, dropped = f"{a.category}: {a.reason}", [a.note] if a.note else []
             elif decision is not None:
                 # "Model right" = Bonsai alone: a code correction of the key action doesn't count.

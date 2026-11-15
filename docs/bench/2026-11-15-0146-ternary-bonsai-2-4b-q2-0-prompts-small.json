@@ -1,0 +1,252 @@
+{
+ "cases": [
+  {
+   "name": "t_empty_doorway",
+   "title": "Honest label: empty doorway (detector: 0 people)",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 0.0,
+   "worst_s": 0.0,
+   "role": "code",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 0.0,
+     "role": "code",
+     "result": "nobody: No person detected.",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 0.0,
+     "role": "code",
+     "result": "nobody: No person detected.",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 0.0,
+     "role": "code",
+     "result": "nobody: No person detected.",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "t_box_person",
+   "title": "Honest label: person with a box who rang",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 3.47,
+   "worst_s": 4.63,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 4.63,
+     "role": "fast",
+     "result": "delivery: One person holding a cardboard box at the front door",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.88,
+     "role": "fast",
+     "result": "delivery: One person holding a cardboard box at the front door",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.89,
+     "role": "fast",
+     "result": "delivery: One person holding a cardboard box at the front door",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "t_plain_visitor",
+   "title": "Honest label: plain visitor who rang",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 3.2,
+   "worst_s": 4.09,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 4.09,
+     "role": "fast",
+     "result": "visitor: rang the doorbell and waved at the camera",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.81,
+     "role": "fast",
+     "result": "visitor: rang the doorbell and waved at the camera",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.71,
+     "role": "fast",
+     "result": "visitor: woman waving and face visible",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "t_hood_covered",
+   "title": "Honest label: hood up, face covered, no ring (night)",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 3.36,
+   "worst_s": 4.2,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 4.2,
+     "role": "fast",
+     "result": "suspicious: face covered, hood up, no bell rung",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.91,
+     "role": "fast",
+     "result": "suspicious: face covered, hood up, no bell rung",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.96,
+     "role": "fast",
+     "result": "suspicious: face covered, hood up, no bell rung",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "t_vision_failed",
+   "title": "Honest label: vision failed (detector text only)",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 0.0,
+   "worst_s": 0.0,
+   "role": "code",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 0.0,
+     "role": "code",
+     "result": "unknown: Couldn't analyse the photo, the detector saw 1 person.",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 0.0,
+     "role": "code",
+     "result": "unknown: Couldn't analyse the photo, the detector saw 1 person.",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 0.0,
+     "role": "code",
+     "result": "unknown: Couldn't analyse the photo, the detector saw 1 person.",
+     "dropped": []
+    }
+   ]
+  }
+ ],
+ "meta": {
+  "date": "2026-11-15T01:46-05:00",
+  "model": "ternary-bonsai-2-4b@q2_0",
+  "fast_model": "ternary-bonsai-2-4b@q2_0",
+  "force": null,
+  "profile": "nv_backup",
+  "reasoning_effort": "none",
+  "prompts": "small",
+  "machine": "Windows 11 (AMD64)",
+  "thinking": [
+   {
+    "model": "ternary-bonsai-2-4b@q2_0",
+    "no_think": "auto",
+    "uses": "chat",
+    "probe": "chat",
+    "thinking_seen": 0
+   },
+   {
+    "model": "ternary-bonsai-2-4b@q2_0",
+    "no_think": "auto",
+    "uses": "chat",
+    "probe": "chat",
+    "thinking_seen": 0
+   }
+  ],
+  "runs": 3,
+  "command": "python -m brain.bench --runs 3 --only t_empty_doorway,t_box_person,t_plain_visitor,t_hood_covered,t_vision_failed"
+ }
+}

@@ -1,18 +1,26 @@
 """Threat assessment: what does the scene at the door look like?
 
 After every photo_described, the scene is classified as delivery, visitor,
-suspicious or nobody, with a one-line reason, and sent as a threat_assessed
-event (FORMATS.md).
+suspicious, nobody or unknown, with a one-line reason, and sent as a threat_assessed
+event (FORMATS.md). Honest and grounded (owner, 2026-11-15):
 
-1. Bonsai (the fast model, see llm fast_model) answers through one forced-choice
-   tool, `classify(category, reason)`. Inputs: the photo description, the mode,
-   the time of day, why the photo was taken, recent doorbell/motion, and the voice
-   count from diarization when integration provides it.
+0. Plain code first, no model: zero people from NV's object detector is always
+   "nobody"; if vision failed (no description from the vision model) it's
+   "unknown: couldn't analyse the photo", never a guess.
+1. Otherwise Bonsai (the fast model, see llm fast_model) answers through one
+   forced-choice tool, `classify(category, reason)`. Inputs: the 9B's factual
+   description, the detector's people count, objects and visible faces, the mode,
+   the time of day, why the photo was taken, the doorbell/motion history and the
+   voice count from diarization.
 2. Plain code validates the answer:
-   - the category must be one of the four,
-   - strong warning signs in the description (a mask, a crowbar, trying the
-     handle...) make it suspicious whatever Bonsai said: code may escalate,
-   - "nobody" while the description clearly mentions a person is not accepted.
+   - the category must be one of the four (unknown is code's alone),
+   - strong warning signs in the description (a mask, a covered face, a crowbar,
+     trying the handle...) make it suspicious whatever Bonsai said: code may escalate,
+   - "nobody" while a person is detected or described is not accepted,
+   - someone who rang with no warning signs is a visitor or a delivery,
+   - the reason must name what was seen ("1 person, backpack", "holding a box",
+     "face covered") or the context ("stayed at the door without ringing while
+     armed"); if Bonsai's doesn't, code writes it from the facts.
 3. If Bonsai is off, fails, or gives nothing usable, simple rules decide.
 
 The label shapes what Faraday says and may escalate the alert (in modes/). It can
@@ -29,6 +37,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from shared import Event, EventType, Mode, Source, ThreatCategory, make_event
 
+from . import look
 from .core import _clean_line
 from .guard import _json_objects
 
@@ -52,14 +61,22 @@ SYSTEM_PROMPT = (
     "You judge one photo of a home's front door for a home guard. Call classify once. "
     "delivery: someone dropping off a package. visitor: someone who rang to talk or visit. "
     "suspicious: someone hiding, forcing entry, covering their face, or prowling without "
-    "ringing while the owner is away or asleep. nobody: no person in view."
+    "ringing while the owner is away or asleep. nobody: no person in view. "
+    "Trust the object detector's people count. The reason names what you see "
+    "('1 person, holding a box', 'face covered') or the context ('rang the doorbell')."
 )
 TOOL = {"type": "function", "function": {
     "name": "classify",
     "description": "The scene at the door, with one short reason.",
     "parameters": {"type": "object", "properties": {
-        "category": {"type": "string", "enum": sorted(C.ALL)},
+        "category": {"type": "string", "enum": sorted(C.ALL - {C.UNKNOWN})},
         "reason": {"type": "string"}}, "required": ["category", "reason"]}}}
+# Words that show a reason is about what was seen or the context, not a guess.
+GROUNDED = re.compile(r"\b(\d+|one|two|three|person|people|man|woman|face|hood\w*|mask\w*|box\w*|"
+                      r"package|parcel|envelope|bag|backpack|uniform|holding|carrying|waving|"
+                      r"standing|stood|stayed|walk\w*|ring\w*|rang|doorbell|bell|knock\w*|armed|"
+                      r"night|window|door|handle|lock|hiding|crouch\w*|nobody|no one|empty|"
+                      r"detected|visible|camera)\b", re.I)
 
 
 @dataclass
@@ -82,6 +99,10 @@ class Context:
     doorbells: int = 0            # in the last few minutes
     motions: int = 0
     voices: Optional[int] = None  # from diarization, when NV adds it
+    people: Optional[int] = None  # NV's object detector (None: no detector ran)
+    faces: Optional[int] = None   # visible faces (only meaningful close up)
+    detections: Optional[List[Dict[str, Any]]] = None   # [{"label", "count", "confidence"}]
+    vision_ok: bool = True        # False: no description from the vision model
 
     @property
     def night(self) -> bool:
@@ -89,19 +110,66 @@ class Context:
         return hour >= 21 or hour < 6
 
 
+def facts(ctx: Context) -> str:
+    """What the detector saw, short: "1 person, backpack" ("" without a detector)."""
+    if ctx.people is None and not ctx.detections:
+        return ""
+    people = ctx.people if ctx.people is not None else next(
+        (int(d.get("count", 0)) for d in ctx.detections or [] if d.get("label") == "person"), 0)
+    parts = [f"{people} {'person' if people == 1 else 'people'}"] if people else []
+    for d in ctx.detections or []:
+        label, n = str(d.get("label", "")), int(d.get("count", 1) or 1)
+        if label and label != "person" and len(parts) < 3:
+            parts.append(label if n == 1 else f"{n} {label}s")
+    return ", ".join(parts)
+
+
+_BOXY = re.compile(r"\b(package|parcel|box|boxes|carton|envelope)\b", re.I)
+
+
+def reason_for(ctx: Context, category: str, sign: str = "") -> str:
+    """A reason made only from facts: the detector, the description's own words, the
+    doorbell, the mode. Never a guess."""
+    seen = facts(ctx)
+    if category == C.NOBODY:
+        parts = ["No person detected" if ctx.people == 0 else "No one visible"]
+        objects = [p for p in seen.split(", ") if p and "person" not in p and "people" not in p]
+        parts += [f"{', '.join(objects)} in view"] if objects else []
+    elif category == C.UNKNOWN:
+        parts = ["Couldn't analyse the photo"] + ([f"the detector saw {seen}"] if seen else [])
+    else:
+        parts = [seen] if seen else []
+        text = ctx.description or ""
+        if category == C.SUSPICIOUS:
+            parts.append(sign or ("stayed at the door without ringing while armed"
+                                  if ctx.cause == EventType.MOTION and not ctx.doorbells else "warning signs"))
+        elif category == C.DELIVERY:
+            box = _BOXY.search(text)
+            word = box.group(0).lower() if box else "package"
+            parts.append(f"holding a {'box' if word == 'boxes' else word}")
+        if category in (C.DELIVERY, C.VISITOR):
+            parts.append("rang the doorbell" if ctx.doorbells else "at the door")
+    line = ", ".join(p for p in parts if p)
+    return (line[0].upper() + line[1:] + ".") if line else "Someone at the door."
+
+
 def rules(ctx: Context) -> Tuple[str, str]:
     """The plain-code answer. Also the fallback when Bonsai can't be used."""
     text = ctx.description or ""
+    if ctx.people == 0:
+        return C.NOBODY, reason_for(ctx, C.NOBODY)        # zero people detected: always nobody
+    if not ctx.vision_ok:
+        return C.UNKNOWN, reason_for(ctx, C.UNKNOWN)      # vision failed: never a guess
     if STRONG.search(text):
-        return C.SUSPICIOUS, "Warning signs in the photo: " + _first(STRONG, text) + "."
-    if NOBODY.search(text) or not PERSON.search(text):
-        return C.NOBODY, "No one is visible at the door."
+        return C.SUSPICIOUS, reason_for(ctx, C.SUSPICIOUS, _first(STRONG, text))
+    if ctx.people is None and (NOBODY.search(text) or not PERSON.search(text)):
+        return C.NOBODY, reason_for(ctx, C.NOBODY)
     if ctx.cause == EventType.MOTION and ctx.mode in Mode.ARMED and not ctx.doorbells:
         # Owner 2026-11-15: stayed at the door without ringing = suspicious, box or not.
-        return C.SUSPICIOUS, "Stayed at the door without ringing while the house is armed."
+        return C.SUSPICIOUS, reason_for(ctx, C.SUSPICIOUS)
     if PACKAGE.search(text):
-        return C.DELIVERY, "Carrying a package" + (" and rang the doorbell." if ctx.doorbells else ".")
-    return C.VISITOR, "Someone at the door" + (" who rang the doorbell." if ctx.doorbells else ".")
+        return C.DELIVERY, reason_for(ctx, C.DELIVERY)
+    return C.VISITOR, reason_for(ctx, C.VISITOR)
 
 
 def _first(rx: "re.Pattern[str]", text: str) -> str:
@@ -119,6 +187,10 @@ def prompt(ctx: Context) -> str:
                  f"motion: {ctx.motions} time(s)")
     if ctx.voices is not None:
         lines.append(f"Voices heard: {ctx.voices}")
+    if ctx.people is not None:
+        seen = facts(ctx) or "no people, no objects"
+        lines.append(f"Object detector: {seen}"
+                     + (f"; faces visible: {ctx.faces}" if ctx.faces is not None else ""))
     lines.append(f"Camera sees: {ctx.description}")
     return "\n".join(lines)
 
@@ -158,17 +230,27 @@ def parse(reply: Any) -> Tuple[Optional[str], str]:
 def check(category: str, reason: str, ctx: Context) -> Tuple[str, str, str]:
     """Code's say on Bonsai's answer. Returns (category, reason, note)."""
     rule_cat, rule_reason = rules(ctx)
+    if ctx.people == 0 or not ctx.vision_ok:
+        return rule_cat, rule_reason, ("" if category == rule_cat else f"code: {rule_cat}, not a guess")
+    if category == C.UNKNOWN:
+        return rule_cat, rule_reason, "code: the photo was analysed, so not unknown"
     if STRONG.search(ctx.description or "") and category != C.SUSPICIOUS:
         return C.SUSPICIOUS, rule_reason, f"code escalated {category} to suspicious"
-    if category == C.NOBODY and PERSON.search(ctx.description or "") and not NOBODY.search(ctx.description or ""):
-        return rule_cat, rule_reason, "code rejected nobody: a person is described"
+    if category == C.NOBODY and ((ctx.people or 0) > 0 or (
+            PERSON.search(ctx.description or "") and not NOBODY.search(ctx.description or ""))):
+        return rule_cat, rule_reason, "code rejected nobody: a person is detected or described"
     if category == C.SUSPICIOUS and ctx.doorbells and rule_cat in (C.VISITOR, C.DELIVERY):
         # Owner 2026-11-15: walked up and rang, no warning signs = a visitor or a delivery.
         return rule_cat, rule_reason, "code: rang the doorbell with no warning signs"
-    clean = _clean_line(reason) or rule_reason
+    clean = _clean_line(reason) or ""
+    note = ""
+    if not GROUNDED.search(clean):
+        # Bonsai's reason doesn't say what was seen: code's, from the facts.
+        clean = rule_reason if category == rule_cat else reason_for(ctx, category)
+        note = "code wrote the reason"
     if len(clean) > REASON_MAX:
         clean = clean[:REASON_MAX - 3].rsplit(" ", 1)[0] + "..."
-    return category, clean, ""
+    return category, clean, note
 
 
 class ThreatAssessor:
@@ -185,7 +267,8 @@ class ThreatAssessor:
         return cls(BonsaiClient.from_config(cfg, log) if use_llm else None, cfg["model"], log)
 
     def assess(self, ctx: Context) -> Assessment:
-        if self.client is None:
+        if self.client is None or ctx.people == 0 or not ctx.vision_ok:
+            # No model, nobody detected, or nothing to judge (vision failed): plain code.
             cat, why = rules(ctx)
             return Assessment(cat, why, "rules")
         started = time.perf_counter()
@@ -226,10 +309,23 @@ def context_for(photo: Event, mode: str, recent: Iterable[Any], voices: Optional
             if e.get("type") == EventType.DOORBELL and (since is None or t >= since):
                 doorbells += 1
             motions += e.get("type") == EventType.MOTION
-    return Context(description=str(photo.data.get("description", "")), mode=mode,
+    data = photo.data or {}
+    by = data.get("described_by")
+    # Vision worked if the vision model wrote the description; "detector" means it
+    # failed and the object detector wrote it; no described_by: NV's "camera" source
+    # means nothing described it (the sim and older events: as before).
+    vision_ok = by == "bonsai" or (by is None and not look.photo_failed(photo))
+    people = data.get("people")
+    faces = data.get("faces")
+    dets = data.get("detections")
+    return Context(description=str(data.get("description", "")), mode=mode,
                    cause=str(origin.get("type", "")),
                    reason=str((shot.get("args") or {}).get("reason", "")),
-                   when=when, doorbells=doorbells, motions=motions, voices=voices)
+                   when=when, doorbells=doorbells, motions=motions, voices=voices,
+                   people=people if isinstance(people, int) else None,
+                   faces=faces if isinstance(faces, int) else None,
+                   detections=dets if isinstance(dets, list) else None,
+                   vision_ok=vision_ok)
 
 
 def _when(stamp: str) -> Optional[datetime]:
