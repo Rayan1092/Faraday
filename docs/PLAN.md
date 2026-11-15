@@ -231,4 +231,4 @@ Add new ones at the bottom. When one is settled, write the answer next to it and
     - **`shared/events.py`:** the comment on `ThreatCategory.UNKNOWN` still says "the photo couldn't be analysed (vision failed)". It now means vision *and* the detector both failed (FORMATS.md is updated). It's in `shared/`, so it waits for you.
     - **`hardware/vision.py`:** the docstring mentions Dell's 25 s "who's at the door" wait. It's 65 s now (`Pipeline.look_timeout_s`).
     - **On the Mac `config/settings.json`:** `alerts.visitor_quiet_s` should be 60 (owner) or absent. An old 120 there overrides the new default.
-    - **Patches:** `nv-test-tts-final-lines.patch` (Q38) and `nv-test-rehearsal-facts-only.patch` (Q41). Main fails exactly those two tests until they're applied.
+    - **Patches:** `nv-test-tts-final-lines.patch` (Q38) and `nv-test-rehearsal-facts-only.patch` (Q41) are applied (NV #64); both tests pass on main. Thank you.
