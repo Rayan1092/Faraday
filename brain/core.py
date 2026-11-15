@@ -256,8 +256,10 @@ class Brain:
         - with the owner's delivery instruction: "Please leave it by the side door.
           I'll let the owner know it arrived."
         - without: "You can leave it by the door. I'll let the owner know it arrived."
-        The visitor's words are saved for the owner. Said once per visit; after that a
-        delivery mention just gets "Thank you. I'll pass that along." and is saved."""
+        The visitor's words are saved for the owner. Only when the visitor's own words
+        are about a delivery, and once per visit (review): a delivery label alone, or a
+        second mention, keeps Bonsai's reply, with the owner's words added if they
+        weren't said yet."""
         if event.type != EventType.SPEECH_HEARD or ActionType.SPEAK not in allowed:
             return actions, False
         channel = event.data.get("channel")
@@ -265,22 +267,37 @@ class Brain:
             return actions, False            # the owner, not a courier
         text = str(event.data.get("text", ""))
         recent = list(recent)
-        if not (fb.mentions_delivery(text)
-                or latest_label(recent, event.timestamp, VISIT_S) == ThreatCategory.DELIVERY):
+        words = fb.mentions_delivery(text)
+        if not (words or latest_label(recent, event.timestamp, VISIT_S) == ThreatCategory.DELIVERY):
             return actions, False
         delivery_ins = next((i for i in ins if i["audience"] == oi.DELIVERY), None)
-        line = (spoken.delivery_line(oi.spoken_line(delivery_ins)) if delivery_ins
-                else spoken.DELIVERY_DEFAULT)
         said = [l.lower() for l in _said_since(recent, event.timestamp, VISIT_S)]
         first = (oi.spoken_line(delivery_ins) if delivery_ins else spoken.DELIVERY_DEFAULT).lower()
-        if any(first in l for l in said):
-            line = spoken.MESSAGE_SAVED     # already told this visit: once is enough
+        told = any(first in l for l in said)
+        if not words or told:
+            # The label alone ("Hello?"), or they were already told: Bonsai's reply stays,
+            # minus a conflicting drop-off spot, plus the owner's words if never said.
+            if delivery_ins is None or told or any(
+                    a.type == ActionType.SPEAK and oi.mentions(a.args["text"], delivery_ins) for a in actions):
+                return actions, False
+            actions = [a for a in actions if not (a.type == ActionType.SPEAK
+                                                  and fb.mentions_dropoff(a.args["text"])
+                                                  and "message" not in a.args["text"].lower())]
+            extra, _ = filter_actions([fb._speak(oi.spoken_line(delivery_ins))], event, mode, allowed)
+            return actions + extra, bool(extra)
+        line = (spoken.delivery_line(oi.spoken_line(delivery_ins)) if delivery_ins
+                else spoken.DELIVERY_DEFAULT)
+        # The owner's other words for visitors ("The owner is in the back garden."), if
+        # Bonsai was meant to say them and they weren't said this visit (review).
+        others = [oi.spoken_line(i) for i in ins if i["audience"] != oi.DELIVERY]
+        others = [o for o in others if not any(o.lower() in l for l in said)]
         kept = [a for a in actions if a.type != ActionType.SPEAK]
         items: List[RawItem] = []
         if (ActionType.SAVE_MESSAGE in allowed
                 and not any(a.type == ActionType.SAVE_MESSAGE for a in kept)):
             items.append({"type": ActionType.SAVE_MESSAGE, "args": {"text": text[:500], "sender": "visitor"}})
-        items.append(fb._speak(line))
+        reply = " ".join(others + [line])
+        items.append(fb._speak(reply if len(reply) <= 240 else line))
         extra, _ = filter_actions(items, event, mode, allowed)
         # For the benchmark: did Bonsai itself do the part that matters (save the message,
         # and say the owner's words if there are some)? Then code only reworded the line,

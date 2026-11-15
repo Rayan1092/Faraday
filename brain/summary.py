@@ -4,11 +4,13 @@
    out"), capped at `minutes`.
 2. collect(): counts, times and highlights in plain code (doorbells, motion,
    warning, alarm, deliveries, messages, lights, new rules).
-3. facts(): those as short lines for Bonsai, which only phrases them
-   (Brain.summarize). Times and counts come from the log, never from the model
-   (owner, Mac test: it said "the alarm went off at 03:40", the log said 03:49).
-4. final_text(): Bonsai's wording is used only if every time, count and event in it
-   matches the log (verified()); otherwise spoken_list(), code's own summary.
+3. facts(): the events as short lines for Bonsai, with no times and no counts:
+   Bonsai only phrases them (Brain.summarize). Owner, Mac test: it said "the alarm
+   went off at 03:40", the log said 03:49.
+4. final_text(): Bonsai's wording, if it has no time or number of its own and
+   mentions the alarm exactly when there was one (verified()), followed by code's
+   own sentence with the times and counts (numbers_line()). Otherwise spoken_list(),
+   code's whole summary.
 Never what the camera saw: spoken lines never describe the person (owner, Mac test).
 """
 from __future__ import annotations
@@ -128,25 +130,27 @@ def collect(entries: Iterable[Entry]) -> Happened:
 
 
 def facts(h: Happened) -> List[str]:
-    """Short lines for Bonsai, with the exact times. Kept small: Bonsai is small."""
+    """The events for Bonsai, with no times and no counts (code adds those, review).
+    Kept small: Bonsai is small."""
     if h.empty:
         return ["Nothing happened."]
     out = []
     if h.armed_at:
-        out.append(f"The house was armed at {h.armed_at}.")
+        out.append("The house was armed.")
     if h.doorbells:
-        out.append(f"The doorbell rang {_times(h.doorbells)}, at {_and(_unique(h.doorbell_times)[-3:])}.")
-    if h.motions:
-        out.append(f"Motion at the door {_times(h.motions)}.")
-    if h.warning_at and h.warning_at != h.alarm_at:
-        out.append(f"A warning at {h.warning_at}.")
-    if h.alarm_at:
-        out.append(f"The alarm went off at {h.alarm_at}.")
+        out.append("The doorbell rang.")
+    if h.alarm:
+        out.append("The alarm went off after someone stayed at the door without ringing.")
+    elif h.warning:
+        out.append("Someone stayed at the door without ringing, and got the warning.")
+    elif h.motions:
+        out.append("There was motion at the door.")
     for text in h.messages[-3:]:
         out.append(f"Visitor message: {_short(text, 120)}")
-    if h.threats:
-        out.append("The camera judged: " + ", ".join(
-            f"{n} {cat}" for cat, n in sorted(h.threats.items())) + ".")
+    kinds = [{"delivery": "a delivery", "visitor": "a visitor", "suspicious": "someone suspicious"}[c]
+             for c in ("delivery", "visitor", "suspicious") if h.threats.get(c)]
+    if kinds:
+        out.append("The camera saw " + _and(kinds) + ".")
     if h.lights:
         out.append("Lights turned on: " + ", ".join(h.lights) + ".")
     for text in h.rules[-2:]:
@@ -162,10 +166,10 @@ def spoken_list(h: Happened) -> str:
     if h.doorbells:
         last = h.doorbell_times[-1] if h.doorbell_times else ""
         parts.append(f"the doorbell rang {_times(h.doorbells)}" + (f", last at {last}" if last else ""))
-    if h.alarm_at:
-        parts.append(f"the alarm went off at {h.alarm_at}")
-    elif h.warning_at:
-        parts.append(f"a warning at {h.warning_at}")
+    if h.alarm:
+        parts.append("the alarm went off" + (f" at {h.alarm_at}" if h.alarm_at else ""))
+    elif h.warning:
+        parts.append("a warning" + (f" at {h.warning_at}" if h.warning_at else ""))
     elif h.motions:
         parts.append(f"there was motion {_times(h.motions)}")
     if h.threats.get("suspicious"):
@@ -195,37 +199,56 @@ def _hm(hour: str, minute: str) -> Tuple[int, int]:
 
 
 def verified(text: str, h: Happened) -> bool:
-    """Does Bonsai's summary only say what the log says? Every time must be one of the
-    log's, every count one of its counts (or a number in a visitor's message), the
-    alarm and the warning mentioned exactly when they happened."""
+    """Is Bonsai's wording safe to speak? It must hold no time and no count of its own
+    (those come from code: numbers_line), except words quoted from a visitor's message,
+    and mention the alarm exactly when there was one (and a warning only if there was
+    one). Review: checking times against the log's set let "the alarm went off at
+    <the warning's time>" through."""
     lowered = (text or "").lower()
     if not lowered.strip():
         return False
-    allowed_times = {_hm(*t.split(":")) for t in h.times() if ":" in t}
+    quoted = set(re.findall(r"[a-z0-9:']+", " ".join(h.messages + h.rules).lower()))
     for m in _TIME.finditer(lowered):
-        if _hm(m.group(1), m.group(2)) not in allowed_times:
+        if m.group(0) not in quoted:
             return False
-    rest = _TIME.sub(" ", lowered)
-    counts = {h.doorbells, h.motions, len(h.messages), len(h.rules), len(h.lights), *h.threats.values()}
-    quoted = " ".join(h.messages + h.rules).lower()
-    for n in re.findall(r"\b\d+\b", rest):
-        if int(n) not in counts and n not in quoted:
+    for token in re.findall(r"\b\d+\b", _TIME.sub(" ", lowered)):
+        if token not in quoted:
             return False
-    for word in re.findall(r"\b(" + "|".join(_WORDS) + r")\b", rest):
-        if _WORDS[word] not in counts and word not in quoted and word not in ("one",):
+    for word in re.findall(r"\b(" + "|".join(w for w in _WORDS if w != "one") + r"|times)\b", lowered):
+        if word not in quoted:
             return False
-    if ("alarm" in lowered) != h.alarm:
+    if bool(re.search(r"\balarm", lowered)) != h.alarm:
         return False
     if "warning" in lowered and not h.warning:
         return False
     return True
 
 
+def numbers_line(h: Happened) -> str:
+    """Code's sentence with the log's times and counts, after Bonsai's wording."""
+    parts = []
+    if h.doorbells:
+        last = h.doorbell_times[-1] if h.doorbell_times else ""
+        parts.append(f"the doorbell rang {_times(h.doorbells)}" + (f", last at {last}" if last else ""))
+    if h.alarm and h.alarm_at:
+        parts.append(f"the alarm went off at {h.alarm_at}")
+    elif h.warning and h.warning_at:
+        parts.append(f"the warning was at {h.warning_at}")
+    if not parts:
+        return ""
+    line = _and(parts) + "."
+    return line[0].upper() + line[1:]
+
+
 def final_text(bonsai: Optional[str], h: Happened) -> Tuple[str, str]:
-    """(what to say, "bonsai" or "code"). Bonsai only phrases: its text is used only
-    if verified(); else code's own summary, which always matches the log."""
+    """(what to say, "bonsai" or "code"). Bonsai only phrases the events; every time and
+    count spoken comes from code. Code's own summary if Bonsai's wording doesn't hold."""
     if bonsai and verified(bonsai, h):
-        return ensure_messages(bonsai, h), "bonsai"
+        text = ensure_messages(bonsai, h)
+        tail = numbers_line(h)
+        combined = f"{text.rstrip()} {tail}".strip() if tail else text
+        if len(combined) <= 240:
+            return combined, "bonsai"
     return spoken_list(h), "code"
 
 
@@ -263,6 +286,8 @@ def _unique(items: List[str]) -> List[str]:
 
 
 def _and(items: List[str]) -> str:
+    if not items:
+        return ""
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
 
 

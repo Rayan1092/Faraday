@@ -26,3 +26,10 @@ Owner's list from the second Mac test, items 4 and 6.
 - `brain/tests/test_delivery_reply.py`: no instruction, with an instruction, the fallback, never the owner, and the prompt never seeing a description.
 - `brain/tests/test_summary.py`: the 03:40 vs 03:49 case, invented counts, a missing alarm, an alarm that never happened, a relabelled photo counted once.
 - Older tests now use non-delivery messages where they test something else.
+
+**Review fixes:**
+- **Summary check:** checking times against the log's set let "the alarm went off at <the warning's time>" through. Now Bonsai gets the events with no times and no counts. Its text is used only if it has no time or number of its own (except words quoted from a visitor's message) and mentions the alarm exactly when there was one. Code then appends its own sentence with the times and counts (`numbers_line`): "The doorbell rang 3 times, last at 03:45 and the alarm went off at 03:49." So every time and count spoken comes from code. Otherwise code's whole summary is spoken. Both summary prompts say "Never say a time or a number: they are added for you."
+- **Delivery line trigger:** code's line only when the visitor's own words are about a delivery, and once per visit. A delivery label alone ("Hello?") keeps Bonsai's reply, with no forced save, plus the owner's drop-off words if they were never said.
+- **Other instructions:** the owner's other words for visitors ("The owner is in the back garden.") are kept in front of code's line.
+- **Arrival promise:** "I'll let the owner know it arrived." only follows a drop-off instruction.
+- **Robustness:** an empty list no longer crashes the facts, and an alarm without a time is still mentioned.

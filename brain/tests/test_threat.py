@@ -436,7 +436,7 @@ class Shown(unittest.TestCase):
         log = [make_event(EventType.THREAT_ASSESSED, {"category": c}, Source.BRAIN).to_dict()
                for c in ("delivery", "suspicious", "nobody")]
         h = collect(log)
-        self.assertIn("The camera judged: 1 delivery, 1 suspicious.", facts(h))
+        self.assertIn("The camera saw a delivery and someone suspicious.", facts(h))   # no counts for Bonsai
         self.assertIn("1 suspicious visit", spoken_list(h))
 
 

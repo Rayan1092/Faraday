@@ -56,6 +56,29 @@ class DeliveryReply(unittest.TestCase):
         d = brain.decide(events.speech("Did a package come today?", "owner"), Mode.HOME)
         self.assertNotIn(lines.DELIVERY_DEFAULT, said(d.actions))
 
+    def test_a_delivery_label_alone_keeps_bonsais_reply(self):
+        """Review: in a delivery-labelled visit, "Hello?" got the delivery line and was
+        saved as the message. Only the visitor's own delivery words bring code's line."""
+        from shared import EventType, Source, make_event
+        label = make_event(EventType.THREAT_ASSESSED, {"category": "delivery", "reason": "r"}, Source.BRAIN)
+        brain = make_brain(tool_calls(("speak", {"text": "Hello! How can I help you?"})))
+        d = brain.decide(events.speech("Hello?", "visitor"), Mode.AWAY, [label.to_dict()])
+        self.assertEqual(said(d.actions), ["Hello! How can I help you?"])
+        self.assertNotIn(ActionType.SAVE_MESSAGE, [a.type for a in d.actions])
+
+    def test_the_owners_other_words_are_kept(self):
+        """Review: an "anyone" instruction Bonsai was meant to say was dropped with its speech."""
+        from rules import instructions as oi
+        brain = make_brain(tool_calls(("speak", {"text": "Okay."})))
+        brain.instructions = _Store([dict(oi.parse_instruction(
+            "If anyone comes, tell them I'm in the back garden."), id="ins_2")])
+        d = brain.decide(events.speech(QUESTION, "visitor"), Mode.AWAY)
+        self.assertEqual(said(d.actions), ["The owner is in the back garden. " + lines.DELIVERY_DEFAULT])
+
+    def test_a_non_drop_off_instruction_gets_no_arrival_promise(self):
+        self.assertEqual(lines.delivery_line("Please come back tomorrow."), "Please come back tomorrow.")
+        self.assertTrue(lines.delivery_line("Please leave it by the side door.").endswith("arrived."))
+
     def test_the_visitor_prompt_never_sees_a_description(self):
         """Spoken lines never describe the person: Bonsai never gets the description to
         talk about (owner, Mac test)."""

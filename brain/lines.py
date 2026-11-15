@@ -61,8 +61,10 @@ AUDIENCE_NAMES = {"delivery": "delivery instruction", "visitor": "visitor instru
 
 
 def delivery_line(owner_words: str) -> str:
-    """The owner's delivery instruction, then the same promise as DELIVERY_DEFAULT."""
-    return f"{owner_words} I'll let the owner know it arrived."
+    """The owner's delivery instruction, then the same promise as DELIVERY_DEFAULT when
+    it's about where to leave it ("Please come back tomorrow." gets no promise)."""
+    from .fallback import mentions_dropoff
+    return f"{owner_words} I'll let the owner know it arrived." if mentions_dropoff(owner_words) else owner_words
 
 
 def light_line(outlet: str, on: bool) -> str:

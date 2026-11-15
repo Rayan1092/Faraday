@@ -123,11 +123,14 @@ class Step3(unittest.TestCase):
         self.assertIn("the doorbell rang once", text)
 
     def test_summary_from_bonsai_skips_the_tool_call(self):
-        client = SlowClient("A visitor rang once and someone moved at the door.", delay=0)
+        client = SlowClient("A visitor rang and someone moved at the door.", delay=0)
         p = self.pipeline(client)
         self._busy_day(p)
         texts = [a.args.get("text") for a in p.handle(events.speech("What happened while I was out?")).actions]
-        self.assertEqual(texts[1:], [CHECKING, "A visitor rang once and someone moved at the door."])
+        self.assertEqual(texts[1], CHECKING)
+        # Bonsai's wording, then code's sentence with the log's counts and times.
+        self.assertTrue(texts[2].startswith("A visitor rang and someone moved at the door. The doorbell rang once"),
+                        texts[2])
         self.assertEqual(client.calls, 1)  # the summary only; "what happened" is spotted in code
 
     # ---- the alarm: one fixed line, nothing about the person (owner, Mac test) ----
