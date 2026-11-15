@@ -2,6 +2,7 @@
 
     python -m hardware.check camera            # snapshot -> captures/photos + Bonsai description
     python -m hardware.check vision [photo]    # every no-think strategy, 9B + 4B, timed; Dell's brain on 9B/2B
+    python -m hardware.check outlets [N|none]  # the six outlet files: on vs off; guided test on outlet N (2)
     python -m hardware.check say "Hello"       # speaker: TTS for this OS
     python -m hardware.check record 4          # mic: 4 s -> captures/audio/*.wav -> STT (if any)
     python -m hardware.check mute              # mic stays deaf while Faraday talks
@@ -68,6 +69,59 @@ def _downloaded(base_url: str) -> list:
         return []
 
 
+def _loaded(base_url: str):
+    """Ids LM Studio has loaded now, or None if it can't tell (no /api/v0/models)."""
+    import requests
+    try:
+        data = requests.get(base_url + "/api/v0/models", timeout=5).json().get("data", [])
+    except Exception:
+        return None
+    return [m.get("id") for m in data if str(m.get("state", "")).lower() == "loaded"]
+
+
+def _unload(base_url: str, model: str) -> bool:
+    """Unload one model: LM Studio's REST API (0.4+: POST /api/v1/models/unload),
+    else the lms CLI (`lms unload <key>`). True if either said yes."""
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    import requests
+    try:
+        r = requests.post(base_url + "/api/v1/models/unload", json={"instance_id": model}, timeout=15)
+        if r.status_code < 300:
+            return True
+    except Exception:
+        pass
+    lms = shutil.which("lms")
+    if lms is None and (Path.home() / ".lmstudio" / "bin" / "lms").exists():
+        lms = str(Path.home() / ".lmstudio" / "bin" / "lms")
+    if lms is None:
+        return False
+    try:
+        return subprocess.run([lms, "unload", model], capture_output=True, text=True,
+                              timeout=60).returncode == 0
+    except Exception:
+        return False
+
+
+def unload_test_models(base_url: str, used, before, keep, out=print) -> None:
+    """Owner 2026-11-15: the check left ternary-bonsai-2-4b-mlx loaded. Unload every
+    model it used that wasn't loaded before it ran, except the ones Faraday runs on
+    (keep: the profile's model, fast_model and llm.vision_model)."""
+    if before is None:
+        return                                     # can't tell what was loaded: touch nothing
+    for m in used:
+        if m in before or m in keep:
+            continue
+        _unload(base_url, m)
+        if m in (_loaded(base_url) or []):
+            out(f"{m} is still loaded: eject it in LM Studio (or: lms unload {m}). "
+                "Only the 9B and the 2B should be loaded.")
+        else:
+            out(f"Unloaded {m}: the check loaded it only to time it.")
+
+
 def vision(settings, photo=None) -> int:
     """Every no-think strategy on the vision model (and the 4B if downloaded), timed,
     on the newest photo. Picks the vision model's first working strategy (the 4B
@@ -89,6 +143,8 @@ def vision(settings, photo=None) -> int:
     four_b = "ternary-bonsai-2-4b-mlx"
     if four_b != v.model and four_b in _downloaded(v.base_url):
         models.append(four_b)                       # the owner: measure the 4B too
+    loaded_before = _loaded(v.base_url)             # what the check loads, it unloads at the end
+    keep = {prof.get("model"), prof.get("fast_model"), llm.get("vision_model")}
     for m in models:
         print(f"LM Studio {m}: {_model_info(v.base_url, m)}")
     if photo:
@@ -166,6 +222,7 @@ def vision(settings, photo=None) -> int:
         code = 0
     print()
     _brain_check(settings, prof)
+    unload_test_models(v.base_url, models, loaded_before, keep)
     return code
 
 
@@ -219,6 +276,106 @@ def _brain_check(settings, prof) -> None:
         print(f"brain {m}: {verdict}. {took:.1f} s, reply {reply[:30]!r}")
         for n in notes:
             print(f"    {n}")
+
+
+def _yes_no(ask, prompt: str):
+    """True / False from y/n (also on/off), None for q (stop)."""
+    while True:
+        r = str(ask(prompt)).strip().lower()
+        if r in ("y", "yes", "on"):
+            return True
+        if r in ("n", "no", "off"):
+            return False
+        if r in ("q", "quit", "stop"):
+            return None
+
+
+def outlets(settings, arg=None, ask=input, conn=None) -> int:
+    """The six outlet files read over the Flipper CLI, on vs off compared per
+    outlet; then a guided test on outlet `arg` (a number or name, default 2, the
+    living room lamp; "none" skips it): OFF, OFF, ON, ON, OFF, asking after each
+    send whether the lamp is on. Faraday must be stopped: it holds the Flipper."""
+    from hardware.flipper.connection import FlipperSerial
+    from hardware.flipper.device import ERROR_WORDS
+    from hardware.flipper.outlets import (STEPS, SUBGHZ_DIR, compare, parse_sub, rerecord_steps,
+                                          signal_of, swap_steps, verdict)
+    from hardware.settings import for_os
+    fs = settings["flipper"]
+    if conn is None:
+        conn = FlipperSerial(for_os(fs["serial_port"]), fs.get("baud", 230400))
+        if not conn.open() or not conn.get_prompt():
+            print("Can't reach the Flipper's CLI. Quit Faraday first (it holds the port), close any "
+                  "app open on the Flipper, and check the USB cable.")
+            conn.close()
+            return 1
+    try:
+        table, numbers = {}, {}
+        print(f"{'outlet':22} {'file':14} signal")
+        for name, cfg in settings["outlets"].items():
+            files = {}
+            for which in ("on", "off"):
+                ok, lines = conn.run(f"storage read {SUBGHZ_DIR}/{cfg[which]}.sub", 10.0)
+                files[which] = parse_sub(lines) if ok else {"error": "no answer from the Flipper"}
+                info = files[which]
+                print(f"{name + ' (' + str(cfg.get('number')) + ')':22} {cfg[which]:14} "
+                      f"{signal_of(info) or info.get('error') or 'unreadable'}")
+            kind, text = compare(files["on"], files["off"])
+            print(f"{'':22} {'':14} -> {text}")
+            table[name] = (kind, cfg)
+            numbers[str(cfg.get("number"))] = name
+        target = str(arg or "2").strip()
+        if target.lower() in ("none", "no", "skip"):
+            return 0 if all(k == "different" for k, _ in table.values()) else 1
+        name = numbers.get(target) or (target if target in table else None)
+        if name is None:
+            print(f"No outlet {target!r}: use one of {', '.join(sorted(numbers))} or a name.")
+            return 1
+        files_kind, cfg = table[name]
+        num = cfg.get("number")
+        print()
+        print(f"Guided test: {name} (outlet {num}). Watch the lamp. Answer y or n; q stops.")
+        before = _yes_no(ask, f"Is the {name.replace('_', ' ')} on right now? [y/n] ")
+        after = []
+        while before is not None and len(after) < len(STEPS):
+            step = STEPS[len(after)]
+            again = " again" if len(after) and STEPS[len(after) - 1] == step else ""
+            if str(ask(f"Press Enter to send {step.upper()}{again} ({cfg[step]}), q to stop: ")).strip().lower() == "q":
+                break
+            ok, out = conn.run(fs["tx_command"].format(name=cfg[step]), 15.0)
+            if not ok or any(w in ln.lower() for ln in out for w in ERROR_WORDS):
+                print(f"  the send FAILED: {out[-2:]}")
+                break
+            state = _yes_no(ask, "  Is the lamp on now? [y/n] ")
+            if state is None:
+                break
+            after.append(state)
+        if before is None:
+            return 1
+        kind, text = verdict(before, after)
+        print()
+        print(f"Result, {name} (outlet {num}): {text}.")
+        if kind == "works":
+            print('Good. Faraday can switch it: you can set "lights_off_at_start": true again '
+                  'under "integration" in config/settings.json.')
+        elif kind == "swapped":
+            print("\n".join(swap_steps(cfg["on"], cfg["off"])))
+        elif kind == "toggles" and files_kind == "different":
+            print("The two files hold different signals, but the outlet flips on each one: it was "
+                  "paired to a single button. Re-pair it with the keyfob's ON and OFF buttons (see "
+                  "its manual: usually hold the outlet's button until its light blinks, then press "
+                  "the keyfob's ON button), then run this again.")
+            print('Until then keep "lights_off_at_start": false.')
+        elif kind in ("toggles", "deaf", "mixed"):
+            if kind == "deaf":
+                print("Check that the outlet is plugged in and the Flipper is within a few metres. "
+                      "If it still doesn't react:")
+            print("\n".join(rerecord_steps(num, cfg["on"], cfg["off"])))
+            print('Until it works keep "lights_off_at_start": false.')
+        if after:
+            print(f"The lamp is {'ON' if after[-1] else 'OFF'} now.")
+        return 0 if kind == "works" else 1
+    finally:
+        conn.close()
 
 
 def say(settings, text: str) -> int:
@@ -288,7 +445,7 @@ def devices(settings) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m hardware.check")
-    ap.add_argument("what", choices=["camera", "vision", "say", "record", "mute", "devices"])
+    ap.add_argument("what", choices=["camera", "vision", "outlets", "say", "record", "mute", "devices"])
     ap.add_argument("arg", nargs="?", default=None)
     a = ap.parse_args(argv)
     s = load_settings()
@@ -296,6 +453,8 @@ def main(argv=None) -> int:
         return camera(s)
     if a.what == "vision":
         return vision(s, a.arg)
+    if a.what == "outlets":
+        return outlets(s, a.arg)
     if a.what == "say":
         return say(s, a.arg or "Hello, I'm Faraday. Away mode on.")
     if a.what == "record":
