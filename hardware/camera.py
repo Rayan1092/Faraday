@@ -247,7 +247,7 @@ class CameraFeed:
                         if self._filter is None:
                             from hardware.detect import NAMED, StreamFilter
                             self._filter = StreamFilter(named=getattr(self.detector, "named", NAMED))
-                        if t0 - self._detect_at > max(2.0, 2.5 / max(0.5, self.detect_fps)):
+                        if t0 - self._detect_at > self._reset_gap():
                             self._filter.reset()       # the stream paused: old frames don't count
                         self._detect_at = t0
                         found = self.detector.detect(frame)
@@ -364,6 +364,11 @@ class CameraFeed:
             log.warning("no alarm video (%r); frames only", e)
             return None
         return video if video.exists() and video.stat().st_size > 0 else None
+
+    def _reset_gap(self) -> float:
+        """A pause longer than this between detections starts the steadiness window
+        over (more than 2 detection periods, so a slow fps never clears it)."""
+        return max(2.0, 2.5 / max(0.5, self.detect_fps))
 
     def frame_size(self) -> Optional[Tuple[int, int]]:
         """(width, height) of the camera's frames, once one has come (kept while

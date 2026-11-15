@@ -260,12 +260,44 @@ class Steadiness(unittest.TestCase):
         info = det.analyse(np.zeros((480, 640, 3), np.uint8))
         self.assertEqual([d["label"] for d in info["detections"]], ["backpack", "person"])
 
+    def test_two_labels_on_one_thing_in_the_photo_give_one_object(self):
+        """Review of #66: IoU 0.67 is under _agnostic's 0.7, so both boxes reach the tracker."""
+        phone = Detection("cell phone", 0.80, (100, 100, 140, 180))
+        remote = Detection("remote", 0.70, (108, 100, 148, 180))
+        info = self.stub([[phone, remote]] * 5).analyse_frames([np.zeros((480, 640, 3), np.uint8)] * 5)
+        self.assertEqual([d["label"] for d in info["detections"]], ["cell phone"])
+
+    def test_votes_count_toward_the_name(self):
+        r = Detection("remote", 0.50, (100, 100, 140, 180))
+        p = Detection("cell phone", 0.65, (108, 100, 148, 180))
+        found = steady_objects([[r], [p, r], [p, r], [p, r]])
+        self.assertEqual([(s.name, s.detection.box) for s in found], [("cell phone", r.box)])
+
+    def test_a_knife_never_hides_behind_another_label(self):
+        phone = Detection("cell phone", 0.65, (100, 100, 140, 180))
+        knife = Detection("knife", 0.62, (108, 100, 148, 180))            # IoU 0.67: both boxes come
+        info = self.stub([[phone, knife]] * 5).analyse_frames([np.zeros((480, 640, 3), np.uint8)] * 5)
+        self.assertIn("knife", [d["label"] for d in info["detections"]])
+
+    def test_an_object_seen_only_as_a_vote_is_still_followed(self):
+        """Review of #66: a flicker on top of a handbag in the photo frame, then the
+        handbag moves; it must stay the same object (and keep its photo box)."""
+        bag = Detection("handbag", 0.8, (100, 100, 200, 200))
+        flicker = Detection("cell phone", 0.9, (75, 100, 175, 200))          # IoU 0.6: the bag votes
+        moved = bag._replace(box=(131, 100, 231, 200))                      # bag 0.53, flicker 0.28
+        det = self.stub([[flicker, bag], [moved], [moved], [moved], [moved]])
+        info = det.analyse_frames([np.zeros((480, 640, 3), np.uint8)] * 5)
+        self.assertEqual([(d.label, d.box) for d in info["boxes"]], [("handbag", bag.box)])
+
     def test_object_score_is_a_setting(self):
         """Owner 2026-11-15: a phone at the ear scores about 0.4-0.5; the threshold
         is camera.detector.object_score (default 0.6) to tune on the Mac."""
         phone = Detection("cell phone", 0.45, (100, 100, 140, 180))
         for settings, want in (({}, []), ({"camera": {"detector": {"object_score": 0.4}}}, ["cell phone"]),
-                               ({"camera": {"detector": {"object_score": "x"}}}, [])):
+                               ({"camera": {"detector": {"object_score": "x"}}}, []),
+                ({"camera": {"detector": {"object_score": 60}}}, []),           # percent: the default
+                ({"camera": {"detector": {"object_score": float("nan")}}}, []),
+                ({"camera": {"detector": {"object_score": True}}}, [])):
             with self.subTest(settings=settings):
                 det = Detector.from_settings(settings)
                 self.assertIsNotNone(det)
@@ -351,6 +383,38 @@ class Steadiness(unittest.TestCase):
         finally:
             feed.stop()
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_live_stream_uses_the_detectors_threshold(self):
+        import shutil
+        import tempfile
+        from pathlib import Path
+        from hardware.camera import CameraFeed
+        from hardware.tests.test_media import FakeCapture, wait_until
+
+        class Det:
+            named, calls = 0.4, 0
+
+            def detect(self, frame):
+                Det.calls += 1
+                return [Detection("cell phone", 0.45, (10, 8, 60, 64))]     # a phone at the ear
+
+        tmp = Path(tempfile.mkdtemp(prefix="faraday-det-"))
+        feed = CameraFeed(photos_dir=tmp, fps=30, idle_s=5, capture_factory=lambda *a: FakeCapture(),
+                          detector=Det(), detect_fps=20)
+        try:
+            with feed.viewer():
+                self.assertTrue(wait_until(lambda: Det.calls >= 4))
+                with feed._lock:
+                    labels = [d.label for d in feed._boxes]
+            self.assertEqual(labels, ["cell phone"])
+        finally:
+            feed.stop()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_slow_detection_rate_keeps_its_window(self):
+        from hardware.camera import CameraFeed
+        self.assertEqual(CameraFeed(detect_fps=5)._reset_gap(), 2.0)
+        self.assertEqual(CameraFeed(detect_fps=0.5)._reset_gap(), 5.0)      # 2 s period: no reset
 
     def test_photo_checks_the_frames_after_it(self):
         import shutil

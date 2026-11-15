@@ -40,6 +40,15 @@ Set it to 0.4 to name the phone at your ear. The object still has to be steady (
 - A low detection rate (`fps` 0.5) no longer clears the window before every update.
 - The label clamp test now fails without the clamp.
 
+Second review:
+- A weapon label that qualifies always wins the name. A knife can't hide behind "cell phone"; Dell's threat label puts weapons first.
+- A track matches against all its boxes from its latest frame, votes too, so an object seen only as a second box in the photo is still followed.
+- A photo reports each object at the photo box of its winning label.
+- `object_score` outside 0-1 (60, NaN, true) falls back to 0.6 with a warning.
+- Tests now cover the vote path, the setting through the live stream, and the slow-fps window.
+
+The setting is in the shared settings example at the owner's direct request (2026-11-15); Dell FYI.
+
 Left for the owner (QUESTIONS 25): naming needs the same label at the threshold in 3 of the 5 frames. So a backpack at 0.62, 0.58, 0.61, 0.59, 0.57 is "unknown object". Lowering `object_score` to 0.55 would name it.
 
 ## 2. Camera framing

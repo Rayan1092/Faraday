@@ -199,6 +199,7 @@ class Steady(NamedTuple):
 
 
 SAME_OBJECT_IOU = 0.5   # a second box this much on top of a matched one, same frame: same object
+WEAPONS = {"knife", "scissors", "baseball bat"}   # never hidden behind another label (brain/threat.py)
 
 
 def steady_objects(frames: Sequence[Sequence[Detection]], need: int = STEADY[0],
@@ -213,7 +214,7 @@ def steady_objects(frames: Sequence[Sequence[Detection]], need: int = STEADY[0],
     tracks: List[Dict[str, Any]] = []
     for fi, found in enumerate(frames):
         objs = [d for d in found if d.label != "person"]
-        pairs = sorted(((_iou(t["latest"].box, d.box), ti, di)
+        pairs = sorted(((max(_iou(b, d.box) for b in t["recent"]), ti, di)
                         for ti, t in enumerate(tracks) for di, d in enumerate(objs)), reverse=True)
         primary: Dict[int, int] = {}                 # detection index -> track, one each
         taken = set()
@@ -232,7 +233,8 @@ def steady_objects(frames: Sequence[Sequence[Detection]], need: int = STEADY[0],
             if best[0] >= SAME_OBJECT_IOU:
                 votes[di] = best[1]
                 continue
-            tracks.append({"latest": d, "frame": -1, "frames": set(), "named": {}, "boxes": {}})
+            tracks.append({"latest": d, "frame": -1, "frames": set(), "named": {}, "boxes": {},
+                           "recent": [], "first": {}})
             primary[di] = len(tracks) - 1
         for di, ti in list(primary.items()) + list(votes.items()):
             d, t = objs[di], tracks[ti]
@@ -240,6 +242,11 @@ def steady_objects(frames: Sequence[Sequence[Detection]], need: int = STEADY[0],
                 t["latest"], t["frame"] = d, fi
                 t["frames"].add(fi)
                 t["boxes"][fi] = d
+                t["recent"] = [d.box]                # its boxes in its latest frame ...
+            else:
+                t["recent"].append(d.box)            # ... votes too, for the next frame's match
+            if fi == 0:
+                t["first"].setdefault(d.label, d)    # its photo box for each label
             if d.confidence >= named:
                 hits, top = t["named"].get(d.label, (set(), 0.0))
                 hits.add(fi)
@@ -248,11 +255,14 @@ def steady_objects(frames: Sequence[Sequence[Detection]], need: int = STEADY[0],
     for t in tracks:
         if len(t["frames"]) < need:
             continue                                  # a flicker: not shown at all
-        names = sorted(((len(h), top, label) for label, (h, top) in t["named"].items()
+        # a weapon label that qualifies wins (a knife must never hide behind "cell phone");
+        # then the label seen most often, then the most confident
+        names = sorted(((label in WEAPONS, len(h), top, label) for label, (h, top) in t["named"].items()
                         if len(h) >= need), reverse=True)
         first = t["boxes"].get(0)
         if names:
-            out.append(Steady(t["latest"], names[0][2], round(names[0][1], 2), t["frame"], first))
+            first = t["first"].get(names[0][3], first) if first is not None else None
+            out.append(Steady(t["latest"], names[0][3], round(names[0][2], 2), t["frame"], first))
         else:
             out.append(Steady(t["latest"], None, t["latest"].confidence, t["frame"], first))
     return out
@@ -390,10 +400,14 @@ class Detector:
         except Exception as e:
             log.warning("face counter unavailable: %r", e)
             faces = None
+        raw = cfg.get("object_score", NAMED)
         try:
-            named = min(1.0, max(0.0, float(cfg.get("object_score", NAMED))))
+            named = float(raw)
+            if isinstance(raw, bool) or not 0.0 <= named <= 1.0:      # NaN fails this too
+                raise ValueError(raw)
         except (TypeError, ValueError):
-            log.warning("camera.detector.object_score must be a number; using %.1f", NAMED)
+            log.warning("camera.detector.object_score must be a number from 0 to 1, not %r; "
+                        "using %.1f", raw, NAMED)
             named = NAMED
         return cls(objects, faces, named)
 
