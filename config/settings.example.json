@@ -125,7 +125,7 @@
     "index": 0,
     "width": 1280,
     "height": 720,
-    "detector": {"enabled": true, "model": "hardware/models/yolox_tiny.onnx", "score": 0.35, "fps": 5},
+    "detector": {"enabled": true, "model": "hardware/models/yolox_tiny.onnx", "score": 0.35, "object_score": 0.6, "fps": 5},
     "alarm_record_s": 10
   },
 

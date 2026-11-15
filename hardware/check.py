@@ -26,8 +26,19 @@ def camera(settings) -> int:
     print(f"{time.monotonic() - t0:.1f}s  source={ev.source}  photo={ev.data['photo_path'] or '(none)'}")
     print(f"description: {ev.data['description']}  (by {ev.data.get('described_by') or 'nobody'})")
     if ev.data.get("detections") is not None:
+        named = getattr(cam.detector, "named", None)
+        if named is not None:
+            print(f"detector: objects named at {named:.2f} or more (camera.detector.object_score)")
         print(f"detector: people={ev.data.get('people')} faces={ev.data.get('faces')} "
               + ", ".join(f"{d['label']} x{d['count']} {d['confidence']:.2f}" for d in ev.data["detections"]))
+    if ev.data["photo_path"]:
+        import cv2
+        from hardware.settings import REPO_ROOT
+        img = cv2.imread(str(REPO_ROOT / ev.data["photo_path"]))
+        if img is not None:
+            h, w = img.shape[:2]
+            shape = "16:9" if abs(w / h - 16 / 9) < 0.02 else "4:3" if abs(w / h - 4 / 3) < 0.02 else f"{w / h:.2f}:1"
+            print(f"frame: {w}x{h} ({shape}). The live stream is always this whole frame.")
     if ev.data["photo_path"] and cam.vision is not None and cam.vision.last.get("error"):
         print(f"vision ({cam.vision.model}) failed: {cam.vision.last['error']}")
         print("details: python -m hardware.check vision")

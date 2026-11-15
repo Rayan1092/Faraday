@@ -4,9 +4,14 @@ Dell's dashboard server is JSON-only (4 KB body cap) and lives in Dell's folder,
 so the binary media runs here, next to it (PLAN Q27):
 
     GET  /                  reference Controls page (works on its own, end to end)
-    GET  /stream.mjpg       live camera, MJPEG (use as <img src=...>)
+    GET  /stream.mjpg       live camera, MJPEG (use as <img src=...>): always the camera's
+                            whole frame, never cropped or scaled, with the detector's boxes
+                            drawn in frame pixels (so they match whatever size it's shown at)
     GET  /frame.jpg         one current frame
-    GET  /api/status        {"camera": bool, "intercom": bool, "outlets": {...}, "health": {...}}
+    GET  /api/status        {"camera": bool, "frame": {"width", "height"} or null, "intercom": bool,
+                             "outlets": {...}, "health": {...}}
+                            Show the stream uncropped: CSS aspect-ratio width / height, or
+                            object-fit: contain (cover crops the edges, and the boxes with them).
     POST /api/intercom      raw int16 mono PCM chunk, header X-Sample-Rate (default 16000)
     POST /api/intercom/end  the owner released the talk button
     POST /api/control       {"outlet": "porch_light", "on": true}
@@ -102,7 +107,14 @@ class ControlsServer:
 
     # ---- routes ------------------------------------------------------------------
     def status(self) -> Dict[str, Any]:
+        size = None
+        try:
+            size = self.feed.frame_size() if self.feed is not None else None
+        except Exception:
+            pass                                   # an older feed without frame_size()
         return {"camera": self.feed is not None and not getattr(self.feed, "failed", False),
+                # the stream's real shape (owner 2026-11-15: a page cropped it, boxes got cut)
+                "frame": {"width": size[0], "height": size[1]} if size else None,
                 "intercom": self.intercom is not None,
                 "intercom_active": bool(self.intercom is not None and self.intercom.active),
                 "outlets": self.outlet_state() if self.outlet_state else {},
@@ -276,7 +288,7 @@ main { max-width: 960px; margin: 0 auto; padding: 16px; display: grid; gap: 16px
        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
 h1 { font-size: 20px; margin: 16px 16px 0; } h2 { font-size: 16px; margin: 0 0 12px; }
-img { width: 100%; border-radius: 8px; background: #000; aspect-ratio: 16 / 9; object-fit: cover; }
+img { width: 100%; border-radius: 8px; background: #000; aspect-ratio: 16 / 9; object-fit: contain; }
 button { font: inherit; padding: 12px 16px; border-radius: 10px; border: 1px solid var(--line);
          background: var(--bg); color: var(--fg); cursor: pointer; min-height: 44px; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -324,6 +336,7 @@ function drawOutlets(state) {
 function refresh() {
   fetch("/api/status", { cache: "no-store" }).then((r) => r.json()).then((s) => {
     drawOutlets(s.outlets || {});
+    if (s.frame) $("cam").style.aspectRatio = s.frame.width + " / " + s.frame.height;   // whole frame
     $("talk").disabled = !s.intercom;
     if (!s.intercom) $("talknote").textContent = "No speaker connected.";
   }).catch(() => {});
