@@ -81,7 +81,9 @@ class EveryEventGivesValidActions(unittest.TestCase):
         for mode in Mode.ALL:  # motion is plain code (baseline + modes/), not the brain
             self.assertEqual(brain.decide(events.motion(), mode).actions, [])
         out = brain.decide(events.speech("Faraday, I'm heading out."), Mode.HOME).actions
-        self.assertEqual(out[0].args, {"mode": "away"})
+        # Owner, Mac: no keyword arming in the visitor fallback (owner speech goes through
+        # the owner router, which decides arming).
+        self.assertNotIn(ActionType.SET_MODE, [a.type for a in out])
         msg = brain.decide(events.speech("Package for Sam."), Mode.AWAY).actions
         self.assertEqual(msg[0].type, ActionType.SAVE_MESSAGE)
         summary = brain.decide(events.speech("What happened while I was out?"), Mode.HOME).actions

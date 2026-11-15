@@ -332,8 +332,8 @@ def _call(reply: Any) -> tuple:
     return "", {}
 
 
-_ACTION_ALIAS = {"remind": T.SAY_OWNER, "reminder": T.SAY_OWNER, "remind_owner": T.SAY_OWNER, "say": T.SAY_OWNER,
-                 "tell_owner": T.SAY_OWNER, "speak": T.SAY_OWNER, "tell_visitor": T.SAY_VISITOR,
+_ACTION_ALIAS = {"remind": T.SAY_OWNER, "reminder": T.SAY_OWNER, "remind_owner": T.SAY_OWNER,
+                 "tell_owner": T.SAY_OWNER, "tell_visitor": T.SAY_VISITOR,
                  "say_to_visitor": T.SAY_VISITOR, "instruction": T.SAY_VISITOR, "light_on": T.LIGHTS_ON,
                  "outlet_on": T.LIGHTS_ON, "turn_on": T.LIGHTS_ON, "light_off": T.LIGHTS_OFF,
                  "outlet_off": T.LIGHTS_OFF, "turn_off": T.LIGHTS_OFF, "mode": T.SET_MODE, "arm": T.SET_MODE,
@@ -357,16 +357,34 @@ def _tidy_args(args: Dict[str, Any], infer: bool = True) -> Dict[str, Any]:
         args["outlets"] = [o.strip() for o in re.split(r"[,\s]+and\s+|,\s*", args["outlets"]) if o.strip()]
     if args.get("night") in ("true", "false"):
         args["night"] = args["night"] == "true"
-    if infer and not args.get("action"):
+    if infer and args.get("trigger") and args.get("action") in (None, "", "say", "speak"):
+        # Only with a trigger: a correction with only new words is decided in check().
         if args.get("to_mode"):
             args["action"] = T.SET_MODE
         elif args.get("outlets"):
             args["action"] = T.LIGHTS_ON
-        elif args.get("text") and args.get("trigger") in (T.DELIVERY, T.DOORBELL):
-            args["action"] = T.SAY_VISITOR
         elif args.get("text"):
-            args["action"] = T.SAY_OWNER
+            args["action"] = "say"               # owner or visitor: from the words, in check()
     return args
+
+
+_REMIND_ME = re.compile(r"\b(?:remind (?:me|us)|tell me|let me know|warn me)\b", re.I)
+_TELL_THEM = re.compile(r"\b(?:tell|ask|let)\s+(?:them|him|her|the\s+\w+|visitors?|guests?|couriers?|drivers?|anyone|"
+                        r"everyone|whoever)\b|\bshould\b|\bsay\b", re.I)
+
+
+def _say_who(args: Dict[str, Any], said: str) -> Dict[str, Any]:
+    """A "say" with no side named: the owner's words decide (review: "remind me to tip the
+    driver when a delivery comes" is for the owner, not the courier)."""
+    if args.get("action") != "say":
+        return args
+    if not args.get("trigger"):
+        return {**args, "action": None}      # a correction: the task being changed keeps its side
+    if _REMIND_ME.search(said):
+        return {**args, "action": T.SAY_OWNER}
+    if args.get("trigger") in (T.DELIVERY, T.DOORBELL):
+        return {**args, "action": T.SAY_VISITOR if _TELL_THEM.search(said) else None}
+    return {**args, "action": T.SAY_OWNER}
 
 
 def summaries(tasks: List[Dict[str, Any]]) -> str:
@@ -408,6 +426,7 @@ def check(name: str, args: Dict[str, Any], text: str, tasks: List[Dict[str, Any]
     last = tasks[-1] if tasks else None
     if name == "list_tasks":
         return TaskPlan(LIST)
+    args = _say_who(args, text)
     new = _replacement(text)
     if name == "remove_task" and new is not None and tasks:
         # "Cancel the instruction before and tell the delivery man to ..." (Mac retest 3):
@@ -422,7 +441,7 @@ def check(name: str, args: Dict[str, Any], text: str, tasks: List[Dict[str, Any]
         # "Cancel that leaving it by the side door, make it the main door" (owner, Mac):
         # a change, not only a removal.
         old = by_id.get(str(args.get("task_id") or "")) or _named(text, tasks) or last
-        if old.get("text"):
+        if old.get("text") and _partial(swap.group(1).strip(), old["text"], old["action"]):
             changed, problem = check_words({**old, "text": swap.group(1)}, text, old=old)
             changed = T.normalize(changed)
             if not problem and not T.check_task(changed):
@@ -488,7 +507,9 @@ def _replacement(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-_MAKE_IT = re.compile(r"\b(?:make (?:it|that)|change (?:it|that) to|instead,?)\s+(.+?)[.!]?$", re.I)
+# "..., make it the main door": its own clause (not "I'll make it myself", review).
+_MAKE_IT = re.compile(r"(?:^|[,;]\s*|\b(?:and|but)\s+)(?:make (?:it|that)|change (?:it|that) to|instead,?)\s+(.+?)[.!]?$",
+                      re.I)
 _VAGUE = {"cancel", "that", "thing", "this", "task", "tasks", "one", "remove", "delete", "forget", "please",
           "actually", "instead", "reminder", "instruction", "the"}
 

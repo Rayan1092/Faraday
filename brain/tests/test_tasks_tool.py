@@ -250,6 +250,26 @@ class MacModels(unittest.TestCase):
         p = planner.check("remove_task", {"task_id": "nope"}, "Cancel the side door thing.", [side])
         self.assertEqual((p.op, p.task_id), (planner.REMOVE, "task_1"))
 
+    def test_review_round(self):
+        main = _task(trigger="delivery", action="say_visitor", text="use the main door")
+        name, args = planner._call(tool_calls(("remember", {"text": "the side door"})))
+        p = planner.check(name, args, "actually make that the side door", [main])
+        self.assertEqual((p.op, p.task["text"]), (planner.UPDATE, "use the side door"))
+        name, args = planner._call(tool_calls(("remember", {"trigger": "delivery", "text": "tip the driver"})))
+        p = planner.check(name, args, "remind me to tip the driver when a delivery comes", [])
+        self.assertEqual(p.task["action"], T.SAY_OWNER)
+        trash = _task(trigger="home", action="say_owner", text="take out the trash")
+        p = planner.check("remove_task", {"task_id": "task_1"}, "cancel the trash reminder, I'll make it myself",
+                          [trash])
+        self.assertEqual(p.op, planner.REMOVE)
+
+    def test_leaving_phrases_still_arm_and_lights_stay_lights(self):
+        for text in ("I'm leaving the house now", "Heading out the door", "I'm out the door, bye", "Leaving now",
+                     "I'm leaving for work"):
+            self.assertEqual(owner.clearly_arming(text), Mode.AWAY, text)
+        for text in ("Cancel that, turn on the porch light instead", "cancel the alarm, the door is fine"):
+            self.assertNotEqual(owner.strong(text, tasks=True, has_tasks=True), owner.TASK, text)
+
 
 class Words(unittest.TestCase):
     def test_times(self):

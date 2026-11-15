@@ -25,8 +25,9 @@ def _outlet(on: bool, outlet: str) -> RawItem:
 
 
 # "leaving it by the side door" is about a package, not the owner going out (owner, Mac).
-_LEAVING = re.compile(r"\b(heading out|leaving(?!\s+(?:it|them|the|a|an|this|that|my|your|our|packages?|parcels?|"
-                      r"boxes|box|stuff|things?)\b)|going out|i'?m off(?! to (bed|sleep))|away mode|bye)\b", re.I)
+_LEAVING = re.compile(r"\b(heading out|leaving(?!\s+(?:it|them|this|that|(?:the|a|an|my|your)\s+(?:package|parcel|"
+                      r"box|stuff|delivery)|packages?|parcels?|box(?:es)?|stuff|things?)\b)|going out|"
+                      r"i'?m off(?! to (bed|sleep))|away mode|bye)\b", re.I)
 _BED = re.compile(r"\b(good ?night|night night|(going|heading|off|go) to (bed|sleep)|night mode|bed ?time|"
                   r"turning in|time for bed)\b", re.I)
 _SUMMARY = re.compile(r"\b(what happened|while i was (out|away)|summar\w*|any (news|visitors))\b", re.I)
@@ -86,12 +87,8 @@ def _speech(text: str, mode: str) -> List[RawItem]:
     rule = parse_rule(text)
     if rule and mode != Mode.AWAY:
         return [{"type": ActionType.ADD_RULE, "args": rule}, _speak(RULE_SAVED)]
-    if _BED.search(text) and not armed:
-        return [{"type": ActionType.SET_MODE, "args": {"mode": Mode.NIGHT}},
-                _speak(NIGHT_ON)]
-    if _LEAVING.search(text) and not armed:
-        return [{"type": ActionType.SET_MODE, "args": {"mode": Mode.AWAY}},
-                _speak(AWAY_ON)]
+    # No keyword arming (owner, Mac: "cancel that leaving it by the side door" armed the
+    # house). With no model answer, the mode never changes from words alone.
     light = _LIGHT.search(text)
     if light and mode != Mode.AWAY:
         phrase = light.group(0).lower()

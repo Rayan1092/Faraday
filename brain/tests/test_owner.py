@@ -42,9 +42,11 @@ class Router(unittest.TestCase):
     def test_keywords_without_a_model(self):
         r = OwnerRouter(None, log=lambda _m: None)
         cases = {
-            # Owner, Mac: no keyword arming. Without a model the house never arms by voice.
-            "I'm heading out.": owner.UNCLEAR,
-            "Goodnight, I'm going to bed.": owner.UNCLEAR,
+            # No model configured at all: plainly leaving or bedtime words arm (nothing to
+            # override). "Leaving it by the side door" never does (owner, Mac).
+            "I'm heading out.": owner.ARM_AWAY,
+            "Goodnight, I'm going to bed.": owner.ARM_NIGHT,
+            "Actually cancel that leaving it by the side door, make it the main door.": owner.UNCLEAR,
             "Who's at the door?": owner.LOOK,
             "What happened while I was out?": owner.SUMMARY,
             "Turn off the porch light.": owner.LIGHT,

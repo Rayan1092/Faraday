@@ -82,10 +82,10 @@ _AUDIENCE_SHOULD = re.compile(r"\b(?:couriers?|deliver\w*|visitors?|guests?|driv
 _CORRECTION_START = re.compile(_WAKE_RX + r"(?:actually|instead|change (?:that|it)|make (?:that|it))\b[\s,]*", re.I)
 _NOW_INTENTS = (ARM_AWAY, ARM_NIGHT, LIGHT, LOOK, SUMMARY, PASSPHRASE)
 _CHANGE = re.compile(r"\b(?:change|move|update|cancel|forget|remove|delete|scrap|swap|replace)\b", re.I)
-_TASK_THING = re.compile(r"\b(?:deliver\w*|door|gate|spot|place|reminders?|tasks?|instructions?|thing|package|parcel|"
-                         r"porch light|lamp|lights?|message)\b", re.I)
+_TASK_THING = re.compile(r"\b(?:deliver\w*|spot|reminders?|tasks?|instructions?|thing|package|parcel|side door|"
+                         r"main door|back door|front door)\b", re.I)
 # Words that make a request about a task or the visitor's words, never about leaving now.
-_NOT_LEAVING = re.compile(r"\b(?:cancel|forget|remove|delete|make (?:that|it)|change|instead|door|gate|deliver\w*|"
+_NOT_LEAVING = re.compile(r"\b(?:cancel|forget|remove|delete|make (?:that|it)|change|instead|deliver\w*|"
                           r"packages?|parcels?|couriers?|reminders?|tasks?|instructions?|spot|tell (?:them|him|her)|"
                           r"ask (?:them|him|her))\b", re.I)
 
@@ -113,7 +113,9 @@ def is_task(text: str, has_tasks: bool = False) -> bool:
             return False                  # "Actually, I'm heading out", "Make it night mode"
         if has_tasks:
             return True                   # "Actually, make that the side door"
-    if has_tasks and _CHANGE.search(text) and _TASK_THING.search(text):
+    if (has_tasks and _CHANGE.search(text) and _TASK_THING.search(text)
+            and not fb._LIGHT.search(text) and not _WEAK[PASSPHRASE].search(text)
+            and not re.search(r"\b(?:alarm|lights?|lamp)\b", text, re.I)):
         return True                       # "change the delivery spot to the main door", "cancel the side door thing"
     if _EVENT_CLAUSE.search(text) or _AUDIENCE_SHOULD.search(text):
         return True
@@ -340,8 +342,15 @@ class OwnerRouter:
                 self.log(f"[owner] Bonsai failed: {e}")
                 failed = True
             elapsed = time.perf_counter() - started
+        if self.client is None and clear is None:
+            # No model configured at all (rules-only runs, NV's rehearsal): nothing for a
+            # keyword to override, so plainly leaving or bedtime words may arm.
+            arm = clearly_arming(text)
+            clear = ARM_AWAY if arm == Mode.AWAY else ARM_NIGHT if arm == Mode.NIGHT else None
         intent, note = self._check(text, clear, model_intent)
-        if intent in (ARM_AWAY, ARM_NIGHT) and self.confirm_client is not None:
+        refused_arm = False
+        if (intent in (ARM_AWAY, ARM_NIGHT) and extract and self.confirm_client is not None
+                and self.confirm_client is not self.client and model_intent is not None):
             started = time.perf_counter()
             try:
                 second, _ = parse(self.confirm_client.chat(
@@ -353,9 +362,11 @@ class OwnerRouter:
             elapsed = (elapsed or 0.0) + (time.perf_counter() - started)
             if second != intent:
                 intent, note = UNCLEAR, f"the smart model said {second}, not {intent}: not arming"
+                refused_arm = True
         if model_intent is not None:
             via = "bonsai" if intent == model_intent else "code"
-        r = Route(intent, via, model_intent, elapsed_s=elapsed, note=note)
+        r = Route(intent, via, model_intent, elapsed_s=elapsed, note=note,
+                  cut_off=refused_arm)   # a refused arm asks to say it again, not "I can't help"
         if r.intent in (TASK, ADD_INSTRUCTION, ADD_RULE) and self.tasks_mode:
             # A standing task: the smart Bonsai reads it (brain/tasks.py). What the keywords
             # read stays as the fallback when there's no model.
