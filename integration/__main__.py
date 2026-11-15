@@ -100,7 +100,7 @@ def build_app(args: argparse.Namespace, settings, known_outlets=None, parts=None
         chime = (parts["chime"] if "chime" in parts
                  else None if args.print_speech else (lambda: play_chime(gate, speaker_device)))
         app.voice = Voice(recorder, parts.get("stt") or SpeechToText.from_settings(settings),
-                          app.submit, listen=audio.get("listen"), wake=wake,
+                          app.submit, out=lambda line: app.out(line), listen=audio.get("listen"), wake=wake,
                           diarizer=diarizer,
                           diarize_grace_s=Diarizer.grace_s(settings),
                           owner_voice=owner_voice, owner_voice_grace_s=OwnerVoice.grace_s(settings),

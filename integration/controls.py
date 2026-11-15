@@ -91,7 +91,9 @@ class ControlsServer:
         return self
 
     def stop(self) -> None:
-        self.httpd.shutdown()
+        if self._thread is not None:     # shutdown() without serve_forever() running hangs
+            self.httpd.shutdown()
+            self._thread = None
         self.httpd.server_close()
         if self.intercom is not None:
             self.intercom.stop()
