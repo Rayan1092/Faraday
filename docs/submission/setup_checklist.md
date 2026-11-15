@@ -29,7 +29,7 @@ Print this or keep it open on a phone. Do it top to bottom. Anything marked **[T
 2. **Argmax speech-to-text.** In its own terminal: `.build/release/argmax-cli serve` (port 50060). Say one test sentence, because the first one is slow (warm-up).
 3. **Faraday.** Run `integration/start_mac.sh`. It refuses to start if LM Studio or Argmax don't answer, and it warns about the Wi-Fi, a missing Flipper or the example passphrase. Then it starts the app, the dashboard at http://127.0.0.1:8080 and the camera and intercom server on port 8081. Say "Hey Faraday" to talk to it (or press `r` in the app console).
 4. **Dashboard.** Open http://127.0.0.1:8080 in the browser and go full screen (Cmd+Ctrl+F). It should say HOME in green.
-5. **Settings check.** In `config/settings.json`, the passphrase is set (not the example one) and `llm.profile` is `mac`.
+5. **Settings check.** In `config/settings.json`, the passphrase is set (not the example one), `llm.profile` is `mac`, and `alerts.visitor_quiet_s` is 60 or absent (an old 120 there would keep motion quiet for two minutes after a doorbell).
 6. **Controls page.** Click **Controls** in the dashboard's bottom row, on the Mac itself. The live camera should show. Chrome asks for the microphone the first time you hold **Hold to talk to visitor**: click Allow.
    - **From another computer or a phone** (only with a network, so not once the Wi-Fi is off): open `chrome://flags/#unsafely-treat-insecure-origin-as-secure`, add the dashboard address NV gives plus the same address on port 8081 (for example `http://<mac-ip>:8080,http://<mac-ip>:8081`; the page lists both if the mic is blocked), set it to **Enabled** and click **Relaunch**.
 
@@ -39,9 +39,9 @@ Print this or keep it open on a phone. Do it top to bottom. Anything marked **[T
 - [ ] Wave at the motion sensor. You should see one motion event (about 17 packets).
 - [ ] Click Away on the dashboard and wave. The porch light turns on and the dashboard turns amber. The Flipper's LED stays off, because it only lights up on an alarm.
 - [ ] Say "Faraday, disarm". It refuses.
-- [ ] Say "Hey Faraday, who's at the door?" It says "Checking the camera." and then what the camera sees.
 - [ ] Open **Controls**: hold Talk and say "hello". It plays on the door speaker. Press **Snapshot**: a photo and its description appear.
 - [ ] Type the passphrase in the dashboard's Home box. It goes green.
+- [ ] Now at Home, say "Hey Faraday, who's at the door?" It says "Checking the camera." and then how many people are there and the label ("One person is at the front door. It looks like a visitor."). While armed in Away it wouldn't answer.
 - [ ] Clear the rules and any instructions on the dashboard (✕).
 - [ ] Back to HOME, lamps off.
 

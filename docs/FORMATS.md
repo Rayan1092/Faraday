@@ -192,7 +192,7 @@ The validator allows only these steps: `normal→warning`, `warning→alarm`, `w
 
 Sent by `brain/` right after a `photo_described`. It says what the scene at the door looks like. `caused_by` is the `photo_described` it judges, and `source` must be `brain`.
 
-**What the label may do.** A photo itself is never answered (the doorbell greeting is fixed and spoken at the ring); the label shapes what Faraday says to a visitor afterwards (a delivery hears the owner's drop-off words). Walked up and rang with no warning signs is a visitor or a delivery; stayed at the door without ringing while armed is `suspicious`. It's also shown on the dashboard and included in the summary. `suspicious` while armed may *escalate*: plain code in `modes/` raises the alert from `normal` to `warning`, and the confrontation line comes early.
+**What the label may do.** A photo itself is never answered (the doorbell greeting is fixed and spoken at the ring); the label shapes what Faraday says to a visitor afterwards (a delivery hears the owner's drop-off words). Walked up and rang with no warning signs is a visitor or a delivery; stayed at the door without ringing while armed is `suspicious`. It's also shown on the dashboard and included in the summary. `suspicious` while armed may *escalate*: plain code in `modes/` raises the alert from `normal` to `warning`, and the fixed warning line is spoken. Nothing spoken describes the person (owner, second Mac test).
 
 **What it can never do:** lower an alert, turn lights off, change the mode or disarm. Code still guarantees the lights and alerts from the mode table. If Bonsai's answer is invalid, plain-code rules decide (`via: "rules"`).
 
