@@ -31,9 +31,14 @@ BASH = find_bash()
 
 
 class Server:
-    def __init__(self, models=("bonsai-test",)):
+    """Fake LM Studio: /v1/models lists every downloaded model (like the real one),
+    /api/v0/models adds each model's state. loaded=None means all are loaded."""
+
+    def __init__(self, models=("bonsai-test",), loaded=None, v0=True):
         outer = self
         self.models = list(models)
+        self.loaded = list(models) if loaded is None else list(loaded)
+        self.v0 = v0
 
         class H(BaseHTTPRequestHandler):
             def log_message(self, *a):
@@ -42,6 +47,11 @@ class Server:
             def do_GET(self):
                 if self.path == "/v1/models":
                     raw = json.dumps({"data": [{"id": m} for m in outer.models]}).encode()
+                    code = 200
+                elif self.path == "/api/v0/models" and outer.v0:
+                    raw = json.dumps({"data": [
+                        {"id": m, "state": "loaded" if m in outer.loaded else "not-loaded"}
+                        for m in outer.models]}).encode()
                     code = 200
                 else:
                     raw, code = b'{"error":"not found"}', 404
@@ -87,7 +97,8 @@ class StartMac(unittest.TestCase):
     def test_all_up_passes_and_would_start(self):
         code, out = self.run_script(self.settings)
         self.assertEqual(code, 0, out)
-        self.assertIn("has bonsai-test", out)
+        self.assertIn("has bonsai-test downloaded", out)
+        self.assertIn("bonsai-test is the loaded model", out)
         self.assertIn("Argmax STT answering", out)
         self.assertIn("would start", out)
         self.assertIn("-m integration --offline", out)
@@ -104,6 +115,32 @@ class StartMac(unittest.TestCase):
         code, out = self.run_script(self.settings)
         self.assertEqual(code, 1, out)
         self.assertIn("no model 'bonsai-2-9b'", out)
+
+    def test_downloaded_but_other_model_loaded_fails(self):
+        """The Mac also has 27B models installed; only Bonsai 2 may run."""
+        self.lm.close()
+        self.lm = Server(models=("bonsai-test", "qwen-27b"), loaded=("qwen-27b",))
+        self.settings["llm"]["profiles"]["mac"]["base_url"] = self.lm.base
+        code, out = self.run_script(self.settings)
+        self.assertEqual(code, 1, out)
+        self.assertIn("NOT loaded", out)
+        self.assertIn("qwen-27b", out)
+
+    def test_extra_loaded_model_only_warns(self):
+        self.lm.close()
+        self.lm = Server(models=("bonsai-test", "qwen-27b"))
+        self.settings["llm"]["profiles"]["mac"]["base_url"] = self.lm.base
+        code, out = self.run_script(self.settings)
+        self.assertEqual(code, 0, out)
+        self.assertIn("other models are loaded too (qwen-27b)", out)
+
+    def test_no_v0_endpoint_only_warns(self):
+        self.lm.close()
+        self.lm = Server(v0=False)                # older LM Studio: /api/v0/models is a 404
+        self.settings["llm"]["profiles"]["mac"]["base_url"] = self.lm.base
+        code, out = self.run_script(self.settings)
+        self.assertEqual(code, 0, out)
+        self.assertIn("can't tell which model is loaded", out)
 
     def test_argmax_down_fails(self):
         self.settings["stt"]["mac"]["url"] = "http://127.0.0.1:9/v1/audio/transcriptions"
