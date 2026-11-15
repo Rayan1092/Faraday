@@ -40,7 +40,8 @@ class Profiles(unittest.TestCase):
 
     def test_every_profile_has_every_prompt_and_stays_short(self):
         for name, profile in PROFILES.items():
-            for key in ("system", "confront", "summary"):
+            self.assertNotIn("confront", profile, name)    # spoken lines never describe the person
+            for key in ("system", "summary"):
                 self.assertIn(key, profile, name)
                 self.assertLess(len(profile[key]), 700, (name, key))
             self.assertIn("never disarm", profile["system"], name)

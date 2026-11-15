@@ -237,10 +237,6 @@ def cases() -> List[Case]:
              _speech_with_instruction("If a delivery comes, ask them to leave it by the side door.",
                                       "Hi, I have a package for Sam."),
              _says("side door"), _says("side door")),
-        Case("confrontation", "Alarm: one line that mentions what the camera sees (free text)",
-             Mode.AWAY, _free_text(lambda b: b.confront(events.FAKE_DESCRIPTION)),
-             _line_mentions("jacket", "box", "cardboard", "dark"),
-             _line_mentions("jacket", "box", "cardboard", "dark")),
     ]
 
 
@@ -422,7 +418,7 @@ def run_bench(brain: Brain, runs: int, only: Optional[List[str]] = None,
             else:
                 model_ok = final_ok = case.model_check(text)  # type: ignore[arg-type]
                 unsafe, fallback, sample, dropped = False, text is None, text, []
-                role = brain.force_role or "smart"   # confrontation and summary use the smart model
+                role = brain.force_role or "smart"   # the summary uses the smart model
             rows.append({"model_ok": model_ok, "final_ok": final_ok, "unsafe": unsafe,
                          "fallback": fallback, "seconds": round(took, 2), "role": role,
                          "result": sample, "dropped": dropped})
@@ -540,7 +536,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     assessor = ThreatAssessor.from_settings(settings, log=lambda _m: None)
     if args.force == "smart":  # the threat label normally runs on the fast model
         assessor = ThreatAssessor(brain.client, cfg["model"], log=lambda _m: None)
-    elif args.force == "fast":  # and the confrontation / summary normally on the smart one
+    elif args.force == "fast":  # and the summary, normally on the smart one
         brain.client = brain.fast_client
     for client in {id(c): c for c in (brain.client, brain.fast_client, assessor.client) if c}.values():
         if getattr(client, "no_think", None) == "auto":

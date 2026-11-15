@@ -33,7 +33,6 @@ from .prompts import PROFILES, pick as pick_profile  # noqa: E402
 
 # The "small" profile, kept under the old names (tests and docs refer to them).
 SYSTEM_PROMPT = PROFILES["small"]["system"]
-CONFRONT_PROMPT = PROFILES["small"]["confront"]
 SUMMARY_PROMPT = PROFILES["small"]["summary"]
 
 
@@ -101,7 +100,7 @@ class Brain:
 
     # ---- right-sized models ------------------------------------------------
     # fast (Bonsai 2B on the Mac): quick owner commands at home, and the threat label
-    #   (brain/threat.py). smart (9B): anything said to a visitor, the confrontation,
+    #   (brain/threat.py). smart (9B): anything said to a visitor,
     #   the summary, and vision (NV's hardware/vision.py uses the same smart model).
 
     def role_for(self, event: Event, mode: str) -> str:
@@ -160,7 +159,8 @@ class Brain:
         if event.type == EventType.PHOTO_DESCRIBED:
             # A photo is never answered by the model (owner, Mac test): the doorbell
             # greeting is fixed and spoken by code at the ring, motion lines come from
-            # the baseline, the alarm line from confront(). Bonsai only replies to
+            # the baseline, the alarm line is fixed (no line about the person, owner, Mac
+            # test). Bonsai only replies to
             # what a visitor says.
             return Decision([], "code")
 
@@ -272,11 +272,6 @@ class Brain:
         return actions + extra, bool(extra)
 
     # ---- free-text calls (no tools) ----------------------------------------
-
-    def confront(self, description: str) -> Optional[str]:
-        """ONE short line telling an intruder to leave, mentioning what the camera sees.
-        None if there's no model or it fails: plain code has already spoken."""
-        return self._say_one(self.prompts["confront"], f"Camera sees: {description}", "confrontation")
 
     def summarize(self, facts: List[str]) -> Optional[str]:
         """A short spoken summary of these log facts. None if no model or it fails."""

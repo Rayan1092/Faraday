@@ -11,7 +11,9 @@ through the visitor conversation. It gets one of a fixed set of intents:
    to back it is not accepted. A clear keyword match (rules, instructions,
    lights, "who's at the door?", leaving, bedtime, "what happened") wins over
    the model. With no model, or no usable answer, the keywords decide.
-3. Anything else is "unclear": "Sorry, I didn't catch that." A request that was
+3. Anything else is "unclear": "Sorry, I can't help with that. You can ask who's at
+   the door, what happened, or arm the house." (while armed: "The system is armed.
+   I can't make changes right now.", never a word about a passphrase). A request that was
    cut off ("if a delivery comes, ask them to") or an instruction or rule that
    can't be built asks the owner to say it again. Owner speech is never saved as
    a visitor message.

@@ -77,12 +77,12 @@ class Routing(unittest.TestCase):
         self.assertEqual(len(fast.calls), 0)
         self.assertEqual(smart.calls[0]["messages"][0]["content"], PROFILES["9b"]["system"])
 
-    def test_confrontation_and_summary_use_the_smart_model(self):
+    def test_the_summary_uses_the_smart_model(self):
         b, smart, fast = self.brain()
-        smart.reply = {"role": "assistant", "content": "Leave now."}
-        b.confront("a man in a mask")
+        smart.reply = {"role": "assistant", "content": "The doorbell rang once."}
         b.summarize(["The doorbell rang once."])
-        self.assertEqual((len(smart.calls), len(fast.calls)), (2, 0))
+        self.assertEqual((len(smart.calls), len(fast.calls)), (1, 0))
+        self.assertFalse(hasattr(b, "confront"))       # no confrontation line any more (owner, Mac test)
 
     def test_bench_can_force_one_model(self):
         b, smart, fast = self.brain()
