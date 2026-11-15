@@ -40,3 +40,15 @@ Both profiles ran on the 16 cases: the 9 demo phrases, 5 reworded variants, and 
 - **Both profiles pass the two hard visitor lines** 5/5. The phone number is saved, and nothing touches lights or modes.
 - **Summary safety net.** Bonsai's summary left out the visitor's message once per profile. Now plain code adds it if it's missing (`summary.ensure_messages`). The bench measures Bonsai alone, so that isn't counted here.
 - **Decision.** The `9b` prompts are safe to use on the Mac's 9B, and they even help the 4B a little. Defaults are unchanged for now: the 4B uses `small`, and a model id with "9b" picks `9b`. Five runs per case is a small sample. If we want the `9b` prompts on the 4B, set `"prompt_profile": "9b"` under `llm` in `config/settings.json`.
+
+## Fast vs smart model (sustainability line)
+
+The small Bonsai (2B) handles quick owner commands and the threat label, and the 9B handles visitor conversation, the confrontation, the summary and vision (`fast_model` / `model` in settings). The table's **Model** column says which one answered each case. To measure the difference, run on the Mac mini:
+
+```
+python -m brain.bench --profile mac                 # normal routing: fast + smart
+python -m brain.bench --profile mac --force smart   # everything on the 9B
+python -m brain.bench --profile mac --force fast    # everything on the 2B
+```
+
+Each file ends with "Average Bonsai time by model". Compare the `fast` time with the same cases under `--force smart`; that difference is the pitch's sustainability line. **[TBD: Mac numbers]** On the Windows laptop both roles are the same 4B, so there's no difference to measure there.

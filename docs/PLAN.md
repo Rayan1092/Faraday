@@ -120,6 +120,7 @@ Agreed fields and hooks between Dell and NV code. Add a row before building anyt
 | What | Owner | Status | Notes |
 |---|---|---|---|
 | `threat_assessed` event | Dell (brain/) | Built, Dell PR "threat" | FORMATS.md. Sent after every `photo_described`. Category `delivery` / `visitor` / `suspicious` / `nobody` plus a reason. Shapes speech. `suspicious` while armed raises normal to warning in `modes/` and brings the confrontation forward. It never lowers an alert, switches lights off, changes the mode or disarms |
+| `llm.profiles.<p>.fast_model` setting | Dell (brain/) | Built, Dell PR "models" | `model` = the smart Bonsai (9B: visitor conversation, confrontation, summary, vision), `fast_model` = the small one (2B: threat label, quick owner commands). The Mac uses `ternary-bonsai-2-9b-mlx` + `ternary-bonsai-2-2b-mlx`, and Windows uses the 4B for both. **NV:** `start_mac.sh` should also check that the 2B is loaded, and LM Studio needs both models loaded |
 | `speech_heard.voices` (int or null) | NV (diarization) | Agreed, not built | The voice count from Argmax diarization. Needs a FORMATS.md / `shared/` change when NV adds it. Dell's threat label already reads it if present (`Pipeline._recent_voices`) |
 
 ## Open Questions
