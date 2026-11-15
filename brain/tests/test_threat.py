@@ -86,6 +86,26 @@ class Honest(unittest.TestCase):
                                  vision_ok=False))
         self.assertEqual(home, (C.VISITOR, "1 person, face visible, at the door."))
 
+    def test_a_hidden_face_still_counts_when_vision_fails(self):
+        """Review: the detector writes "No face is visible: covered or turned away." and
+        that must stay suspicious even with "package" said, as with vision working."""
+        hidden = seen("One person at the door. No face is visible: covered or turned away.", faces=0,
+                      vision_ok=False)
+        self.assertEqual(threat.rules(hidden)[0], C.SUSPICIOUS)
+        hidden.said = "package"
+        self.assertEqual(threat.rules(hidden)[0], C.SUSPICIOUS)
+
+    def test_a_uniform_alone_is_not_a_delivery(self):
+        """Review: the override is for a box, a courier or what they said, not "uniform"."""
+        client = FakeClient(classify("visitor", "1 person in a uniform, rang the doorbell"))
+        a = threat.ThreatAssessor(client, "fast", log=lambda _m: None).assess(
+            seen("A police officer in a uniform at the door, face visible."))
+        self.assertEqual(a.category, C.VISITOR)
+
+    def test_said_never_overrides_nobody(self):
+        empty = threat.Context("Nobody is there.", Mode.AWAY, cause="doorbell", doorbells=1, said="package")
+        self.assertEqual(threat.rules(empty)[0], C.NOBODY)
+
     def test_unknown_only_when_vision_and_the_detector_failed(self):
         a = threat.ThreatAssessor(None).assess(seen("Photo saved.", people=None, detections=[],
                                                     vision_ok=False))

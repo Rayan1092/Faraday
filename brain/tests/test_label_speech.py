@@ -75,6 +75,25 @@ class LabelFromSpeech(unittest.TestCase):
         p2.handle(events.speech("If a delivery comes, ask them to leave it by the side door.", "owner"))
         self.assertEqual([e for e in p2.log.recent(50) if e.get("type") == EventType.THREAT_ASSESSED], [])
 
+    def test_a_second_press_keeps_what_was_said(self):
+        """Review: press 2's photo forgot the "parcel" said after press 1."""
+        photo, described = self.ring_and_photo(people=1, faces=1, described_by="bonsai",
+                                               detections=[{"label": "person", "count": 1, "confidence": 0.9}])
+        self.p.handle(described)
+        self.p.handle(events.speech("I have a parcel for you.", "visitor"))
+        self.assertEqual(self.labels()[-1]["data"]["category"], C.DELIVERY)
+        photo2, described2 = self.ring_and_photo(people=1, faces=1, described_by="bonsai",
+                                                 detections=[{"label": "person", "count": 1, "confidence": 0.9}])
+        self.p.handle(described2)
+        self.assertEqual(self.labels()[-1]["data"]["category"], C.DELIVERY)
+
+    def test_a_snapshot_with_no_visit_ignores_old_speech(self):
+        self.p.handle(events.speech("Delivery for Sam.", "visitor"))      # no doorbell at all
+        snap = self.p.owner_snapshot()
+        self.p.handle(photo_described(snap.id, "One person at the door, face visible.", people=1, faces=1,
+                                      described_by="bonsai"))
+        self.assertEqual(self.labels()[-1]["data"]["category"], C.VISITOR)
+
     def test_no_delivery_word_no_change(self):
         photo, described = self.ring_and_photo(people=1, faces=1, described_by="bonsai")
         self.p.handle(described)

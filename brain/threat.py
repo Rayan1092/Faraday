@@ -186,6 +186,7 @@ def grounded(reason: str, ctx: Context) -> bool:
 
 
 _BOXY = re.compile(r"\b(package|parcel|box|boxes|carton|envelope)\b", re.I)
+_COURIER = re.compile(r"\bcouriers?\b", re.I)
 
 
 def delivery_word(text: str) -> str:
@@ -243,8 +244,8 @@ def rules(ctx: Context) -> Tuple[str, str]:
         return C.SUSPICIOUS, reason_for(ctx, C.SUSPICIOUS, _first(STRONG, text))
     if FACE_HIDDEN.search(text):
         return C.SUSPICIOUS, reason_for(ctx, C.SUSPICIOUS, _first(FACE_HIDDEN, text))
-    if ctx.people is None and not ctx.said and (NOBODY.search(text) or not PERSON.search(text)):
-        return C.NOBODY, reason_for(ctx, C.NOBODY)
+    if ctx.people is None and (NOBODY.search(text) or not PERSON.search(text)):
+        return C.NOBODY, reason_for(ctx, C.NOBODY)        # what the visitor said never overrides it
     if ctx.cause == EventType.MOTION and ctx.mode in Mode.ARMED and not ctx.doorbells:
         # Owner 2026-11-15: stayed at the door without ringing = suspicious, box or not.
         return C.SUSPICIOUS, reason_for(ctx, C.SUSPICIOUS)
@@ -260,6 +261,10 @@ def _from_detector(ctx: Context) -> Tuple[str, str]:
                    if str(d.get("label")) in _WEAPONS), "")
     if weapon:
         return C.SUSPICIOUS, reason_for(ctx, C.SUSPICIOUS, f"{weapon} in view")
+    text = ctx.description or ""       # the detector's own sentence ("No face is visible: covered ...")
+    for rx in (STRONG, FACE_HIDDEN):
+        if rx.search(text):            # review: never less careful just because vision is down
+            return C.SUSPICIOUS, reason_for(ctx, C.SUSPICIOUS, _first(rx, text))
     if ctx.cause == EventType.MOTION and ctx.mode in Mode.ARMED and not ctx.doorbells:
         return C.SUSPICIOUS, reason_for(ctx, C.SUSPICIOUS)   # stayed without ringing while armed
     if ctx.said:
@@ -340,9 +345,10 @@ def check(category: str, reason: str, ctx: Context) -> Tuple[str, str, str]:
     if category == C.SUSPICIOUS and ctx.doorbells and rule_cat in (C.VISITOR, C.DELIVERY):
         # Owner 2026-11-15: walked up and rang, plain face, no warning signs = visitor/delivery.
         return rule_cat, rule_reason, "code: rang the doorbell with no warning signs"
-    if category == C.VISITOR and rule_cat == C.DELIVERY:
+    if category == C.VISITOR and rule_cat == C.DELIVERY and (
+            _BOXY.search(ctx.description or "") or ctx.said or _COURIER.search(ctx.description or "")):
         # Owner, Mac test: a box or a courier in the description, or the visitor said
-        # "package": a delivery, even though they rang.
+        # "package": a delivery, even though they rang. (Not "uniform" or "mail" alone.)
         return C.DELIVERY, rule_reason, "code: a package in the description or in what they said"
     clean = _clean_line(reason) or ""
     note = ""
@@ -408,15 +414,21 @@ def context_for(photo: Event, mode: str, recent: Iterable[Any], voices: Optional
     since = _when(origin.get("timestamp", "")) if origin.get("type") == EventType.MOTION else None
     doorbells = motions = 0
     said = ""
-    visit = _when(origin.get("timestamp", "")) if origin.get("type") in (
-        EventType.DOORBELL, EventType.MOTION) else None
+    # The visit starts at the first doorbell in the window (a second press keeps what
+    # was said after the first), else at the motion that led to the photo. No doorbell
+    # and no motion (a Snapshot): what any visitor said earlier doesn't count.
+    bells = [t for t in (_when(e.get("timestamp", "")) for e in entries
+                         if e.get("type") == EventType.DOORBELL)
+             if t and when and 0 <= (when - t).total_seconds() <= window_s]
+    visit = min(bells) if bells else (
+        _when(origin.get("timestamp", "")) if origin.get("type") == EventType.MOTION else None)
     for e in entries:
         t = _when(e.get("timestamp", ""))
         if when and t and 0 <= (when - t).total_seconds() <= window_s:
             if e.get("type") == EventType.DOORBELL and (since is None or t >= since):
                 doorbells += 1
             motions += e.get("type") == EventType.MOTION
-            if (e.get("type") == EventType.SPEECH_HEARD and (visit is None or t >= visit)
+            if (e.get("type") == EventType.SPEECH_HEARD and visit is not None and t >= visit
                     and _visitor_speech(e, mode)):
                 said = delivery_word(str((e.get("data") or {}).get("text", ""))) or said
     data = photo.data or {}

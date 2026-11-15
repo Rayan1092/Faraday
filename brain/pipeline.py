@@ -338,7 +338,11 @@ class Pipeline:
         if event.type == EventType.SPEECH_HEARD and not owner.is_owner_speech(event, mode):
             # Owner, Mac test: the detector can't see boxes. A visitor who says package,
             # parcel, delivery or courier is a delivery: this visit's label updates.
-            relabel = threat_rules.relabel_for_speech(event, mode, self.log.recent(TRACE_WINDOW))
+            try:
+                relabel = threat_rules.relabel_for_speech(event, mode, self.log.recent(TRACE_WINDOW))
+            except Exception as e:     # the label is a nicety: never stop the visitor's reply
+                self.say(f"[threat] relabel failed: {e!r}")
+                relabel = None
             if relabel is not None:
                 self.say(f"[threat] the visitor talked about a delivery: {relabel.data['reason']}")
                 self._process(relabel, result, depth + 1)
