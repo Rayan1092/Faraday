@@ -57,8 +57,6 @@ class App:
         self._outlet_state: Dict[str, str] = {}   # outlet -> last command sent OK (on/off)
         self._sent_lock = threading.Lock()
         self._speaking = False                     # a line is being spoken right now
-        self._handling = False                     # the pipeline is working on an event
-        self._photographing = False                # photo + description in progress (it is spoken)
         self.voice: Any = None                     # integration.voice.Voice, set by __main__
         self.extras: List[Any] = []                # things with stop(): controls server, camera feed
         self.flipper.on_event = self.submit
@@ -111,8 +109,10 @@ class App:
         voice opens a listening window only when this is False (owner 2026-11-14:
         it opened while Faraday was still talking). A photo in progress counts:
         its description is spoken (who's at the door)."""
-        return (self._handling or self._speaking or self._photographing
-                or not self.events.empty() or not self._speech.empty() or not self._photos.empty())
+        # unfinished_tasks counts items queued *or still being worked on* (task_done
+        # comes after), so there is no gap between get() and the busy flag
+        return (self._speaking or self.events.unfinished_tasks > 0
+                or self._speech.unfinished_tasks > 0 or self._photos.unfinished_tasks > 0)
 
     def outlet_states(self) -> Dict[str, str]:
         """Last command sent OK per outlet (for the Controls page)."""
@@ -196,56 +196,61 @@ class App:
     def _event_worker(self) -> None:
         while True:
             event = self.events.get()
-            if event is None:
-                if self._stopping.is_set():
-                    return
-                continue
-            self._handling = True
             try:
+                if event is None:
+                    if self._stopping.is_set():
+                        return
+                    continue
                 self.pipeline.handle(event)
             except Exception:
-                log.exception("pipeline failed on %s", event.type)
-                self.out(f"  [integration] pipeline failed on {event.type} (see log)")
+                log.exception("pipeline failed on %s", getattr(event, "type", "?"))
+                self.out(f"  [integration] pipeline failed on {getattr(event, 'type', '?')} (see log)")
             finally:
-                self._handling = False
+                self.events.task_done()
 
     def _speech_worker(self) -> None:
         while True:
             action = self._speech.get()
-            if action is None:
-                if self._stopping.is_set():
-                    return
-                continue
-            text = str(action.args.get("text", ""))
-            self._speaking = True
             try:
-                self.speaker.say(text)
-            except Exception:
-                log.exception("speaker failed")
+                if action is None:
+                    if self._stopping.is_set():
+                        return
+                    continue
+                text = str(action.args.get("text", ""))
+                self._speaking = True
+                try:
+                    self.speaker.say(text)
+                except Exception:
+                    log.exception("speaker failed")
+                finally:
+                    self._speaking = False
+                if self.voice is not None:
+                    # a question opens a listening window; caused_by tells whose question
+                    try:
+                        self.voice.on_said(text, caused_by=action.caused_by)
+                    except Exception:
+                        log.exception("voice.on_said failed")
             finally:
-                self._speaking = False
-            if self.voice is not None:
-                self.voice.on_said(text)       # a question opens a listening window
+                self._speech.task_done()
 
     def _camera_worker(self) -> None:
         while True:
             action = self._photos.get()
-            if action is None:
-                if self._stopping.is_set():
-                    return
-                continue
-            if self.camera is None:
-                self.out("  [camera] no camera configured; photo skipped")
-                continue
-            self._photographing = True
             try:
+                if action is None:
+                    if self._stopping.is_set():
+                        return
+                    continue
+                if self.camera is None:
+                    self.out("  [camera] no camera configured; photo skipped")
+                    continue
                 event = self.camera.take(action)
                 if event is not None:
-                    self.submit(event)
+                    self.submit(event)          # queued before task_done: no busy gap
             except Exception:
                 log.exception("camera failed")
             finally:
-                self._photographing = False
+                self._photos.task_done()
 
 
 def _brief(d: Optional[Dict[str, Any]]) -> str:

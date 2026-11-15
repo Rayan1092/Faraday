@@ -74,12 +74,15 @@ class Base(unittest.TestCase):
             self.v.stop()
         shutil.rmtree(self.dir, ignore_errors=True)
 
-    def voice(self, stt, wake=None, **kw):
+    def voice(self, stt, wake=None, listen=None, **kw):
         rec = Recorder(self.gate, audio_dir=self.dir / "out", stream_factory=self.mic)
         self.v = Voice(rec, stt, self.got.append, out=self.said.append,
-                       listen={"max_s": 15, "silence_s": 1.8, "no_speech_s": 2.0, "after_speech_s": 0.3},
+                       listen=listen or {"max_s": 15, "silence_s": 1.8, "no_speech_s": 2.0,
+                                         "after_speech_s": 0.3},
                        wake={"enabled": True, "silence_s": 0.7, **(wake or {})},
-                       busy=lambda: self.busy, chime=lambda: self.chimes.append(time.monotonic()), **kw)
+                       busy=lambda: self.busy,
+                       chime=lambda: self.chimes.append(self.v is not None and self.v.recorder.window_open),
+                       **kw)
         return self.v
 
     def say(self, *parts):
@@ -262,12 +265,188 @@ class Wake(Base):
         v = self.voice(stt)
         v.start_wake()
         self.say(("speech", 1.2), ("quiet", 1.5))
-        self.events()
-        v.on_said("Which lamp do you mean?")                           # Faraday asks back
+        owner_event = self.events()[0]
+        # Faraday asks back: the speak action's caused_by is the owner's speech_heard
+        v.on_said("Which lamp do you mean?", caused_by=owner_event.id)
         self.assertTrue(wait_until(lambda: v.windows_opened == 1))
         self.say(("speech", 1.0), ("quiet", 2.5))
         ev = self.events(2)[1]
         self.assertEqual((ev.data["text"], ev.data["channel"]), ("Yes, the living room one.", "owner"))
+
+    def test_question_not_caused_by_the_owner_is_for_the_visitor(self):
+        """Reviewer: ring, the owner asks something, the greeting ends in "?" and the
+        visitor's reply came out as owner. The greeting is for the visitor."""
+        stt = FakeSTT("Hey Faraday, who's at the door?", "Turn off the porch light.")
+        v = self.voice(stt)
+        v.start_wake()
+        v.on_doorbell()
+        self.say(("speech", 1.2), ("quiet", 1.5))
+        owner_event = self.events()[0]
+        self.assertEqual(owner_event.data["channel"], "owner")
+        v.on_said("Hello. Would you like to leave a message?", caused_by="evt_doorbell1")
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        self.say(("speech", 1.0), ("quiet", 2.5))
+        ev = self.events(2)[1]
+        self.assertEqual(ev.data["channel"], "visitor")
+
+    def test_slow_stt_phrase_then_request_keeps_the_request(self):
+        """Reviewer: with 2 s STT the request segment ended before the phrase was
+        checked, was checked on its own, didn't match and was deleted."""
+        class SlowSTT(FakeSTT):
+            def transcribe(self, wav):
+                time.sleep(2.0)
+                return super().transcribe(wav)
+        v = self.voice(SlowSTT("Hey Faraday.", "Turn on the porch light."))
+        v.start_wake()
+        self.say(("speech", 0.8), ("quiet", 0.9), ("speech", 1.5), ("quiet", 2.5))
+        ev = self.events(timeout=20)[0]
+        self.assertEqual((ev.data["text"], ev.data["channel"]), ("Turn on the porch light.", "owner"))
+        self.assertEqual(v.wake_ignored, 0)
+        self.assertEqual(self.chimes, [])                  # the owner had already gone on talking
+
+    def test_long_idle_wake_segment_becomes_a_full_window(self):
+        """Reviewer (HIGH): the backstop counted from when the wake segment opened, so
+        after a long quiet wait a doorbell window closed at once ("nobody spoke")."""
+        v = self.voice(FakeSTT("Package for Sam."),
+                       listen={"max_s": 3, "silence_s": 1.0, "no_speech_s": 3.0, "after_speech_s": 0.3})
+        v.start_wake()
+        time.sleep(5.6)                                    # quiet room: limit 3 + 2 s of wall time
+        self.assertTrue(v.listen_once("doorbell"))
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        # the old code closed the window on its first backstop check (0.1 s); the visitor
+        # answers right away (3 s no-speech limit = 0.75 s of wall time at 4x)
+        self.say(("speech", 1.0), ("quiet", 2.0))
+        ev = self.events()[0]
+        self.assertEqual((ev.data["text"], ev.data["channel"]), ("Package for Sam.", "visitor"))
+
+    def test_speech_just_before_faraday_talks_is_not_the_reply(self):
+        """Reviewer: audio from the moment before Faraday spoke started the next window
+        as "already spoke", and that stale clip was sent as the visitor's reply."""
+        self.mic = LiveMic(speed=1.0)                       # real time: the 0.5 s preroll matters
+        v = self.voice(FakeSTT("stale words"))
+        v.listen_once("doorbell")                           # opens the stream...
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        v.recorder.cancel()                                 # ...then idle: audio goes to the preroll
+        self.assertTrue(wait_until(lambda: not v.recorder.window_open))
+        self.say(("speech", 0.4))                           # someone, right before Faraday talks
+        while not self.mic.idle:
+            time.sleep(0.01)
+        self.gate.mute()                                    # Faraday: "Would you like ...?"
+        self.assertTrue(v.listen_once("question"))
+        time.sleep(0.4)
+        self.gate.unmute()
+        self.assertTrue(wait_until(lambda: v.windows_opened == 2))
+        # the question window must wait for a real answer: nobody answers, so it ends
+        # with "nobody spoke" (the first, cancelled window already printed one)
+        self.assertTrue(wait_until(lambda: sum("nobody spoke" in s for s in self.said) >= 2,
+                                   timeout=10), self.said)
+        time.sleep(0.3)
+        self.assertEqual(self.got, [])
+
+    def test_intercom_end_listens_for_the_visitor(self):
+        v = self.voice(FakeSTT("Thanks, I'll wait."))
+        v.on_intercom_end()
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        self.assertTrue(any("listening (intercom)" in s for s in self.said))
+        self.say(("speech", 1.0), ("quiet", 2.5))
+        self.assertEqual(self.events()[0].data["channel"], "visitor")
+
+    def test_question_with_another_cause_is_for_the_visitor(self):
+        """Review of #45: the caused_by rule without a doorbell in the way."""
+        v = self.voice(FakeSTT("Just walking by."))
+        v.on_said("Can I help you?", caused_by="evt_motion01")
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        self.say(("speech", 1.0), ("quiet", 2.5))
+        self.assertEqual(self.events()[0].data["channel"], "visitor")
+
+    def test_greeting_takes_over_a_silent_owner_window(self):
+        """Review of #45: "Hey Faraday" alone, then the doorbell: the visitor's answer
+        to the greeting was recorded in the owner window as owner."""
+        v = self.voice(FakeSTT("Package for Sam."))
+        self.assertTrue(v.listen_once("wake", purpose="owner"))
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        v.on_doorbell()
+        self.gate.mute()                                    # the greeting
+        time.sleep(0.2)
+        self.gate.unmute()
+        v.on_said("Hello. Would you like to leave a message?")
+        self.assertFalse(v._pending_doorbell)
+        self.assertTrue(any("listening (doorbell)" in s for s in self.said))
+        self.say(("speech", 1.0), ("quiet", 2.5))
+        self.assertEqual(self.events()[0].data["channel"], "visitor")
+
+    def test_doorbell_waits_while_the_owner_is_talking(self):
+        v = self.voice(FakeSTT("Turn on the lamp.", "Hello?"))
+        self.assertTrue(v.listen_once("wake", purpose="owner"))
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        self.say(("speech", 2.0), ("quiet", 2.5))            # the owner is talking
+        self.assertTrue(wait_until(lambda: v.recorder.window_state()["speech_started"]))
+        v.on_doorbell()
+        v.on_said("Hello, I'm Faraday.")
+        self.assertTrue(v._pending_doorbell)                 # not taken from the owner
+        first = self.events()[0]
+        self.assertEqual(first.data["channel"], "owner")
+        self.assertTrue(wait_until(lambda: any("listening (doorbell)" in s for s in self.said), timeout=8))
+
+    def test_stale_phrase_does_not_make_later_speech_an_owner_request(self):
+        """Review of #45: after "Hey Faraday." alone was answered by an owner window,
+        a leftover flag sent the next unrelated speech as an owner request."""
+        v = self.voice(FakeSTT("Hey Faraday.", "Turn on the porch light.", "Buy the new phone now."))
+        v.start_wake()
+        self.say(("speech", 0.8), ("quiet", 1.0))           # "Hey Faraday." ... then Faraday is busy
+        self.assertTrue(wait_until(lambda: v.wake_heard == 1, timeout=10))
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1, timeout=10))
+        self.say(("speech", 1.2), ("quiet", 2.5))            # the request
+        self.events()
+        self.say(("speech", 1.0), ("quiet", 1.5))            # later: no wake phrase
+        self.assertTrue(wait_until(lambda: v.wake_ignored == 1, timeout=10), self.said)
+        time.sleep(0.3)
+        self.assertEqual([e.data["text"] for e in self.got], ["Turn on the porch light."])
+
+    def test_phrase_said_twice_waits_for_the_real_request(self):
+        """Review of #45: with slow STT, "Hey Faraday. ... Hey Faraday. ... turn on the
+        porch light" sent "Hey Faraday." as the request and deleted the real one."""
+        class SlowSTT(FakeSTT):
+            def transcribe(self, wav):
+                time.sleep(1.5)
+                return super().transcribe(wav)
+        v = self.voice(SlowSTT("Hey Faraday.", "Hey Faraday.", "Turn on the porch light."))
+        v.start_wake()
+        self.say(("speech", 0.8), ("quiet", 0.9), ("speech", 0.8), ("quiet", 0.9),
+                 ("speech", 1.5), ("quiet", 2.5))
+        ev = self.events(timeout=25)[0]
+        self.assertEqual((ev.data["text"], ev.data["channel"]), ("Turn on the porch light.", "owner"))
+        self.assertEqual(v.wake_ignored, 0)
+
+    def test_chime_only_once_a_window_is_open(self):
+        v = self.voice(FakeSTT("Hey Faraday.", "Lights on."))
+        v.start_wake()
+        self.say(("speech", 0.8), ("quiet", 1.5))
+        self.assertTrue(wait_until(lambda: self.chimes, timeout=10))
+        self.assertEqual(self.chimes, [True])
+
+    def test_mute_in_the_middle_of_speech_keeps_what_was_said(self):
+        """Review of #45: the mute reset threw away a visitor's sentence when the owner
+        pressed the intercom mid-sentence. Now the window ends with what was said."""
+        v = self.voice(FakeSTT("I have a package for"))
+        v.listen_once("doorbell")
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        self.say(("speech", 2.0))
+        self.assertTrue(wait_until(lambda: v.recorder.window_state()["speech_started"]))
+        time.sleep(0.15)
+        self.gate.mute()                                     # the owner presses the intercom
+        ev = self.events()[0]
+        self.gate.unmute()
+        self.assertEqual(ev.data["text"], "I have a package for")
+        self.assertGreater(ev.data["duration_s"], 0.4)
+
+    def test_stop_ends_doorbell_retries(self):
+        v = self.voice(FakeSTT())
+        v.on_doorbell()
+        v.stop()
+        v._doorbell_fallback()                               # a timer firing during shutdown
+        self.assertIsNone(v._doorbell_timer)
+        self.assertEqual(v.windows_opened, 0)
 
     def test_visitor_window_takes_over_the_wake_segment_in_place(self):
         """A doorbell during wake listening: the open segment becomes the visitor
@@ -345,6 +524,20 @@ class Hooks(unittest.TestCase):
         self.fl.device.wave(packets=4, gap_s=0.05)
         self.assertTrue(wait_until(lambda: "outlet1_on" in self.fl.device.tx))
         self.assertFalse(self.app.control("porch_light", True))       # already on
+
+    def test_on_said_failing_does_not_stop_the_speech_worker(self):
+        class Broken:
+            def on_said(self, text, caused_by=None):
+                raise RuntimeError("boom")
+
+            def stop(self):
+                pass
+        from shared import Action
+        self.app.voice = Broken()
+        for text in ("One.", "Two."):
+            self.app._on_action(Action("speak", "rules", {"text": text}))
+        self.assertTrue(wait_until(lambda: not self.app.speech_busy()))
+        self.assertTrue(any("Two." in s for s in self.said))
 
     def test_speech_busy_while_a_line_is_queued_or_spoken(self):
         from shared import Action

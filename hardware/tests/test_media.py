@@ -162,6 +162,15 @@ class IntercomPlayer(unittest.TestCase):
         self.assertEqual(ic.played, len(self.pcm))
         self.assertEqual(ic.sessions, 1)
 
+    def test_on_end_runs_after_the_owner_lets_go(self):
+        gate, ended = MicGate(), threading.Event()
+        ic = Intercom(gate, stream_factory=FakeOutput, hold_s=0.3)
+        ic.on_end = ended.set                      # __main__: voice.on_intercom_end
+        ic.feed(self.pcm[:4800].tobytes(), 16000)
+        ic.end()
+        self.assertTrue(ended.wait(5))
+        self.assertFalse(gate.muted)
+
     def test_closes_by_itself_when_chunks_stop(self):
         gate = MicGate()
         ic = Intercom(gate, stream_factory=FakeOutput, hold_s=0.2)
