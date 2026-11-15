@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-from shared import Action, ActionType, ChangedBy, Event, EventType, Mode
+from shared import Action, ActionType, ChangedBy, Event, EventType, Mode, ThreatCategory
 
 from . import fallback as fb
 from .bonsai import BonsaiClient, BonsaiError
@@ -85,6 +85,7 @@ class Brain:
         allowed = allowed_actions(event.type, mode)
         recent = list(recent)
         cause = photo_cause(event, recent)
+        label = threat_label(event, recent)
 
         if event.type == EventType.SPEECH_HEARD:
             text, matched = redact(str(event.data.get("text", "")), self.passphrase)
@@ -99,6 +100,10 @@ class Brain:
                     {"type": ActionType.SUMMARIZE_LOG, "args": {"minutes": 1440}}])
         if event.type == EventType.MODE_CHANGED:
             return self._code(event, mode, allowed, _mode_reply(event))
+        if event.type == EventType.PHOTO_DESCRIBED and label in (ThreatCategory.SUSPICIOUS,
+                                                                  ThreatCategory.NOBODY):
+            # Nobody there: nothing to say. Suspicious: the confrontation line speaks.
+            return Decision([], "code")
         if event.type == EventType.PHOTO_DESCRIBED and (cause == EventType.MOTION
                                                          or mode == Mode.NIGHT):
             # Motion lines come from the baseline (and the alarm confrontation from
@@ -108,7 +113,7 @@ class Brain:
         if not allowed:
             return Decision([], "code")  # nothing to choose from, e.g. motion at home
         if self.client is None:
-            return self._fallback(event, mode, allowed, None, "no model configured", cause=cause)
+            return self._fallback(event, mode, allowed, None, "no model configured", cause=cause, label=label)
         messages = [{"role": "system", "content": self.prompts["system"]},
                     {"role": "user", "content": self.prompt(event, mode, recent)}]
         if before_model is not None:
@@ -124,11 +129,11 @@ class Brain:
         except (BonsaiError, GarbageReply) as e:
             elapsed = time.perf_counter() - started
             self.log(f"[brain] Bonsai call failed after {elapsed:.2f}s: {e}")
-            return self._fallback(event, mode, allowed, elapsed, str(e), cause=cause)
+            return self._fallback(event, mode, allowed, elapsed, str(e), cause=cause, label=label)
         except Exception as e:  # never let the demo stall on a surprise
             elapsed = time.perf_counter() - started
             self.log(f"[brain] Bonsai call crashed after {elapsed:.2f}s: {e!r}")
-            return self._fallback(event, mode, allowed, elapsed, repr(e), cause=cause)
+            return self._fallback(event, mode, allowed, elapsed, repr(e), cause=cause, label=label)
 
         actions, dropped = filter_actions(items, event, mode, allowed)
         self.log(f"[brain] Bonsai call took {elapsed:.2f}s: {len(items)} proposed, "
@@ -137,7 +142,7 @@ class Brain:
             self.log(f"[brain]   dropped {_short(item)}: {why}")
         if not actions:
             return self._fallback(event, mode, allowed, elapsed,
-                                  "no usable actions from Bonsai", dropped, cause)
+                                  "no usable actions from Bonsai", dropped, cause, label)
         # Plain-code fix-ups on top of the model's answer. Each one is recorded, so the
         # benchmark can tell "Bonsai got it right" from "code fixed it".
         fixups: List[str] = []
@@ -154,7 +159,13 @@ class Brain:
         actions = self._confirm_mode(actions, event, mode, allowed)
         if len(actions) != before:
             fixups.append("added a spoken confirmation")
-        if cause == EventType.DOORBELL and not any(
+        if label == ThreatCategory.DELIVERY and not any(
+                a.type == ActionType.SPEAK and fb.mentions_dropoff(a.args["text"]) for a in actions):
+            # A delivery always gets drop-off instructions.
+            extra, _ = filter_actions([fb._speak(fb.DELIVERY_LINE)], event, mode, allowed)
+            actions = actions + extra
+            fixups.append("added the delivery instructions")
+        elif cause == EventType.DOORBELL and label != ThreatCategory.DELIVERY and not any(
                 a.type == ActionType.SPEAK and "message" in a.args["text"].lower() for a in actions):
             # A doorbell visitor must always be offered to leave a message.
             extra, _ = filter_actions([fb._speak(fb.OFFER_MESSAGE)], event, mode, allowed)
@@ -200,7 +211,7 @@ class Brain:
         if history:
             lines.append("Recent:")
             lines += [f"- {line}" for line in history]
-        lines.append(f"New: {describe_event(event, photo_cause(event, recent))}")
+        lines.append(f"New: {describe_event(event, photo_cause(event, recent), threat_label(event, recent))}")
         return "\n".join(lines)
 
     # ---- helpers -----------------------------------------------------------
@@ -213,8 +224,9 @@ class Brain:
     def _fallback(self, event: Event, mode: str, allowed: List[str],
                   elapsed: Optional[float], error: str,
                   model_dropped: Optional[List[Tuple[Any, str]]] = None,
-                  cause: str = "") -> Decision:
-        actions, dropped = filter_actions(fb.fallback(event, mode, cause), event, mode, allowed)
+                  cause: str = "", label: str = "") -> Decision:
+        actions, dropped = filter_actions(fb.fallback(event, mode, cause, label),
+                                          event, mode, allowed)
         actions = self._confirm_mode(actions, event, mode, allowed)
         self.log(f"[brain] using rule-based fallback ({error})")
         return Decision(actions, "fallback", elapsed, (model_dropped or []) + dropped, error)
@@ -351,7 +363,20 @@ def photo_cause(event: Event, recent: Iterable[Any]) -> str:
     return ""
 
 
-def describe_event(event: Event, cause: str = "") -> str:
+def threat_label(event: Event, recent: Iterable[Any]) -> str:
+    """The threat_assessed category for this photo_described, from the log, or ""."""
+    if event.type != EventType.PHOTO_DESCRIBED:
+        return ""
+    for entry in recent:
+        if hasattr(entry, "to_dict"):
+            entry = entry.to_dict()
+        if (isinstance(entry, dict) and entry.get("type") == EventType.THREAT_ASSESSED
+                and entry.get("caused_by") == event.id):
+            return str((entry.get("data") or {}).get("category", ""))
+    return ""
+
+
+def describe_event(event: Event, cause: str = "", label: str = "") -> str:
     d = event.data
     if event.type == EventType.DOORBELL:
         return "Doorbell pressed."
@@ -360,10 +385,15 @@ def describe_event(event: Event, cause: str = "") -> str:
     if event.type == EventType.SPEECH_HEARD:
         return f'Heard: "{d.get("text", "")}"'
     if event.type == EventType.PHOTO_DESCRIBED:
+        if label == ThreatCategory.DELIVERY:
+            return (f"A delivery person is at the door. Camera sees: {d.get('description', '')} "
+                    "Greet them and tell them where to leave the package.")
         if cause == EventType.DOORBELL:
             return (f"A visitor rang the doorbell. Camera sees: {d.get('description', '')} "
                     "Greet them and offer to take a message.")
         return f"Camera at the door sees: {d.get('description', '')}"
+    if event.type == EventType.THREAT_ASSESSED:
+        return f"The camera scene looks like: {d.get('category')} ({d.get('reason', '')})"
     if event.type == EventType.MODE_CHANGED:
         return f"Mode changed to {d.get('mode')}."
     return event.type

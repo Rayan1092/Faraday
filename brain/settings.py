@@ -41,6 +41,8 @@ def llm_config(settings: Dict[str, Any]) -> Dict[str, Any]:
         "profile": profile_name,
         "base_url": profile["base_url"],
         "model": profile["model"],
+        # Optional: the small, fast Bonsai for the threat label and quick decisions.
+        "fast_model": profile.get("fast_model"),
         "max_tokens": int(llm.get("max_tokens", 200)),
         "temperature": float(llm.get("temperature", 0.2)),
         "timeout_s": float(llm.get("timeout_s", 30)),

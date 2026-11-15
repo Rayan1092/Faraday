@@ -59,6 +59,7 @@ def build_state(entries: Iterable[Entry], mode: str, alert: str,
     bell_mode = Mode.HOME
     described: Dict[str, Dict[str, Any]] = {}  # photo_path -> its photo_described view
     described_photos = set()  # take_photo ids that already have their photo_described
+    threats: Dict[str, Dict[str, str]] = {}  # photo_described id -> its threat label
 
     for e in entries:
         kind, typ = e.get("kind"), e.get("type")
@@ -100,8 +101,14 @@ def build_state(entries: Iterable[Entry], mode: str, alert: str,
             photo = {"time": clock, "description": str(info.get("description", "")),
                      "url": "/media/" + path if path else None,
                      "reason": photo_reason.get(str(e.get("caused_by")), ""), "path": path,
-                     "taken": _when(e)}
+                     "taken": _when(e), "id": str(e.get("id"))}
             described[path] = photo
+        elif typ == EventType.THREAT_ASSESSED:
+            threats[str(e.get("caused_by"))] = {"category": str(info.get("category", "")),
+                                                "reason": str(info.get("reason", "")),
+                                                "via": str(info.get("via", ""))}
+            if info.get("category") == "suspicious":
+                level = "warn"
         elif typ == ActionType.SAVE_MESSAGE:
             messages.append({"time": clock, "text": str(info.get("text", "")),
                              "sender": str(info.get("sender", "visitor"))})
@@ -126,9 +133,9 @@ def build_state(entries: Iterable[Entry], mode: str, alert: str,
         "network": network or {"offline": True, "detail": "not checked"},
         "banner": banner(mode, alert, now or datetime.now().astimezone(),
                          last_disarm, last_refusal, last_night_bell, last_bell, bell_mode),
-        "feed": list(reversed(_activity(feed, described_photos)[-FEED_SIZE:])),  # newest first
+        "feed": list(reversed(_activity(feed, described_photos, threats)[-FEED_SIZE:])),  # newest first
         "talk": talk[-TALK_SIZE:],                    # oldest first, like a chat
-        "photo": _photo_view(photo, described, newest_photo),
+        "photo": _with_threat(_photo_view(photo, described, newest_photo), photo, described, threats),
         "lights": [{"id": k, "name": OUTLET_NAMES[k], "on": v} for k, v in lights.items()],
         "messages": list(reversed(messages[-5:])),
         "summary": summary,
@@ -138,12 +145,49 @@ def build_state(entries: Iterable[Entry], mode: str, alert: str,
     }
 
 
-def _activity(feed: List[Dict[str, Any]], described_photos: set) -> List[Dict[str, Any]]:
-    """The activity timeline: Faraday's own speech lives in "Heard & said", and a
-    take_photo that already has its description is shown as that one entry."""
-    return [f for f in feed
-            if f["type"] != ActionType.SPEAK
-            and not (f["type"] == ActionType.TAKE_PHOTO and str(f.get("id")) in described_photos)]
+THREAT_NAMES = {"delivery": "Delivery", "visitor": "Visitor", "suspicious": "Suspicious",
+                "nobody": "Nobody there"}
+
+
+def _activity(feed: List[Dict[str, Any]], described_photos: set,
+              threats: Optional[Dict[str, Dict[str, str]]] = None) -> List[Dict[str, Any]]:
+    """The activity timeline: Faraday's own speech lives in "Heard & said", a
+    take_photo that already has its description is shown as that one entry, and the
+    threat label joins its photo's entry."""
+    threats = threats or {}
+    out = []
+    for f in feed:
+        if f["type"] == ActionType.SPEAK or f["type"] == EventType.THREAT_ASSESSED:
+            continue
+        if f["type"] == ActionType.TAKE_PHOTO and str(f.get("id")) in described_photos:
+            continue
+        label = threats.get(str(f.get("id"))) if f["type"] == EventType.PHOTO_DESCRIBED else None
+        if label:
+            f = dict(f)
+            f["detail"] = f.get("detail", "Photo") + " · " + THREAT_NAMES.get(label["category"], label["category"])
+            if label["category"] == "suspicious":
+                f["level"] = "warn"
+        out.append(f)
+    return out
+
+
+def _with_threat(view: Optional[Dict[str, Any]], last: Optional[Dict[str, Any]],
+                 described: Dict[str, Dict[str, Any]],
+                 threats: Dict[str, Dict[str, str]]) -> Optional[Dict[str, Any]]:
+    """Attach the threat label of the photo being shown (shown under the photo)."""
+    if view is None:
+        return None
+    url = view.get("url")
+    for d in described.values():
+        if d.get("url") == url and d.get("id") in threats:
+            label = threats[d["id"]]
+            view = dict(view)
+            view["threat"] = {"category": label["category"],
+                              "name": THREAT_NAMES.get(label["category"], label["category"]),
+                              "reason": label["reason"], "via": label["via"]}
+            break
+    view.pop("id", None)
+    return view
 
 
 def _when(entry: Entry) -> Optional[datetime]:
@@ -171,6 +215,7 @@ def _photo_view(described_last: Optional[Dict[str, Any]], described: Dict[str, D
     if one has arrived, else "Looking at the photo..."."""
     def clean(view: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         return None if view is None else {k: v for k, v in view.items() if k not in ("path", "taken")}
+    # (the photo_described id stays on the view until _with_threat has used it)
 
     if not newest:
         return clean(described_last)
@@ -234,6 +279,9 @@ def describe(e: Entry, info: Dict[str, Any]) -> str:
         return f"Alert {str(info.get('level', '')).upper()}"
     if typ == ActionType.SPEAK:
         return f'Said: "{info.get("text", "")}"'
+    if typ == EventType.THREAT_ASSESSED:
+        name = THREAT_NAMES.get(str(info.get("category")), str(info.get("category")))
+        return f"{name}: {info.get('reason', '')}".rstrip(": ")
     if typ in (ActionType.OUTLET_ON, ActionType.OUTLET_OFF):
         name = OUTLET_NAMES.get(info.get("outlet"), str(info.get("outlet")))
         return f"{name} {'ON' if typ == ActionType.OUTLET_ON else 'OFF'}"

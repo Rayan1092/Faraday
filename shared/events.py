@@ -20,8 +20,9 @@ class EventType:
     PHOTO_DESCRIBED = "photo_described"
     MODE_CHANGED = "mode_changed"
     ALERT_CHANGED = "alert_changed"
+    THREAT_ASSESSED = "threat_assessed"
     ALL = frozenset({DOORBELL, MOTION, SPEECH_HEARD, PHOTO_DESCRIBED, MODE_CHANGED,
-                     ALERT_CHANGED})
+                     ALERT_CHANGED, THREAT_ASSESSED})
 
 
 # ---- per-type data ---------------------------------------------------------
@@ -93,6 +94,29 @@ ALERT_TRANSITIONS = frozenset({
 })
 
 
+class ThreatCategory:
+    """What the camera scene looks like. It only shapes what Faraday says, and
+    'suspicious' can escalate (never lower) the alert in modes/."""
+    DELIVERY = "delivery"
+    VISITOR = "visitor"
+    SUSPICIOUS = "suspicious"
+    NOBODY = "nobody"
+    ALL = frozenset({DELIVERY, VISITOR, SUSPICIOUS, NOBODY})
+
+
+THREAT_VIA = frozenset({"bonsai", "rules"})
+THREAT_REASON_MAX = 200
+
+
+@dataclass
+class ThreatAssessedData:
+    category: str                       # ThreatCategory.*
+    reason: str = ""                    # one short line for the dashboard and log
+    via: str = "rules"                  # "bonsai" or "rules" (the plain-code fallback)
+    model: Optional[str] = None         # LM Studio model id when via is "bonsai"
+    voices: Optional[int] = None        # voice count from diarization, if known
+
+
 EVENT_DATA = {
     EventType.DOORBELL: DoorbellData,
     EventType.MOTION: MotionData,
@@ -100,6 +124,7 @@ EVENT_DATA = {
     EventType.PHOTO_DESCRIBED: PhotoDescribedData,
     EventType.MODE_CHANGED: ModeChangedData,
     EventType.ALERT_CHANGED: AlertChangedData,
+    EventType.THREAT_ASSESSED: ThreatAssessedData,
 }
 
 
@@ -197,6 +222,19 @@ def validate_event(d: Dict[str, Any]) -> List[str]:
                 errors.append(f"data.{key} '{data[key]}' is not an alert level")
         if not errors and (data["previous"], data["level"]) not in ALERT_TRANSITIONS:
             errors.append(f"alert cannot go from '{data['previous']}' to '{data['level']}'")
+    if d["type"] == EventType.THREAT_ASSESSED:
+        if d["source"] != Source.BRAIN:
+            errors.append("threat_assessed must have source 'brain'")
+        if data["category"] not in ThreatCategory.ALL:
+            errors.append(f"data.category '{data['category']}' is not a threat category")
+        if data.get("via", "rules") not in THREAT_VIA:
+            errors.append(f"data.via must be one of {sorted(THREAT_VIA)}")
+        if len(str(data.get("reason", ""))) > THREAT_REASON_MAX:
+            errors.append(f"data.reason must be at most {THREAT_REASON_MAX} characters")
+        voices = data.get("voices")
+        if voices is not None and (not isinstance(voices, int) or isinstance(voices, bool)
+                                   or voices < 0):
+            errors.append("data.voices must be a whole number or null")
     if d["type"] == EventType.SPEECH_HEARD and not str(data["text"]).strip():
         errors.append("data.text is empty")
     return errors

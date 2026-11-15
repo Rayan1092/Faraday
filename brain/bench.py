@@ -31,7 +31,9 @@ from shared import Action, ActionType, Mode, Source, make_action
 
 from sim import events
 
+from . import threat
 from .core import Brain, Decision
+from .threat import ThreatAssessor
 from .settings import REPO_ROOT, llm_config, load_settings
 
 Check = Callable[[List[Action]], bool]
@@ -199,6 +201,21 @@ def cases() -> List[Case]:
              Mode.AWAY,
              _decide(events.speech("Tell Sam to call me back at 555 0142, it's about the car."), Mode.AWAY),
              _saves_number, _saves_number),
+        # Threat label (fast model): photo description + context -> category.
+        _threat_case("t_delivery", "Threat, away doorbell: courier with a box", BOX_TEXT, Mode.AWAY,
+                     "doorbell", 1, "delivery"),
+        _threat_case("t_visitor", "Threat, away doorbell: woman waving, no package",
+                     "A woman in a red coat smiling and waving at the camera.", Mode.AWAY,
+                     "doorbell", 1, "visitor"),
+        _threat_case("t_masked", "Threat, night motion: masked man trying the handle",
+                     "A man wearing a ski mask trying the door handle.", Mode.NIGHT, "motion", 0,
+                     "suspicious"),
+        _threat_case("t_prowler", "Threat, night motion: man lingering by the window, no ring",
+                     "A man in a dark hoodie standing very still beside the side window.",
+                     Mode.NIGHT, "motion", 0, "suspicious"),
+        _threat_case("t_nobody", "Threat, away motion: empty porch",
+                     "An empty porch with a doormat and a potted plant. No one is visible.",
+                     Mode.AWAY, "motion", 0, "nobody"),
         Case("summary", "Owner: summary of the log (free text)", Mode.HOME,
              _free_text(lambda b: b.summarize(FACTS)), _summary_ok, _summary_ok),
         Case("confrontation", "Alarm: one line that mentions what the camera sees (free text)",
@@ -206,6 +223,25 @@ def cases() -> List[Case]:
              _line_mentions("jacket", "box", "cardboard", "dark"),
              _line_mentions("jacket", "box", "cardboard", "dark")),
     ]
+
+
+BOX_TEXT = events.FAKE_DESCRIPTION
+
+
+def _threat_case(name: str, title: str, description: str, mode: str, cause: str,
+                 doorbells: int, want: str) -> "Case":
+    hour = 23 if mode == Mode.NIGHT else 15
+
+    def run(assessor: ThreatAssessor):
+        ctx = threat.Context(description, mode, cause=cause, doorbells=doorbells,
+                             motions=0 if cause == "doorbell" else 1,
+                             when=datetime(2026, 11, 14, hour, 5))
+        started = time.perf_counter()
+        a = assessor.assess(ctx)
+        return None, a, (a.elapsed_s if a.elapsed_s is not None else time.perf_counter() - started)
+
+    check = lambda category: category == want  # noqa: E731
+    return Case(name, title, mode, run, check, check)
 
 
 def _unsafe(actions: List[Action], mode: str) -> bool:
@@ -219,15 +255,25 @@ def _unsafe(actions: List[Action], mode: str) -> bool:
 
 
 def run_bench(brain: Brain, runs: int, only: Optional[List[str]] = None,
-              progress: Callable[[str], None] = print) -> Dict[str, Any]:
+              progress: Callable[[str], None] = print,
+              assessor: Optional[ThreatAssessor] = None) -> Dict[str, Any]:
     results = []
+    assessor = assessor or ThreatAssessor(brain.client, getattr(brain.client, "model", None),
+                                          log=lambda _m: None)
     for case in cases():
         if only and case.name not in only:
             continue
         rows = []
         for i in range(runs):
-            decision, text, took = case.run(brain)
-            if decision is not None:
+            decision, text, took = case.run(assessor if case.name.startswith("t_") else brain)
+            if isinstance(text, threat.Assessment):
+                # Threat label: "model right" only if Bonsai answered and code didn't override.
+                a = text
+                model_ok = a.via == "bonsai" and not a.note and case.model_check(a.category)
+                final_ok = case.final_check(a.category)
+                unsafe, fallback = False, a.via == "rules"
+                sample, dropped = f"{a.category}: {a.reason}", [a.note] if a.note else []
+            elif decision is not None:
                 # "Model right" = Bonsai alone: a code correction of the key action doesn't count.
                 # Harmless additions (a spoken confirmation, the message offer) are fine.
                 corrected = [f for f in decision.fixups if f.startswith(("corrected", "saved"))]
@@ -319,7 +365,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         brain.use_prompts(args.prompts)
     only = args.only.split(",") if args.only else None
     print(f"Benchmarking {cfg['model']} ({args.runs} runs per case)")
-    report = run_bench(brain, args.runs, only)
+    assessor = ThreatAssessor.from_settings(settings, log=lambda _m: None)
+    report = run_bench(brain, args.runs, only, assessor=assessor)
     report["meta"] = {
         "date": datetime.now().astimezone().isoformat(timespec="minutes"),
         "model": cfg["model"], "profile": cfg["profile"],

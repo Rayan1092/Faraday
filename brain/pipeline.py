@@ -28,13 +28,14 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from shared import (Action, ActionType, AlertLevel, ChangedBy, Event, EventType, Mode,
-                    Source, make_action)
+                    Source, ThreatCategory, make_action)
 
 from log import EventLog
 from modes import ModeState
 from rules import RuleStore, baseline_actions, merge
 
-from . import summary
+from . import summary, threat
+from .threat import ThreatAssessor
 from .core import Brain
 from .settings import load_settings, passphrase
 
@@ -55,11 +56,14 @@ class Pipeline:
                  on_event: Optional[Callable[[Event], None]] = None,
                  on_action: Optional[Callable[[Action], None]] = None,
                  say: Callable[[str], None] = print,
-                 rules: Optional[RuleStore] = None):
+                 rules: Optional[RuleStore] = None,
+                 assessor: Optional[Any] = None):
         self.brain = brain
         self.modes = modes
         self.log = log
         self.rules = rules
+        # Threat label after every photo. Rules-only by default; from_settings gives it Bonsai.
+        self.assessor = assessor if assessor is not None else ThreatAssessor(None)
         self.on_event = on_event
         self.on_action = on_action
         self.say = say
@@ -67,6 +71,7 @@ class Pipeline:
         # take_photo action id -> (event type, mode, alert level) when the photo was asked for
         self._photo_cause: Dict[str, Tuple[str, str, str]] = {}
         self._background: List[threading.Thread] = []
+        self._confronted: set = set()  # photo_described ids that already got a confrontation
 
     @classmethod
     def from_settings(cls, settings: Optional[Dict[str, Any]] = None, use_llm: bool = True,
@@ -80,8 +85,10 @@ class Pipeline:
         rules = callbacks.pop("rules", None) or RuleStore.from_settings(settings)
         for problem in rules.skipped:
             say(f"[rules] {problem}")
+        assessor = callbacks.pop("assessor", None) or ThreatAssessor.from_settings(
+            settings, use_llm=use_llm, log=say)
         return cls(brain, modes, log or EventLog.from_settings(settings), rules=rules,
-                   **callbacks)
+                   assessor=assessor, **callbacks)
 
     # ---- entry points ------------------------------------------------------
 
@@ -144,12 +151,25 @@ class Pipeline:
             cause = self._photo_cause.get(event.caused_by or "")
             if (cause and cause[0] == EventType.MOTION and cause[1] in Mode.ARMED
                     and cause[2] == AlertLevel.ALARM):
-                self._confront_later(event)
+                self._confront_later(event)  # the threat label below won't repeat it
+
+        said_filler = []
 
         def filler(ev: Event, md: str) -> None:
-            if self._is_visitor_conversation(ev, md):
+            if not said_filler and self._is_visitor_conversation(ev, md):
+                said_filler.append(True)
                 self._emit(make_action(ActionType.SPEAK, {"text": FILLER}, Source.BRAIN,
                                        caused_by=ev.id), result, done)
+
+        if event.type == EventType.PHOTO_DESCRIBED:
+            # The threat label comes first, so it can shape what Faraday says next.
+            if getattr(self.assessor, "client", None) is not None:
+                filler(event, mode)  # a Bonsai call is coming: no silence for a visitor
+            threat = self._assess(event, mode)
+            self._process(threat, result, depth + 1)
+            mode = self.modes.mode
+            if (threat.data["category"] == ThreatCategory.SUSPICIOUS and mode in Mode.ARMED):
+                self._confront_later(event)  # early: don't wait for the alarm
 
         # A wide window so caused_by chains (photo -> take_photo -> doorbell) can be
         # traced; the prompt itself only shows the last brain.recent_lines entries.
@@ -211,8 +231,34 @@ class Pipeline:
         self._emit(make_action(ActionType.SPEAK, {"text": text}, Source.BRAIN,
                                caused_by=action.id), result, done)
 
+    def _assess(self, photo: Event, mode: str) -> Event:
+        """The threat_assessed event for this photo. Never raises: rules decide on any error."""
+        recent = [e for e in self.log.recent(TRACE_WINDOW) if e.get("id") != photo.id]
+        voices = self._recent_voices(recent)
+        ctx = threat.context_for(photo, mode, recent, voices)
+        try:
+            result = self.assessor.assess(ctx)
+        except Exception as e:
+            self.say(f"[threat] assessor failed: {e!r}")
+            cat, why = threat.rules(ctx)
+            result = threat.Assessment(cat, why, "rules")
+        return threat.event_for(result, photo, voices)
+
+    @staticmethod
+    def _recent_voices(recent: List[Dict[str, Any]]) -> Optional[int]:
+        """Voice count from diarization. speech_heard has no such field yet (NV will add
+        it, see PLAN.md); until then this is None and the label works without it."""
+        for e in reversed(recent):
+            if e.get("type") == EventType.SPEECH_HEARD:
+                voices = (e.get("data") or {}).get("voices")
+                return voices if isinstance(voices, int) else None
+        return None
+
     def _confront_later(self, event: Event) -> None:
         """Ask Bonsai for one confrontation line without blocking the pipeline."""
+        if event.id in self._confronted:
+            return  # one line per photo, whether the alarm or the threat label asked first
+        self._confronted.add(event.id)
         description = str(event.data.get("description", ""))
 
         def run() -> None:
@@ -227,8 +273,8 @@ class Pipeline:
             with self.lock:
                 # Bonsai can take a while. If the owner disarmed (or the alert was
                 # cleared) meanwhile, the line is stale: never confront after that.
-                if not self.modes.armed or self.modes.alert != AlertLevel.ALARM:
-                    self.say(f"  [brain] confrontation dropped, no longer in alarm: {line}")
+                if not self.modes.armed:  # disarmed meanwhile: never confront after that
+                    self.say(f"  [brain] confrontation dropped, the house was disarmed: {line}")
                     return
                 self._emit(action, Result(), [])
 

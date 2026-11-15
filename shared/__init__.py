@@ -5,7 +5,7 @@ Owner: both laptops. Change only by agreement (see docs/PLAN.md).
 from .common import AlertLevel, Mode, Outlet, Source, new_id, now_iso
 from .events import (AlertChangedData, ChangedBy, DoorbellData, Event, EventType,
                      ModeChangedData, MotionData, PhotoDescribedData, SpeechHeardData,
-                     make_event, validate_event)
+                     ThreatAssessedData, ThreatCategory, make_event, validate_event)
 from .actions import (Action, ActionType, AddRuleArgs, OutletArgs, SaveMessageArgs,
                       SetModeArgs, SpeakArgs, SummarizeLogArgs, TakePhotoArgs,
                       make_action, validate_action)
@@ -13,7 +13,8 @@ from .actions import (Action, ActionType, AddRuleArgs, OutletArgs, SaveMessageAr
 __all__ = [
     "AlertLevel", "Mode", "Outlet", "Source", "new_id", "now_iso",
     "AlertChangedData", "ChangedBy", "DoorbellData", "Event", "EventType", "ModeChangedData",
-    "MotionData", "PhotoDescribedData", "SpeechHeardData", "make_event", "validate_event",
+    "MotionData", "PhotoDescribedData", "SpeechHeardData", "ThreatAssessedData",
+    "ThreatCategory", "make_event", "validate_event",
     "Action", "ActionType", "AddRuleArgs", "OutletArgs", "SaveMessageArgs",
     "SetModeArgs", "SpeakArgs", "SummarizeLogArgs", "TakePhotoArgs",
     "make_action", "validate_action",
