@@ -64,7 +64,8 @@ VISIT_MAX_S = 180.0           # ... but never longer than this after the ring (a
 INTERCOM_REPLY_S = 3.0        # after the intercom the visitor must start answering within this
 # A line asking to hear it again is a question, "?" or not ("Please say it again."); not
 # "I'll repeat that to the owner" or "I can't say it's safe"
-ASKS_AGAIN = re.compile(r"\bsay (?:it|that) again\b|\bsay again\b|\brepeat (?:it|that)\W*$", re.I)
+ASKS_AGAIN = re.compile(r"(?:^|[.!?]\s+|\bplease\s+|\bcould you\s+|\bcan you\s+)say (?:it|that) again\b"
+                        r"|\bsay again\b|\brepeat (?:it|that)\W*$", re.I)
 DOORBELL_FALLBACK_S = 2.0     # no greeting coming (Faraday has nothing to say): open after this
 DOORBELL_BUSY_POLL_S = 0.5    # a greeting is being written or spoken: check again
 DOORBELL_RETRY_S = 1.0        # a doorbell window refused (another window open): try again
@@ -113,7 +114,9 @@ class Voice:
         self.mode = mode                            # the house mode now (the visit is armed only)
         self._visit_until = 0.0                     # monotonic end of the visit (see the top)
         self._ring_at = 0.0                         # monotonic time of the ring that began it
+        self._last_ring = 0.0                       # the latest ring of the visit (for its cap)
         self._seg_opened = 0.0                      # when the current segment opened
+        self._owner_marked = False                  # Dell's listen "owner" window: the doorbell waits
         wake = wake or {}
         self.wake_enabled = bool(wake.get("enabled", True))
         self.wake_phrase = str(wake.get("phrase", DEFAULT_WAKE))
@@ -182,7 +185,9 @@ class Voice:
         everything else, a pending doorbell included."""
         text = (text or "").strip()
         if listen == OWNER:
-            self.listen_once("question", purpose=OWNER)   # a pending doorbell still opens after it
+            # a pending doorbell waits for this window (its retries don't take it over)
+            if self.listen_once("question", purpose=OWNER):
+                self._owner_marked = True
             return
         if listen == VISITOR:
             opened = self._visitor_window("doorbell" if self._pending_doorbell else "question")
@@ -215,6 +220,9 @@ class Voice:
             return True
         took = False
         with self._lock:
+            if self._owner_marked and (self._purpose == OWNER or (
+                    self._request is not None and self._request[0] == OWNER)):
+                return False                   # Faraday asked the owner: let them answer first
             if self._request is not None and self._request[0] == OWNER:
                 self._request = (VISITOR, reason)
                 self._request_at = time.monotonic()
@@ -235,8 +243,11 @@ class Voice:
         self._pending_doorbell = True
         self._doorbell_since = time.monotonic()
         if self._armed():                                 # the visit: only while armed
-            self._ring_at = self._doorbell_since
-            self._visit_until = self._ring_at + self.visitor_s
+            if not self.visiting():
+                self._ring_at = self._doorbell_since      # a new visit (a repeat ring keeps its start)
+            self._last_ring = self._doorbell_since
+            self._visit_until = max(self._visit_until, self._doorbell_since
+                                    + min(self.visitor_s, VISIT_MAX_S))
         self._arm_doorbell(DOORBELL_FALLBACK_S)
 
     def on_intercom_end(self) -> None:
@@ -247,12 +258,17 @@ class Voice:
             return
         took = False
         with self._lock:
-            if self._request is not None and self._request[0] == VISITOR:
+            # a window (or request) nobody has spoken into yet becomes the visitor's reply
+            # window, an owner one too: the owner chose to talk to the visitor instead
+            if self._request is not None and self._request[0] in (VISITOR, OWNER):
                 self._request = (VISITOR, "intercom")
+                self._request_at = time.monotonic()
+                self._owner_marked = False
                 return
-            if self._purpose == VISITOR and not self.recorder.window_state().get("speech_started") \
+            if self._purpose in (VISITOR, OWNER) and not self.recorder.window_state().get("speech_started") \
                     and self.recorder.adjust(**self._rules(VISITOR, "intercom")):
-                self._reason = "intercom"
+                self._purpose, self._reason = VISITOR, "intercom"
+                self._owner_marked = False
                 took = True
         if took:
             self._opened(VISITOR, "intercom")
@@ -422,7 +438,10 @@ class Voice:
     def _segment_done(self, wav: Optional[Path], seconds: float, spoke: bool) -> None:
         with self._lock:
             purpose, reason = self._purpose, self._reason
+            opened = self._seg_opened           # read before the loop opens the next one
             self._purpose = None
+            if purpose == OWNER:
+                self._owner_marked = False      # the owner had their turn: a doorbell may open
         self._seg_done.set()
         if purpose == "wake" or purpose is None:
             if spoke and wav is not None:
@@ -432,7 +451,7 @@ class Voice:
                     seq = self._seq
                 # the visitor's, if the speech began within the visit: not before the segment
                 # opened, and about `seconds` (its audio, with the preroll) before now
-                visit = self.visiting(started=max(self._seg_opened, time.monotonic() - seconds))
+                visit = self.visiting(started=max(opened, time.monotonic() - seconds))
                 self._checks.put((seq, wav, seconds, visit))
             return
         if not spoke or wav is None:
@@ -672,7 +691,8 @@ class Voice:
         if channel == OWNER:
             self._owner_ids.append(event.id)      # Faraday's questions back to it are for the owner
         elif self.visiting():                                       # the visitor is still talking
-            self._visit_until = min(time.monotonic() + self.visitor_s, self._ring_at + VISIT_MAX_S)
+            self._visit_until = max(self._visit_until, min(time.monotonic() + self.visitor_s,
+                                                           self._last_ring + VISIT_MAX_S))
         self.out(f"  [stt] heard {len(text.split())} word(s) ({channel})"
                  + (f", {data['voices']} voice(s)" if "voices" in data else ""))
         self.submit(event)

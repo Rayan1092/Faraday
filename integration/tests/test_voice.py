@@ -610,6 +610,16 @@ class Visit(Base):
         self.events()
         self.assertLessEqual(v._visit_until, v._ring_at + VISIT_MAX_S)
 
+    def test_a_repeat_ring_keeps_the_visit_s_start(self):
+        """Review: a second ring moved the start, so words begun before it were dropped."""
+        v = self.visit(FakeSTT())
+        first = v._ring_at
+        time.sleep(0.3)
+        v.on_doorbell()
+        self.assertEqual(v._ring_at, first)
+        self.assertGreater(v._last_ring, first)
+        self.assertTrue(v.visiting(started=first + 0.1))
+
     def test_a_ring_at_home_starts_no_visit_even_if_armed_after(self):
         """Review: a ring at Home, then "night mode": the partner's talk became the visitor's."""
         v = self.visit(FakeSTT("Did you lock the back door?"), mode="home")
@@ -617,6 +627,9 @@ class Visit(Base):
         self.say(("speech", 1.2), ("quiet", 2.5))
         self.assertTrue(wait_until(lambda: v.wake_ignored == 1, timeout=10))
         self.assertEqual(self.got, [])
+
+
+DOORBELL_FALLBACK_WAIT = 2.5     # past the doorbell's 2 s fallback
 
 
 class IntercomAndQuestions(Base):
@@ -694,9 +707,39 @@ class IntercomAndQuestions(Base):
         self.assertTrue(wait_until(lambda: any("nobody spoke" in s for s in self.said), timeout=10))
         self.assertLess(time.monotonic() - t0, 1.5)                    # 1 s of audio, not 8
 
+    def test_intercom_while_an_owner_window_is_open_becomes_the_visitor_s(self):
+        """Review: Faraday asked the owner, the owner pressed Talk instead; the visitor's
+        reply came out as owner."""
+        v = self.voice(FakeSTT("Thanks, I'll wait."),
+                       listen={"max_s": 15, "silence_s": 1.8, "no_speech_s": 8.0, "after_speech_s": 0.3,
+                               "intercom_reply_s": 3.0})
+        self.assertTrue(v.listen_once("question", purpose="owner"))
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        self.gate.mute()                                               # the owner talks
+        time.sleep(0.2)
+        self.gate.unmute()
+        v.on_intercom_end()
+        self.assertTrue(any("listening (intercom)" in s for s in self.said))
+        self.say(("speech", 1.0), ("quiet", 2.5))
+        self.assertEqual(self.events()[0].data["channel"], "visitor")
+
+    def test_marked_owner_window_is_not_taken_by_a_pending_doorbell(self):
+        """Review: the doorbell fallback turned the marked owner window into the visitor's."""
+        v = self.voice(FakeSTT("Yes, talk to them.", "Hello?"),          # windows outlast the 2 s fallback
+                       listen={"max_s": 30, "silence_s": 1.8, "no_speech_s": 20.0, "after_speech_s": 0.3})
+        v.on_doorbell()
+        v.on_said("Someone is at the door. Do you want to talk to them.", listen="owner")
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        time.sleep(DOORBELL_FALLBACK_WAIT)                             # the doorbell timer fires meanwhile
+        self.assertTrue(any("listening (question, owner)" in s for s in self.said))
+        self.say(("speech", 1.0), ("quiet", 2.5))                      # the owner answers
+        self.assertEqual(self.events()[0].data["channel"], "owner")
+        # then the doorbell's own window opens for the visitor
+        self.assertTrue(wait_until(lambda: any("listening (doorbell)" in s for s in self.said), timeout=8))
+
     def test_ordinary_lines_are_not_asking_again(self):
         v = self.voice(FakeSTT())
-        for line in ("I'll repeat that to the owner.", "I can't say it's safe.",
+        for line in ("I'll repeat that to the owner.", "I can't say it's safe.", "I'll say it again later.",
                      "They didn't say it was urgent."):
             v.on_said(line, caused_by="evt_x")
         time.sleep(0.5)
