@@ -100,7 +100,10 @@ class Pipeline:
         self._owner_photos: Dict[str, str] = {}
         self._look_timers: Dict[str, threading.Timer] = {}
         self._rules_stored: set = set()  # add_rule action ids the owner router already stored
-        self.look_timeout_s = 25.0  # vision on the Mac takes a few seconds; then give up
+        # Only a safety net for a photo that never arrives: longer than NV's vision timeout
+        # (60 s), so the answer normally comes from the photo itself (described, described
+        # by the detector, or failed). Mac test: at 25 s it fired after a slow description.
+        self.look_timeout_s = 65.0
 
     @classmethod
     def from_settings(cls, settings: Optional[Dict[str, Any]] = None, use_llm: bool = True,
@@ -187,8 +190,24 @@ class Pipeline:
                 return
             self._owner_photos[photo.id] = "late"
             self.say(f"  [look] no photo after {self.look_timeout_s:.0f}s")
+            if self._anything_since(photo):
+                # "I can't see the door" may only answer the question (Mac test: it was
+                # heard after a motion at Home). Something else happened since: stay quiet.
+                self.say("  [look] something else happened since the question: not answering late")
+                return
             self._emit(make_action(ActionType.SPEAK, {"text": look.CANT_SEE}, Source.BRAIN,
                                    caused_by=photo.id), Result(), [])
+
+    def _anything_since(self, photo: Action) -> bool:
+        """Did a sensor event or speech come in after this look photo was asked for?"""
+        seen = False
+        for entry in self.log.recent(TRACE_WINDOW):
+            if entry.get("id") == photo.id:
+                seen = True
+            elif seen and entry.get("kind") == "event" and entry.get("type") in (
+                    EventType.MOTION, EventType.DOORBELL, EventType.SPEECH_HEARD):
+                return True
+        return False
 
     def tick(self, force: bool = False) -> Optional[Result]:
         """End a motion grace period that's due (the timer calls this): no doorbell came,

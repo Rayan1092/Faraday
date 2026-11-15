@@ -114,6 +114,38 @@ class Pipe(unittest.TestCase):
         self.assertEqual(said(late.actions), [])            # already answered; never greet nobody
         self.assertEqual(self.client.calls, [])
 
+    def test_late_answer_only_if_nothing_else_happened(self):
+        """Mac test: "I can't see the door right now" was heard after a motion at Home.
+        It may only answer the question: anything in between and the timer stays quiet."""
+        self.make()
+        self.p.look_timeout_s = 0.3
+        self.ask()
+        self.p.handle(events.motion())                    # something else happens meanwhile
+        time.sleep(0.6)
+        self.assertNotIn(CANT_SEE, said(self.emitted))
+
+    def test_timeout_outlasts_vision(self):
+        self.make()
+        self.assertGreater(self.p.look_timeout_s, 60)     # NV's vision timeout is 60 s
+
+    def test_detector_description_is_spoken(self):
+        """NV #43: when vision fails the object detector writes the description
+        (described_by "detector"): say that, not "I can't see"."""
+        self.make()
+        _, [take] = self.ask()
+        seen = make_event(EventType.PHOTO_DESCRIBED,
+                          PhotoDescribedData(photo_path="captures/photos/x.jpg",
+                                             description="One person is at the door.",
+                                             described_by="detector", people=1),
+                          Source.VISION, caused_by=take.id)
+        line = said(self.p.handle(seen).actions)[0]
+        self.assertTrue(line.startswith("One person is at the door."), line)
+        failed = make_event(EventType.PHOTO_DESCRIBED,
+                            PhotoDescribedData(photo_path="captures/photos/x.jpg", description="Photo saved."),
+                            Source.CAMERA, caused_by="act_x")
+        from brain.look import photo_failed
+        self.assertTrue(photo_failed(failed))
+
     def test_answer_cancels_the_timer(self):
         self.make()
         self.p.look_timeout_s = 0.3
