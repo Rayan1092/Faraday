@@ -1,0 +1,610 @@
+{
+ "cases": [
+  {
+   "name": "o_heading_out",
+   "title": "Owner: \"Hey Faraday, I'm heading out, see you later.\" -> arm_away",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 2.68,
+   "worst_s": 3.92,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.92,
+     "role": "fast",
+     "result": "arm_away (2B: arm_away)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 1.98,
+     "role": "fast",
+     "result": "arm_away (2B: arm_away)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.14,
+     "role": "fast",
+     "result": "arm_away (2B: arm_away)",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "o_bed",
+   "title": "Owner: \"Hey Faraday, Goodnight, I'm off to bed.\" -> arm_night",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 2.42,
+   "worst_s": 3.1,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.1,
+     "role": "fast",
+     "result": "arm_night (2B: arm_night)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.11,
+     "role": "fast",
+     "result": "arm_night (2B: arm_night)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.05,
+     "role": "fast",
+     "result": "arm_night (2B: arm_night)",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "o_who",
+   "title": "Owner: \"Hey Faraday, Who's at the door?\" -> look",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 2.3,
+   "worst_s": 3.02,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.02,
+     "role": "fast",
+     "result": "look (2B: look)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 1.99,
+     "role": "fast",
+     "result": "look (2B: look)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 1.9,
+     "role": "fast",
+     "result": "look (2B: look)",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "o_anyone",
+   "title": "Owner: \"Hey Faraday, Is there anybody outside right now?\" -> look",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 2.17,
+   "worst_s": 2.87,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.87,
+     "role": "fast",
+     "result": "look (2B: look)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 1.83,
+     "role": "fast",
+     "result": "look (2B: look)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 1.81,
+     "role": "fast",
+     "result": "look (2B: look)",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "o_summary",
+   "title": "Owner: \"Hey Faraday, What happened while I was out?\" -> summary",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 2.28,
+   "worst_s": 3.0,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.0,
+     "role": "fast",
+     "result": "summary (2B: summary)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 1.89,
+     "role": "fast",
+     "result": "summary (2B: summary)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 1.96,
+     "role": "fast",
+     "result": "summary (2B: summary)",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "o_light_on",
+   "title": "Owner: \"Hey Faraday, Switch the living room lamp on.\" -> light",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 3.56,
+   "worst_s": 4.17,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 4.17,
+     "role": "fast",
+     "result": "light (2B: light)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.28,
+     "role": "fast",
+     "result": "light (2B: light)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.23,
+     "role": "fast",
+     "result": "light (2B: light)",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "o_light_off",
+   "title": "Owner: \"Hey Faraday, Porch light off please.\" -> light",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 3.57,
+   "worst_s": 4.24,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 4.24,
+     "role": "fast",
+     "result": "light (2B: light)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.27,
+     "role": "fast",
+     "result": "light (2B: light)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.19,
+     "role": "fast",
+     "result": "light (2B: light)",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "o_rule",
+   "title": "Owner: \"Hey Faraday, Whenever the doorbell rings at night, turn on the porch light.\" -> add_rule",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 3.5,
+   "worst_s": 4.22,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 4.22,
+     "role": "fast",
+     "result": "add_rule (2B: add_rule)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.12,
+     "role": "fast",
+     "result": "add_rule (2B: add_rule)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.17,
+     "role": "fast",
+     "result": "add_rule (2B: add_rule)",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "o_instruction",
+   "title": "Owner: \"Hey Faraday, If a delivery comes, ask them to leave it by the side door.\" -> add_instruction",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 2.73,
+   "worst_s": 4.32,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 4.32,
+     "role": "fast",
+     "result": "add_instruction (2B: add_instruction)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.03,
+     "role": "fast",
+     "result": "add_instruction (2B: add_instruction)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 1.85,
+     "role": "fast",
+     "result": "add_instruction (2B: add_instruction)",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "o_disarm",
+   "title": "Owner: \"Hey Faraday, Disarm the system.\" -> passphrase",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 2.32,
+   "worst_s": 3.09,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.09,
+     "role": "fast",
+     "result": "passphrase (2B: passphrase)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.0,
+     "role": "fast",
+     "result": "passphrase (2B: passphrase)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 1.86,
+     "role": "fast",
+     "result": "passphrase (2B: passphrase)",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "o_paper",
+   "title": "Owner: \"Hey Faraday, A piece of paper.\" -> unclear",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 2.35,
+   "worst_s": 3.06,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.06,
+     "role": "fast",
+     "result": "unclear (2B: unclear)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.01,
+     "role": "fast",
+     "result": "unclear (2B: unclear)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 1.98,
+     "role": "fast",
+     "result": "unclear (2B: unclear)",
+     "dropped": []
+    }
+   ]
+  },
+  {
+   "name": "o_cut_off",
+   "title": "Owner: \"Hey Faraday, If a delivery comes, ask them to\" -> unclear (ask to repeat)",
+   "runs": 3,
+   "model_right": 0,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 2.38,
+   "worst_s": 3.16,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": false,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.16,
+     "role": "fast",
+     "result": "unclear (2B: add_instruction) cut off",
+     "dropped": [
+      "instruction incomplete"
+     ]
+    },
+    {
+     "model_ok": false,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 1.95,
+     "role": "fast",
+     "result": "unclear (2B: add_instruction) cut off",
+     "dropped": [
+      "instruction incomplete"
+     ]
+    },
+    {
+     "model_ok": false,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.02,
+     "role": "fast",
+     "result": "unclear (2B: add_instruction) cut off",
+     "dropped": [
+      "instruction incomplete"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "o_weather",
+   "title": "Owner: \"Hey Faraday, What's the weather like tomorrow?\" -> unclear",
+   "runs": 3,
+   "model_right": 3,
+   "final_right": 3,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 2.27,
+   "worst_s": 2.93,
+   "role": "fast",
+   "samples": [
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.93,
+     "role": "fast",
+     "result": "unclear (2B: unclear)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 2.02,
+     "role": "fast",
+     "result": "unclear (2B: unclear)",
+     "dropped": []
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 1.86,
+     "role": "fast",
+     "result": "unclear (2B: unclear)",
+     "dropped": []
+    }
+   ]
+  }
+ ],
+ "meta": {
+  "date": "2026-11-14T23:14-05:00",
+  "model": "ternary-bonsai-2-4b@q2_0",
+  "fast_model": "ternary-bonsai-2-4b@q2_0",
+  "force": null,
+  "profile": "nv_backup",
+  "reasoning_effort": "none",
+  "prompts": "small",
+  "machine": "Windows 11 (AMD64)",
+  "thinking": [
+   {
+    "model": "ternary-bonsai-2-4b@q2_0",
+    "no_think": "auto",
+    "uses": "chat",
+    "probe": "chat",
+    "thinking_seen": 0
+   },
+   {
+    "model": "ternary-bonsai-2-4b@q2_0",
+    "no_think": "auto",
+    "uses": "chat",
+    "probe": "chat",
+    "thinking_seen": 0
+   }
+  ],
+  "runs": 3,
+  "command": "python -m brain.bench --runs 3 --only o_heading_out,o_bed,o_who,o_anyone,o_summary,o_light_on,o_light_off,o_rule,o_instruction,o_disarm,o_paper,o_cut_off,o_weather"
+ }
+}

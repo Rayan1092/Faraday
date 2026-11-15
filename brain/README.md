@@ -35,6 +35,8 @@ Then the software actions run: `set_mode` goes back through `modes/`, `add_rule`
 | `pipeline.py` | `Pipeline.handle(event)`, the Dell-side entry point (PLAN.md Q21) |
 | `safety.py` | Spots disarm requests so they're answered in code. The passphrase check and mode state are in `modes/`, and the brain never gets them |
 | `settings.py` | Loads settings and picks the `llm.profile` |
+| `owner.py` | The owner's requests ("Hey Faraday, ...": `speech_heard.channel` "owner", or untagged speech at Home). Fixed intents: arm away/night, passphrase, summary, who's at the door, add rule, add instruction, light on/off. The 2B picks one through a forced-choice `route` tool, and code checks it against the words: clear keywords win, and an intent with nothing in the words is refused. Anything else gets "Sorry, I didn't catch that."; a cut-off request is asked to repeat. Never a visitor message. While armed, nothing changes except through the passphrase |
+| `lines.py` | Every fixed spoken line in one tone. `python -m brain.lines [--json]` lists them for NV's pre-rendering |
 | `prompts.py` | Prompt profiles. `small` is for 2B/4B and tuned with the bench. `9b` is for the Mac mini. Picked from the model id, or `llm.prompt_profile` |
 | `vision.py` | `describe_photo(path, caused_by, describer)` gives a `photo_described` event (PLAN.md seam 4). It tries Bonsai vision, and if that fails it still returns a valid event saying "No description available" |
 | `bench.py` | `python -m brain.bench [--profile mac] [--prompts 9b]`: every demo moment 10 times against Bonsai, plus reworded variants and two hard visitor lines. Writes `docs/bench/<date>-<model>-prompts-<profile>.md` |

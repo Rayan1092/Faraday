@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import re
+import http.client
 import socket
 import threading
 import time
@@ -76,34 +77,58 @@ def render_prompt(messages: List[Dict[str, Any]], tools: Optional[List[Dict[str,
     return "".join(out)
 
 
-def _value(text: str) -> Any:
+def _value(text: str, kind: Optional[str] = None) -> Any:
+    """A parameter value, typed by the tool schema. The template writes strings raw,
+    so a "string" parameter is never parsed (a phone number stays text)."""
     text = text.strip()
-    try:
-        return json.loads(text) if text[:1] in "[{0123456789-" or text in ("true", "false") else text
-    except ValueError:
+    if kind == "string":
         return text
+    if kind in ("integer", "number", "boolean", "object", "array") or text[:1] in "[{":
+        try:
+            return json.loads(text)
+        except ValueError:
+            return text
+    return text
 
 
-def tool_calls_in(text: str) -> List[Dict[str, Any]]:
+def _schema_types(tools: Optional[List[Dict[str, Any]]]) -> Dict[str, Dict[str, str]]:
+    """{tool name: {parameter: JSON type}} from OpenAI tool definitions."""
+    out: Dict[str, Dict[str, str]] = {}
+    for tool in tools or []:
+        fn = tool.get("function") if isinstance(tool, dict) else None
+        if isinstance(fn, dict) and fn.get("name"):
+            props = (fn.get("parameters") or {}).get("properties") or {}
+            out[fn["name"]] = {k: str(v.get("type", "")) for k, v in props.items() if isinstance(v, dict)}
+    return out
+
+
+def tool_calls_in(text: str, tools: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """`<tool_call><function=name><parameter=p>v</parameter>...` -> OpenAI tool_calls."""
     calls = []
+    types = _schema_types(tools)
     for i, m in enumerate(_TOOL_CALL.finditer(text or "")):
-        args = {p.group(1): _value(p.group(2)) for p in _PARAM.finditer(m.group(2))}
+        kinds = types.get(m.group(1), {})
+        args = {p.group(1): _value(p.group(2), kinds.get(p.group(1)))
+                for p in _PARAM.finditer(m.group(2))}
         calls.append({"id": f"call_{i}", "type": "function",
                       "function": {"name": m.group(1), "arguments": json.dumps(args)}})
     return calls
 
 
-def clean_reply(content: str) -> str:
-    """Content without thinking or tool-call XML. An unclosed <think> means the model
-    was still thinking when it hit max_tokens: nothing usable."""
+def strip_thinking(content: str) -> str:
+    """Content without thinking. An unclosed <think> means the model was still
+    thinking when it hit max_tokens: nothing usable."""
     content = _THINK_BLOCK.sub("", content or "")
     if "</think>" in content:          # the template opened <think>: only its end shows
         content = content.rsplit("</think>", 1)[1]
     if "<think>" in content:
         content = content.split("<think>")[0]
-    content = _TOOL_CALL.sub("", content)
-    return content.strip()
+    return content
+
+
+def clean_reply(content: str) -> str:
+    """Content without thinking or tool-call XML."""
+    return _TOOL_CALL.sub("", strip_thinking(content)).strip()
 
 
 def thought(message: Dict[str, Any], finish_reason: Optional[str]) -> int:
@@ -174,17 +199,18 @@ class BonsaiClient:
                                 "messages": [{"role": "user", "content": "Say OK."}]}
         if self.reasoning_effort:
             body["reasoning_effort"] = self.reasoning_effort
-        self.probed = True
         try:
             choice = self._post(self.url, body, min(self.timeout_s, 10))
         except BonsaiError as e:
             self.log(f"[bonsai] thinking probe failed ({e}); spotting thinking in replies instead")
+            self.probed = True
             return None
         message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
         finish = choice.get("finish_reason")
         thinks = bool(thought(message, finish)) or finish == "length"
         self.mode = "raw" if thinks else "chat"
         self.probe_result = self.mode
+        self.probed = True   # only after mode is set: a call made meanwhile waits on the lock
         self.log(f"[bonsai] {self.model}: " + (
             "thinks despite reasoning_effort, using no-think prompts" if thinks
             else "answers without thinking, using chat") +
@@ -218,25 +244,30 @@ class BonsaiClient:
                              "model": self.model,
                              "elapsed_s": round(time.perf_counter() - started, 2)}
                 return message
-        message, finish = self._chat(messages, tools)
-        chars = thought(message, finish)
-        self.last = {"endpoint": "chat", "finish_reason": finish, "thought_chars": chars,
-                     "retried": False, "model": self.model}
+        message, finish, chars = self._chat(messages, tools)
+        last = {"endpoint": "chat", "finish_reason": finish, "thought_chars": chars,
+                "retried": False, "model": self.model}
+        self.last = last
         if chars:
             self.thinking_seen += 1
+            usable = finish != "length" and bool(message.get("tool_calls") or message.get("content"))
             if self.no_think == "auto":
                 self.log(f"[bonsai] {self.model} thought before answering ({chars} chars, "
                          f"finish_reason {finish}) despite reasoning_effort "
                          f"{self.reasoning_effort!r}: switching to no-think prompts")
                 self.mode = "raw"
-                try:
-                    message = self._raw(messages, tools)
-                except BonsaiError as e:
-                    self.log(f"[bonsai] no-think prompt failed ({e}); back to chat")
-                    self.mode = "chat"
-                else:
-                    self.last.update(endpoint="raw", retried=True)
-        self.last["elapsed_s"] = round(time.perf_counter() - started, 2)
+                if not usable:      # a finished answer is kept; only later calls change
+                    try:
+                        message = self._raw(messages, tools)
+                    except BonsaiError as e:
+                        if str(e).startswith("HTTP 4"):    # this server has no raw completions
+                            self.log(f"[bonsai] no-think prompt refused ({e}); back to chat")
+                            self.mode = "chat"
+                        else:                              # busy or slow: raw stays for next time
+                            self.log(f"[bonsai] no-think retry failed ({e})")
+                    else:
+                        last.update(endpoint="raw", retried=True)
+        last["elapsed_s"] = round(time.perf_counter() - started, 2)
         return message
 
     # ---- the two endpoints ---------------------------------------------------
@@ -251,7 +282,8 @@ class BonsaiClient:
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", errors="replace")[:200]
             raise BonsaiError(f"HTTP {e.code}: {detail}") from e
-        except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as e:
+        except (urllib.error.URLError, socket.timeout, TimeoutError, OSError,
+                http.client.HTTPException) as e:
             raise BonsaiError(f"connection failed: {e}") from e
         try:
             data = json.loads(raw)
@@ -280,14 +312,16 @@ class BonsaiClient:
         if not isinstance(message, dict):
             raise BonsaiError(f"unexpected message: {message!r}"[:200])
         message = dict(message)
+        finish = choice.get("finish_reason")
+        chars = thought(message, finish)   # before cleaning, so inline <think> tags count
         content = message.get("content")
         if isinstance(content, str):
             if not message.get("tool_calls"):
-                calls = tool_calls_in(_THINK_BLOCK.sub("", content))
+                calls = tool_calls_in(strip_thinking(content), tools)
                 if calls:
                     message["tool_calls"] = calls
             message["content"] = clean_reply(content)
-        return message, choice.get("finish_reason")
+        return message, finish, chars
 
     def _raw(self, messages, tools) -> Dict[str, Any]:
         body = {"model": self.model, "prompt": render_prompt(messages, tools),
@@ -298,7 +332,7 @@ class BonsaiClient:
         if not isinstance(text, str):
             raise BonsaiError(f"unexpected completion: {choice!r}"[:200])
         message: Dict[str, Any] = {"role": "assistant", "content": clean_reply(text)}
-        calls = tool_calls_in(text)
+        calls = tool_calls_in(text, tools)
         if calls:
             message["tool_calls"] = calls
         return message

@@ -212,8 +212,9 @@ class ThroughThePipeline(unittest.TestCase):
             client = FakeClient(tool_calls(("outlet_on", {"outlet": "porch_light"})))
             p, _ = pipeline(tmp, client)
             p.instructions.add(oi.parse_instruction(SIDE_DOOR))
-            p.handle(events.speech("Turn on the porch light."))
-            self.assertNotIn("pass this on", client.calls[-1]["messages"][1]["content"])
+            r = p.handle(events.speech("Turn on the porch light."))
+            self.assertIn(("outlet_on", {"outlet": "porch_light"}), [(a.type, a.args) for a in r.actions])
+            self.assertFalse(any("pass this on" in c["messages"][-1]["content"] for c in client.calls))
 
 
 if __name__ == "__main__":

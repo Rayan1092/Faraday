@@ -23,8 +23,9 @@ def motion() -> Event:
                       MotionData(key=MOTION_KEY, packets=17, duration_ms=1830), Source.SIM)
 
 
-def speech(text: str) -> Event:
-    return make_event(EventType.SPEECH_HEARD, SpeechHeardData(text=text), Source.SIM)
+def speech(text: str, channel: Optional[str] = None) -> Event:
+    """channel: "owner" (after "Hey Faraday"), "visitor", or None (typed text)."""
+    return make_event(EventType.SPEECH_HEARD, SpeechHeardData(text=text, channel=channel), Source.SIM)
 
 
 def photo_described(caused_by: Optional[str], description: str = FAKE_DESCRIPTION) -> Event:
