@@ -65,7 +65,7 @@ _IF_DO_FORM = re.compile(
     + _ARRIVE + r"\b[^,;]*?[,;]?\s*(?:then\s+)?(?:(?:they|he|she)\s+(?:should|can|must)\s+|have\s+them\s+)?"
     r"(?P<req>(?:please\s+)?(?:leave|put|drop|place|wait|knock|ring|come|go|call|text|use|try)\b.+)$", re.I)
 # A request that stops mid-sentence ("ask them to", "tell visitors that") is not one.
-_CUT = re.compile(r"(?:^|\s)(?:to|that|the|a|an|and|or|but|by|at|for|with|of|in|on|my|your|their|it|"
+_CUT = re.compile(r"(?:^|\s)(?:to|that|the|a|an|and|or|but|at|for|with|of|my|your|their|"
                   r"is|are|if|when|so|then|please)$", re.I)
 
 # "tell delivery drivers to leave packages by the side door"

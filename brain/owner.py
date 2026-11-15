@@ -73,8 +73,14 @@ _WEAK = {
 _RULE_EVENT = re.compile(r"\b(motion|movement|moves?|door ?bell|rings?|knocks?)\b", re.I)
 _ON_OFF = re.compile(r"\b(on|off)\b", re.I)
 # A request that stops mid-sentence: "ask them to", "if a delivery comes,".
-_DANGLING = re.compile(r"(\b(to|the|a|an|and|or|but|if|when|whenever|that|them|by|at|for|with|of|"
-                       r"my|your|please|ask|tell|say|is|are|so|then|it|leave|put|in|on)|,)\s*$", re.I)
+_DANGLING = re.compile(r"(\b(to|the|a|an|and|or|but|if|when|whenever|that|them|at|for|with|of|"
+                       r"my|your|please|ask|tell|say|is|are|so|then)|,)\s*$", re.I)
+_NEGATION = re.compile(r"\b(don'?t|do not|not yet|never|no need|stop)\b", re.I)
+_QUESTION = re.compile(r"^\s*(is|are|was|were|did|do|does|have|has)\b|\?\s*$", re.I)
+_SUMMARY_STRONG = re.compile(r"\b(what did i miss|any (messages?|visitors?)|did (any|some)(one|body) "
+                             r"(come|came|ring|rang|stop))\b", re.I)
+_RULE_TRIGGER = re.compile(r"\b(when(ever)?|every time|each time|from now on)\b", re.I)
+_TELL = re.compile(r"\b(tell|ask|say|let)\b", re.I)
 _IF_ONLY = re.compile(r"^\s*(if|when(ever)?)\b[^,]*$", re.I)   # "if a delivery comes" and nothing else
 
 
@@ -89,6 +95,7 @@ class Route:
     elapsed_s: Optional[float] = None
     note: str = ""
     rule: Optional[Dict[str, Any]] = None      # add_rule args, when code could build them
+    lights: List[tuple] = field(default_factory=list)   # [(outlet, on)] for "light"
     instruction: Optional[Dict[str, str]] = None
 
 
@@ -115,20 +122,42 @@ def cut_off(text: str) -> bool:
                             and oi.parse_instruction(words) is None)
 
 
+def _outlet_in(text: str) -> Optional[str]:
+    if re.search(r"\b(living room|lamp)\b", text, re.I):
+        return Outlet.LIVING_ROOM_LAMP
+    if re.search(r"\bspare\b", text, re.I):
+        return Outlet.SPARE
+    if re.search(r"\b(porch|lights?)\b", text, re.I):
+        return Outlet.PORCH_LIGHT
+    return None
+
+
+def light_requests(text: str) -> List[tuple]:
+    """[(outlet, on), ...] from the words: "porch light off and the lamp on" gives two.
+    A part with no on/off takes the nearest one said ("the porch light and the lamp on")."""
+    parts = [p for p in re.split(r"\band\b|,|;", text) if p.strip()]
+    found = [(_outlet_in(p), (_ON_OFF.findall(p) or [None])[-1]) for p in parts]
+    found = [(o, s.lower() if s else None) for o, s in found if o or s]
+    states = [s for _, s in found]
+    out: List[tuple] = []
+    for i, (outlet, state) in enumerate(found):
+        if outlet is None:
+            continue
+        if state is None:
+            later = [s for s in states[i + 1:] if s]
+            earlier = [s for s in states[:i] if s]
+            state = later[0] if later else earlier[-1] if earlier else None
+        if state is not None and (outlet, state == "on") not in out:
+            out.append((outlet, state == "on"))
+    return out
+
+
 def light_slots(text: str) -> tuple:
-    """(outlet, on) from the words, either may be None."""
-    m = fb._LIGHT.search(text)
-    phrase = (m.group(0) if m else text).lower()
-    outlet = None
-    if re.search(r"\b(living room|lamp)\b", phrase):
-        outlet = Outlet.LIVING_ROOM_LAMP
-    elif re.search(r"\bspare\b", phrase):
-        outlet = Outlet.SPARE
-    elif re.search(r"\b(porch|lights?)\b", phrase):
-        outlet = Outlet.PORCH_LIGHT
-    state = _ON_OFF.findall(m.group(0) if m else text)
-    on = None if not state else state[-1].lower() == "on"
-    return outlet, on
+    """(outlet, on) for the first light asked for; either may be None."""
+    reqs = light_requests(text)
+    if reqs:
+        return reqs[0]
+    return _outlet_in(text), None
 
 
 def strong(text: str) -> Optional[str]:
@@ -136,8 +165,8 @@ def strong(text: str) -> Optional[str]:
     instruction mentions lights and doors too."""
     if oi.parse_instruction(text) is not None or oi.forget_request(text) is not None:
         return ADD_INSTRUCTION
-    if fb.parse_rule(text) is not None:
-        return ADD_RULE
+    if fb.parse_rule(text) is not None or (_RULE_TRIGGER.search(text) and _RULE_EVENT.search(text)):
+        return ADD_RULE     # never arm or switch now what was said as a rule for later
     if look.is_look_request(text):
         return LOOK
     if _WEAK[PASSPHRASE].search(text):
@@ -145,15 +174,19 @@ def strong(text: str) -> Optional[str]:
     if fb._LIGHT.search(text):
         return LIGHT
     arm = fb.arm_intent(text)
-    if arm is not None:
+    if arm is not None and not _NEGATION.search(text):
         return ARM_AWAY if arm == Mode.AWAY else ARM_NIGHT
-    if fb.is_summary_request(text):
+    if fb.is_summary_request(text) or _SUMMARY_STRONG.search(text):
         return SUMMARY
     return None
 
 
 def backed(intent: str, text: str) -> bool:
-    """Is there anything in the words for this intent?"""
+    """Is there anything in the words for this intent? Arming changes the house, so
+    it needs the plain words for it ("heading out", "goodnight") and no "don't"."""
+    if intent in (ARM_AWAY, ARM_NIGHT):
+        want = Mode.AWAY if intent == ARM_AWAY else Mode.NIGHT
+        return fb.arm_intent(text) == want and not _NEGATION.search(text)
     if intent == ADD_RULE:
         return bool(_WEAK[ADD_RULE].search(text) and _RULE_EVENT.search(text))
     rx = _WEAK.get(intent)
@@ -204,10 +237,18 @@ class OwnerRouter:
     def _fill(r: Route, text: str, args: Dict[str, Any]) -> None:
         """Slots for the intent; an intent that can't be completed becomes unclear."""
         if r.intent == LIGHT:
-            outlet, on = light_slots(text)
-            r.outlet = outlet or (args.get("outlet") if args.get("outlet") in Outlet.ALL else None)
-            r.on = on
-            if r.outlet is None or r.on is None:
+            if _QUESTION.search(text):
+                r.intent, r.note = UNCLEAR, "light: a question, not a request"
+                return
+            r.lights = light_requests(text)
+            if not r.lights:
+                outlet = _outlet_in(text) or (args.get("outlet") if args.get("outlet") in Outlet.ALL else None)
+                on = (_ON_OFF.findall(text) or [None])[-1]
+                if outlet and on:
+                    r.lights = [(outlet, on.lower() == "on")]
+            if r.lights:
+                r.outlet, r.on = r.lights[0]
+            else:
                 r.intent, r.note = UNCLEAR, "light: which one, or on or off, wasn't said"
         elif r.intent == ADD_INSTRUCTION:
             r.instruction = oi.parse_instruction(text)
@@ -215,8 +256,10 @@ class OwnerRouter:
                 r.intent, r.cut_off, r.note = UNCLEAR, True, "instruction incomplete"
         elif r.intent == ADD_RULE:
             r.rule = fb.parse_rule(text)       # None: the pipeline asks Bonsai to write it
+            if r.rule is None and cut_off(text):
+                r.intent, r.cut_off, r.note = UNCLEAR, True, "rule incomplete"
         if r.intent == UNCLEAR and not r.cut_off:
-            r.cut_off = cut_off(text) or bool(_WEAK[ADD_INSTRUCTION].search(text)
+            r.cut_off = cut_off(text) or bool(_WEAK[ADD_INSTRUCTION].search(text) and _TELL.search(text)
                                               and oi.parse_instruction(text) is None)
 
 

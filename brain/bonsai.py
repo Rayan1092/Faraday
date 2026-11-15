@@ -203,15 +203,14 @@ class BonsaiClient:
             choice = self._post(self.url, body, min(self.timeout_s, 10))
         except BonsaiError as e:
             self.log(f"[bonsai] thinking probe failed ({e}); spotting thinking in replies instead")
-            return None
-        finally:
-            # Set only now: a call made while the probe runs waits on the lock for it.
             self.probed = True
+            return None
         message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
         finish = choice.get("finish_reason")
         thinks = bool(thought(message, finish)) or finish == "length"
         self.mode = "raw" if thinks else "chat"
         self.probe_result = self.mode
+        self.probed = True   # only after mode is set: a call made meanwhile waits on the lock
         self.log(f"[bonsai] {self.model}: " + (
             "thinks despite reasoning_effort, using no-think prompts" if thinks
             else "answers without thinking, using chat") +

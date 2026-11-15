@@ -44,6 +44,9 @@ class Router(unittest.TestCase):
         cases = {
             "I'm heading out.": owner.ARM_AWAY,
             "Goodnight, I'm going to bed.": owner.ARM_NIGHT,
+            "Goodnight, I'm off to bed.": owner.ARM_NIGHT,
+            "Night night, heading to bed now.": owner.ARM_NIGHT,
+            "I'm off to work.": owner.ARM_AWAY,
             "Who's at the door?": owner.LOOK,
             "What happened while I was out?": owner.SUMMARY,
             "Turn off the porch light.": owner.LIGHT,
@@ -62,6 +65,16 @@ class Router(unittest.TestCase):
             got = r.route(text)
             self.assertEqual((got.intent, got.cut_off), (owner.UNCLEAR, True), text)
         self.assertFalse(r.route("A piece of paper.").cut_off)
+
+    def test_complete_sentences_are_not_cut_off(self):
+        r = OwnerRouter(None, log=lambda _m: None)
+        for text in ("Did anyone come by?", "What's going on", "What did I miss?", "Any messages?"):
+            got = r.route(text)
+            self.assertFalse(got.cut_off, text)
+        self.assertEqual(r.route("Did anyone come by?").intent, owner.SUMMARY)
+        for text in ("If a friend comes, tell them to come in", "If a visitor comes, ask them to hold on",
+                     "If someone comes, tell them to drop by later"):
+            self.assertEqual(r.route(text).intent, owner.ADD_INSTRUCTION, text)
 
     def test_light_needs_which_and_on_or_off(self):
         r = OwnerRouter(None, log=lambda _m: None)
@@ -142,7 +155,7 @@ class ThroughThePipeline(unittest.TestCase):
                 self.assertEqual(kinds(r.actions), [ActionType.SPEAK], (mode, text))
             self.assertEqual(said(self.owner("Disarm please.").actions), [lines.SAY_PASSPHRASE])
             self.assertEqual(self.p.modes.mode, mode)
-            self.assertEqual(self.p.rules.all() if hasattr(self.p.rules, "all") else [], [])
+            self.assertEqual(self.p.rules.all(), [])
 
     def test_armed_owner_passphrase_still_disarms(self):
         self.make(Mode.AWAY)
@@ -183,6 +196,55 @@ class ThroughThePipeline(unittest.TestCase):
         self.assertEqual(offered, {"save_message", "speak"})
         self.assertIn(ActionType.SAVE_MESSAGE, kinds(r.actions))
         self.assertIn("A visitor is talking", self.client.calls[-1]["messages"][-1]["content"])
+
+    def test_voice_disarm_says_one_thing(self):
+        """Review: the redacted passphrase reached the router and got "already disarmed"."""
+        self.make(Mode.AWAY)
+        r = self.owner(f"Hey Faraday, {SECRET}")
+        self.assertEqual(self.p.modes.mode, Mode.HOME)
+        self.assertNotIn(lines.ALREADY_HOME, said(r.actions))
+        self.assertNotIn(lines.SORRY, said(r.actions))
+
+    def test_a_rule_naming_a_mode_never_arms_now(self):
+        self.make()
+        r = self.owner("When the doorbell rings, set night mode.")
+        self.assertEqual(self.p.modes.mode, Mode.HOME)
+        self.assertNotIn(ActionType.SET_MODE, kinds(r.actions))
+        self.assertEqual(said(r.actions), [lines.REPEAT])   # a rule can't arm: not stored
+
+    def test_the_model_cannot_arm_on_weak_words(self):
+        for text in ("Leave packages at the back.", "Don't arm the system yet.", "Not yet, I'm not leaving."):
+            self.make(router_reply=route_reply(owner.ARM_AWAY))
+            r = self.owner(text)
+            self.assertEqual(self.p.modes.mode, Mode.HOME, text)
+            self.assertNotIn(ActionType.SET_MODE, kinds(r.actions), text)
+
+    def test_lights_whole_sentence_several_and_never_a_question(self):
+        self.make()
+        r = self.owner("Is the porch light on?")
+        self.assertNotIn(ActionType.OUTLET_ON, kinds(r.actions))
+        r = self.owner("Turn on the light in the living room.")
+        self.assertEqual([a.args for a in r.actions if a.type == ActionType.OUTLET_ON],
+                         [{"outlet": Outlet.LIVING_ROOM_LAMP}])
+        r = self.owner("Turn the porch light off and the lamp on.")
+        self.assertEqual([(a.type, a.args["outlet"]) for a in r.actions if a.type != ActionType.SPEAK],
+                         [(ActionType.OUTLET_OFF, Outlet.PORCH_LIGHT), (ActionType.OUTLET_ON, Outlet.LIVING_ROOM_LAMP)])
+        self.assertEqual(said(r.actions), ["The porch light is off. The living room lamp is on."])
+
+    def test_rule_saved_only_when_stored(self):
+        self.make()
+        self.p.rules = None
+        r = self.owner("When there's motion at night, turn on the living room lamp.")
+        self.assertEqual(said(r.actions), [lines.REPEAT])
+        self.make()
+        r = self.owner("When there's motion at night, turn on the living room lamp.")
+        self.assertEqual(said(r.actions), [lines.RULE_SAVED])
+        self.assertEqual(len(self.p.rules.all()), 1)              # stored once, not twice
+
+    def test_typed_look_at_night_still_takes_a_photo(self):
+        self.make(Mode.NIGHT)
+        r = self.p.handle(events.speech("Who's at the door?"))
+        self.assertIn(ActionType.TAKE_PHOTO, kinds(r.actions))
 
     def test_visitor_at_night_cannot_add_rules_or_lights(self):
         self.make(Mode.NIGHT, brain_reply=tool_calls(("outlet_off", {"outlet": "porch_light"})))

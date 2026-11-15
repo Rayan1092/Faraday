@@ -45,6 +45,7 @@ from . import lines, look, owner, summary, threat
 from .threat import ThreatAssessor
 from .core import Brain
 from .settings import load_settings, passphrase
+from modes.passphrase import REDACTED
 
 FILLER = "One moment, please."
 SNAPSHOT_REASON = "Snapshot from the dashboard"
@@ -94,6 +95,7 @@ class Pipeline:
         # door?), "late" (already answered "I can't see the door", drop it when it comes)
         self._owner_photos: Dict[str, str] = {}
         self._look_timers: Dict[str, threading.Timer] = {}
+        self._rules_stored: set = set()  # add_rule action ids the owner router already stored
         self.look_timeout_s = 25.0  # vision on the Mac takes a few seconds; then give up
 
     @classmethod
@@ -252,6 +254,10 @@ class Pipeline:
         if owner.is_owner_speech(event, mode):
             # "Hey Faraday, ...": the owner's own router, never the visitor conversation.
             self._owner_request(event, result, done, mode)
+        elif (event.type == EventType.SPEECH_HEARD and mode == Mode.NIGHT
+              and event.data.get("channel") is None
+              and look.is_look_request(str(event.data.get("text", "")))):
+            self._look(event, result, done)   # typed at Night (dashboard box, sim): as before
         else:
             self._decide(event, mode, result, done, filler)
         self._software_actions(result, done, depth)
@@ -285,7 +291,8 @@ class Pipeline:
                 for e in self.modes.arm(action.args["mode"], by,
                                         f"{by.capitalize()} chose set_mode.", caused_by=action.id):
                     self._process(e, result, depth + 1)
-            elif action.type == ActionType.ADD_RULE and self.rules is not None:
+            elif (action.type == ActionType.ADD_RULE and self.rules is not None
+                  and action.id not in self._rules_stored):
                 heard = next((str(e.data.get("text", "")) for e in result.events
                               if e.id == action.caused_by and e.type == EventType.SPEECH_HEARD), "")
                 rule = self.rules.add(action.args, description=heard, caused_by=action.id)
@@ -310,7 +317,10 @@ class Pipeline:
     def _owner_request(self, event: Event, result: Result, done: List[Action], mode: str) -> None:
         """One owner request, one fixed intent (brain/owner.py). Plain code does it and
         answers with a fixed line. Owner speech is never saved as a visitor message."""
-        route = self.router.route(str(event.data.get("text", "")))
+        text = str(event.data.get("text", ""))
+        if REDACTED in text:
+            return   # the passphrase: modes/ has already disarmed (or refused); nothing to add
+        route = self.router.route(text)
 
         def say(text: str) -> None:
             self._emit(make_action(ActionType.SPEAK, {"text": text}, Source.BRAIN,
@@ -342,23 +352,28 @@ class Pipeline:
         elif intent == owner.LOOK:
             self._look(event, result, done)
         elif intent == owner.LIGHT:
-            act(ActionType.OUTLET_ON if route.on else ActionType.OUTLET_OFF, {"outlet": route.outlet})
-            say(lines.light_line(route.outlet, bool(route.on)))
+            for outlet, on in route.lights:
+                act(ActionType.OUTLET_ON if on else ActionType.OUTLET_OFF, {"outlet": outlet})
+            say(" ".join(lines.light_line(outlet, on) for outlet, on in route.lights))
         elif intent == owner.ADD_INSTRUCTION:
             if self.instructions is None or not self._owner_instruction(event, result, done):
                 say(lines.REPEAT)
         elif intent == owner.ADD_RULE:
             rule = route.rule or self._rule_from_model(event)
-            if rule is None:
-                say(lines.REPEAT)
-            else:
+            stored = None
+            if rule is not None and self.rules is not None:
                 try:
-                    act(ActionType.ADD_RULE, rule)
+                    action = make_action(ActionType.ADD_RULE, rule, Source.BRAIN, caused_by=event.id)
                 except ValueError as e:
                     self.say(f"  [rules] refused: {e}")
-                    say(lines.REPEAT)
                 else:
-                    say(lines.RULE_SAVED)
+                    # Stored now, so the spoken line tells the truth; _software_actions skips it.
+                    stored = self.rules.add(action.args, description=text, caused_by=action.id)
+                    self.say(f"  [rules] {'stored ' + stored['id'] if stored else 'refused'}: {text}")
+                    if stored:
+                        self._rules_stored.add(action.id)
+                        self._emit(action, result, done)
+            say(lines.RULE_SAVED if stored else lines.REPEAT)
         else:
             say(lines.REPEAT if route.cut_off else lines.SORRY)
 
