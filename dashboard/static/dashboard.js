@@ -57,7 +57,7 @@
     renderPhoto(s.photo);
     renderChips(s.photo);
     renderRecording(s.recording, s.alert);
-    renderLights(s.lights, s.control_available);
+    renderLights(s.lights);
     if (s.version === lastVersion) return; // the log didn't change
     lastVersion = s.version;
     renderTalk(s.talk);
@@ -212,64 +212,38 @@
     }
   }
 
-  // Light switches. The tile always shows the state from the log (what integration
-  // really sent), never what the click hoped for. Tiles are updated in place so a
-  // poll doesn't steal keyboard focus from a switch.
+  // Lights: read-only on/off status from the log (what integration really sent).
+  // Switching them is on the Controls page only (owner, 2026-11-15).
   const lightTiles = {};
-  const lightBusy = {};   // outlet -> true while a switch request is in flight
-  const lightNote = {};   // outlet -> { text, until } short error under the name
 
   function lightTile(light) {
     let tile = lightTiles[light.id];
     if (!tile) {
-      tile = el("button", "light");
-      tile.type = "button";
+      tile = el("div", "light");
       tile.dataset.outlet = light.id;
+      tile.setAttribute("role", "img");
       const words = el("div", "words");
       words.append(el("div", "name", light.name), el("div", "state"));
-      tile.append(icon("bulb"), words, el("span", "switch"));
-      tile.onclick = () => switchLight(light.id, !tile.classList.contains("on"));
+      tile.append(icon("bulb"), words);
       lightTiles[light.id] = tile;
     }
     return tile;
   }
 
-  function renderLights(lights, canSwitch) {
+  function renderLights(lights) {
     const box = $("lights");
-    const now = Date.now();
     const shown = [];
     for (const light of lights) {
       if (light.id === "spare" && !light.on) continue; // only show the spare when it's on
       const tile = lightTile(light);
-      const note = lightNote[light.id];
-      const busy = !!lightBusy[light.id];
       tile.classList.toggle("on", light.on);
-      tile.classList.toggle("busy", busy);
-      tile.disabled = !canSwitch || busy;
-      tile.classList.toggle("switchable", !!canSwitch);
-      tile.setAttribute("aria-pressed", light.on ? "true" : "false");
-      tile.setAttribute("aria-label", light.name + (light.on ? " on" : " off") +
-        (canSwitch ? "" : " (switches not connected)"));
-      tile.querySelector(".state").textContent =
-        busy ? "Switching…" : note && note.until > now ? note.text : light.on ? "On" : "Off";
+      tile.setAttribute("aria-label", light.name + (light.on ? " is on" : " is off"));
+      tile.querySelector(".state").textContent = light.on ? "On" : "Off";
       shown.push(tile);
     }
     if (shown.length !== box.children.length || shown.some((t, i) => box.children[i] !== t)) {
       box.replaceChildren(...shown);
     }
-  }
-
-  function switchLight(outlet, on) {
-    if (lightBusy[outlet]) return;
-    lightBusy[outlet] = true;
-    delete lightNote[outlet];
-    poll();
-    post("/api/control", { outlet, on })
-      .then(({ status, data }) => {
-        if (status !== 200) lightNote[outlet] = { text: data.error || "Didn't switch", until: Date.now() + 4000 };
-      })
-      .catch(() => { lightNote[outlet] = { text: "App not responding", until: Date.now() + 4000 }; })
-      .finally(() => { delete lightBusy[outlet]; poll(); });
   }
 
   let lastTalk = [];
