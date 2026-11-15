@@ -293,6 +293,10 @@ class Rehearsal(unittest.TestCase):
 
         # 5. Someone rings during the alarm; the owner arrives and disarms with the passphrase
         #    while that visitor window is open (the wake phrase inside a visitor window)
+        # the alarm's buzz pauses the radio for 2-3 s, and the fake doorbell is one packet
+        # (a real ring holds ~1 s of them): ring once the radio listens again
+        self.step("radio back after the buzz", lambda: fl.device.rx and fl._cmds.empty()
+                  and fl._refresh_due is None)
         n_windows = sum("listening (doorbell)" in s for s in self.out)
         fl.device.press_doorbell()
         self.step("visitor window open", lambda: sum("listening (doorbell)" in s for s in self.out) > n_windows)
