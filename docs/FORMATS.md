@@ -198,7 +198,7 @@ Sent by `brain/` right after a `photo_described`. It says what the scene at the 
 
 | data key | type | default | notes |
 |---|---|---|---|
-| `category` | string | required | `delivery`, `visitor`, `suspicious`, `nobody`, `unknown`. `nobody` whenever the object detector counted zero people. `unknown` when the photo couldn't be analysed (no description from the vision model): never a guess |
+| `category` | string | required | `delivery`, `visitor`, `suspicious`, `nobody`, `unknown`. `nobody` whenever the object detector counted zero people. If vision failed, the label comes from the detector's facts plus the context (rang or not, the mode). `unknown` only when vision and the detector both failed: never a guess. A visitor who says package, parcel, delivery or courier makes it `delivery` (a later `threat_assessed` for the same photo; it never replaces `suspicious`) |
 | `reason` | string | `""` | one short line, at most 200 characters |
 | `via` | string | `"rules"` | `bonsai` or `rules` |
 | `model` | string or null | `null` | LM Studio model id when `via` is `bonsai` |

@@ -1,6 +1,10 @@
 """Every fixed line Faraday speaks, in one place and one tone: a calm, professional
 home security assistant. Short, never funny, never stiff (owner, 2026-11-15).
 
+Spoken lines never describe the person (owner, Mac test: the alarm said "Leave now
+with your black hooded jacket and bag" and there was no bag). Descriptions only go
+in the log and on the dashboard. Nothing spoken mentions a passphrase.
+
 Modules that speak import their lines from here (rules/ keeps the doorbell and
 warning lines in rules/baseline.py, which can't import brain/; they're listed here
 too). NV pre-renders them with Argmax TTS: `python -m brain.lines` prints every
@@ -25,12 +29,14 @@ CANT_HELP = "I'm sorry, I can't help with that."
 CANT_DISARM = "I'm sorry, I can't do that. Only the owner can disarm the system."
 
 # ---- the owner ("Hey Faraday, ...") ----------------------------------------------
-SORRY = "Sorry, I didn't catch that."
+SORRY = ("Sorry, I can't help with that. You can ask who's at the door, what happened, "
+         "or arm the house.")
 REPEAT = "Sorry, I missed the end of that. Please say it again."
 ARMED_NO_CHANGE = "The system is armed. I can't make changes right now."   # never hints a passphrase
 RULE_SAVED = "Understood. The rule is saved."
 LOOKING = "Checking the camera."
 CANT_SEE = "I can't see the door right now."
+NOBODY_AT_DOOR = "No one is at the front door."
 CHECKING = "Checking the log."
 NOTHING_HAPPENED = "Nothing happened while you were out."
 INSTRUCTION_REFUSED = "I can only pass messages to visitors. I can't change lights, modes or the alarm."
@@ -60,18 +66,6 @@ def forgot_line(audience: str) -> str:
     return f"Understood. I've removed the {AUDIENCE_NAMES.get(audience, audience + ' instruction')}."
 
 
-def confront_line(description: str) -> str:
-    """Code's own confrontation line when Bonsai's is unusable: what the camera sees,
-    then leave. The alarm line itself was already spoken by code."""
-    seen = " ".join(str(description or "").split()).rstrip(".")
-    if not seen:
-        return "Please leave the property now."
-    seen = seen[0].lower() + seen[1:]
-    if len(seen) > 150:
-        seen = seen[:150].rsplit(" ", 1)[0]
-    return f"I can see {seen}. Please leave now."
-
-
 # Literal on purpose: integration/fixed_lines.py reads it with `ast` for pre-rendering.
 FIXED_LINES = [
     "Hello. No one can come to the door right now. I can take a message or help with a delivery.",
@@ -85,12 +79,13 @@ FIXED_LINES = [
     "Thank you. I'll pass that along.",
     "I'm sorry, I can't help with that.",
     "I'm sorry, I can't do that. Only the owner can disarm the system.",
-    "Sorry, I didn't catch that.",
+    "Sorry, I can't help with that. You can ask who's at the door, what happened, or arm the house.",
     "Sorry, I missed the end of that. Please say it again.",
     "The system is armed. I can't make changes right now.",
     "Understood. The rule is saved.",
     "Checking the camera.",
     "I can't see the door right now.",
+    "No one is at the front door.",
     "Checking the log.",
     "Nothing happened while you were out.",
     "I can only pass messages to visitors. I can't change lights, modes or the alarm.",

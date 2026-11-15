@@ -48,6 +48,23 @@ class TheList(unittest.TestCase):
             self.assertNotIn("passphrase", text.lower(), name)   # never hinted to whoever is listening
 
 
+class MacTestLines(unittest.TestCase):
+    """The owner's second Mac test, items 7 to 9."""
+
+    def test_unknown_requests_get_the_help_line(self):
+        self.assertEqual(lines.SORRY, "Sorry, I can't help with that. You can ask who's at the door, "
+                                      "what happened, or arm the house.")
+        self.assertIn(lines.SORRY, lines.FIXED_LINES)
+        self.assertNotIn("Sorry, I didn't catch that.", lines.FIXED_LINES)
+
+    def test_nothing_spoken_hints_a_passphrase_or_describes_anyone(self):
+        for name, text in lines.all_lines().items():
+            self.assertNotIn("passphrase", text.lower(), name)
+            self.assertNotIn("pass phrase", text.lower(), name)
+        self.assertFalse(hasattr(lines, "confront_line"))
+        self.assertIn(lines.NOBODY_AT_DOOR, lines.FIXED_LINES)
+
+
 class Behaviour(unittest.TestCase):
     def test_a_promise_to_pass_it_on_saves_the_message(self):
         brain = make_brain(tool_calls(("speak", {"text": MESSAGE_SAVED})))

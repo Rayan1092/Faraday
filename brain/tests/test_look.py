@@ -40,12 +40,21 @@ class Words(unittest.TestCase):
                      "Open the door.", "Goodnight Faraday."):
             self.assertFalse(is_look_request(text), text)
 
-    def test_answer_is_the_description_plus_the_label(self):
-        self.assertEqual(look_line(photo("t"), "delivery"), COURIER + " It looks like a delivery.")
-        self.assertEqual(look_line(photo("t", "An empty porch at night"), "nobody"),
-                         "An empty porch at night.")                  # not said twice
-        self.assertEqual(look_line(photo("t", "Nobody is there."), "nobody"), "Nobody is there.")
-        self.assertEqual(look_line(photo("t", "A dark porch"), "nobody"), "A dark porch. No one is there.")
+    def test_answer_is_the_count_plus_the_label_never_the_description(self):
+        """Owner, Mac test: spoken lines never describe the person (the alarm described a
+        bag that wasn't there). The description stays on the dashboard."""
+        counted = photo("t", "A courier in a red cap holding a box.")
+        counted.data.update(people=1, faces=1)
+        self.assertEqual(look_line(counted, "delivery"), "One person is at the front door. It looks like a delivery.")
+        two = photo("t", "Two people.")
+        two.data.update(people=2, faces=0)
+        self.assertEqual(look_line(two, "visitor"), "Two people are at the front door. It looks like a visitor.")
+        self.assertEqual(look_line(photo("t"), "delivery"), "Someone is at the front door. It looks like a delivery.")
+        for text in ("An empty porch at night", "Nobody is there.", "A dark porch"):
+            self.assertEqual(look_line(photo("t", text), "nobody"), "No one is at the front door.")
+        for category in ("delivery", "visitor", "suspicious", "nobody"):
+            self.assertNotIn("red cap", look_line(counted, category))
+            self.assertNotIn("box", look_line(counted, category))
 
     def test_camera_or_vision_failure(self):
         self.assertEqual(look_line(photo("t", "Camera unavailable.", path="", source=Source.CAMERA), "nobody"),
@@ -82,14 +91,15 @@ class Pipe(unittest.TestCase):
         self.assertEqual((take.source, take.args["reason"], take.caused_by),
                          (Source.DASHBOARD, LOOK_REASON, r.events[0].id))
         answer = self.p.handle(photo(take.id))
-        self.assertEqual(said(answer.actions), [COURIER + " It looks like a delivery."])
+        # Facts only (owner, Mac test): no detector count on this photo, so "Someone".
+        self.assertEqual(said(answer.actions), ["Someone is at the front door. It looks like a delivery."])
         self.assertEqual(self.client.calls, [])               # no Bonsai, no visitor greeting
         self.assertIn(EventType.THREAT_ASSESSED, [e.type for e in answer.events])
 
     def test_works_at_night_too(self):
         self.make(Mode.NIGHT)
         _, [take] = self.ask("Faraday, is anyone outside?", "owner")
-        self.assertTrue(said(self.p.handle(photo(take.id, "An empty porch.")).actions)[0].startswith("An empty porch."))
+        self.assertEqual(said(self.p.handle(photo(take.id, "An empty porch.")).actions), ["No one is at the front door."])
 
     def test_not_while_away(self):
         """While away the speaker is at the door: a visitor, not the owner."""
@@ -142,9 +152,9 @@ class Pipe(unittest.TestCase):
         time.sleep(0.6)
         self.assertNotIn(CANT_SEE, said(self.emitted))
 
-    def test_detector_description_is_spoken(self):
+    def test_detector_facts_are_spoken_when_vision_fails(self):
         """NV #43: when vision fails the object detector writes the description
-        (described_by "detector"): say that, not "I can't see"."""
+        (described_by "detector"): answer from its count, not "I can't see"."""
         self.make()
         _, [take] = self.ask()
         seen = make_event(EventType.PHOTO_DESCRIBED,       # source camera: the case that changed
@@ -153,7 +163,7 @@ class Pipe(unittest.TestCase):
                                              described_by="detector", people=1),
                           Source.CAMERA, caused_by=take.id)
         line = said(self.p.handle(seen).actions)[0]
-        self.assertTrue(line.startswith("One person is at the door."), line)
+        self.assertTrue(line.startswith("One person is at the front door."), line)
         failed = make_event(EventType.PHOTO_DESCRIBED,
                             PhotoDescribedData(photo_path="captures/photos/x.jpg", description="Photo saved."),
                             Source.CAMERA, caused_by="act_x")
