@@ -192,9 +192,17 @@ class Recorder:
     # ---- the persistent stream -----------------------------------------------------
     def _ensure_live(self) -> None:
         if self._live is None:
-            self._live = self.stream_factory(samplerate=self.sample_rate, channels=1, dtype="int16",
-                                             device=self.device, callback=self._live_callback)
-            self._live.start()
+            stream = self.stream_factory(samplerate=self.sample_rate, channels=1, dtype="int16",
+                                         device=self.device, callback=self._live_callback)
+            try:
+                stream.start()
+            except Exception:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+                raise
+            self._live = stream               # only a stream that really started
 
     def close(self) -> None:
         """Stop listening altogether (app shutdown)."""
@@ -209,7 +217,21 @@ class Recorder:
 
     def _live_callback(self, indata, frames, time_info, status) -> None:
         if self.gate.muted:
-            return                       # Faraday is speaking: don't hear ourselves
+            # Faraday is speaking: don't hear ourselves, and forget what came just
+            # before, so the next window doesn't start with stale audio
+            with self._lock:
+                self._ring.clear()
+                self._ring_n = 0
+                w = self._window
+                if w is not None and not w["done"].is_set():
+                    if w["vad"].speech_started:
+                        # someone was talking (a visitor when the owner presses the
+                        # intercom): end the window with what was said, don't lose it
+                        w["spoke"] = True
+                        w["done"].set()
+                    elif w["dirty"]:
+                        self._restart_locked(w, keep_preroll=False)
+            return
         chunk = np.array(indata, copy=True).reshape(-1)
         with self._lock:
             w = self._window
@@ -222,6 +244,7 @@ class Recorder:
             w["frames"].append(chunk)
             w["kept"] += len(chunk)
             w["samples"] += len(chunk)
+            w["dirty"] = True
             vad = w["vad"]
             vad.feed(chunk)
             if vad.speech_started:
@@ -267,7 +290,8 @@ class Recorder:
             window = {"max_s": max_s, "silence_s": silence_s, "no_speech_s": no_speech_s,
                       "frames": pre, "kept": sum(len(c) for c in pre), "samples": 0, "base": 0,
                       "speech_at": 0 if vad.speech_started else None, "vad": vad,
-                      "spoke": False, "cancelled": False, "done": threading.Event()}
+                      "spoke": False, "cancelled": False, "done": threading.Event(),
+                      "epoch": 0, "dirty": bool(pre)}
             self._window = window
         try:
             self._ensure_live()
@@ -289,10 +313,30 @@ class Recorder:
                 return False
             w.update({k: v for k, v in rules.items() if k in ("max_s", "silence_s", "no_speech_s")})
             if restart:
-                w["base"] = w["samples"]
-                if w["speech_at"] is not None:
-                    w["speech_at"] = max(w["speech_at"], w["base"])
+                self._restart_locked(w, keep_preroll=True)
             return True
+
+    def _restart_locked(self, w: Dict[str, Any], keep_preroll: bool) -> None:
+        """Start the window's rules over from now: timers (incl. the wall-clock
+        backstop), speech detection and audio. keep_preroll keeps the last
+        `preroll_s` (said just now, after Faraday stopped) and feeds it to the
+        new detector, so someone already talking is caught."""
+        frames: List[np.ndarray] = []
+        if keep_preroll and w["vad"].speech_started:
+            frames = list(w["frames"])        # talking right now (after the last mute): keep it all
+        elif keep_preroll:
+            n = 0
+            for chunk in reversed(w["frames"]):
+                if n >= self.preroll:
+                    break
+                frames.insert(0, chunk)
+                n += len(chunk)
+        vad = EnergyVad(self.sample_rate)
+        for chunk in frames:
+            vad.feed(chunk)
+        w.update(frames=frames, kept=sum(len(c) for c in frames), base=w["samples"], vad=vad,
+                 speech_at=w["samples"] if vad.speech_started else None,
+                 dirty=bool(frames), epoch=w["epoch"] + 1)
 
     def cancel(self) -> None:
         """End the current window now; its on_done gets (None, seconds, False)."""
@@ -304,12 +348,16 @@ class Recorder:
     def _finish_window(self, window: Dict[str, Any], on_done) -> None:
         # Wall-clock backstop for a stream that never delivers audio. Muted time
         # doesn't count (a window opened just before Faraday talks waits for it).
-        unmuted, t0 = 0.0, time.monotonic()
+        unmuted, t0, epoch = 0.0, time.monotonic(), window["epoch"]
         while not window["done"].wait(0.1):
+            if window["no_speech_s"] is None or window["epoch"] != epoch:
+                # waiting for speech (wake), or the rules just restarted (a wake
+                # segment became a window): the backstop counts from now
+                unmuted, t0, epoch = 0.0, time.monotonic(), window["epoch"]
+                if window["no_speech_s"] is None:
+                    continue
             if not self.gate.muted:
                 unmuted += 0.1
-            if window["no_speech_s"] is None:
-                continue                      # wake segment: waits for speech or cancel
             limit = max(window["max_s"], window["no_speech_s"])
             if unmuted > limit + 2.0 or time.monotonic() - t0 > self.HARD_CAP_S:
                 break
