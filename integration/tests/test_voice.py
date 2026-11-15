@@ -582,9 +582,10 @@ class Hooks(unittest.TestCase):
 class BuiltApp(unittest.TestCase):
     """integration/__main__.build_app wires Dell's dashboard hooks (PLAN Q26)."""
 
-    def test_product_start_command_has_no_demo_options(self):
+    def test_product_start_command_has_no_demo_options(self):  # noqa: D401
         """Owner 2026-11-15: the real product only. No fake radio, typed speech,
         stand-in camera, printed speech or offline brain in the start command."""
+        import argparse
         import contextlib
         import io
         from integration import __main__ as main_module
@@ -595,7 +596,12 @@ class BuiltApp(unittest.TestCase):
         keys = main_module.__doc__.split("Console keys", 1)[1]
         for gone in ("t <text>", "d / m", "fake"):
             self.assertNotIn(gone, keys)
-        self.assertNotIn("standin", Path(main_module.__file__).read_text(encoding="utf-8").lower())
+        import re
+        src = Path(main_module.__file__).read_text(encoding="utf-8")
+        self.assertIsNone(re.search(r"StandInCamera|PrintTTS|FakeFlipper|fake_flipper|standin|print_speech",
+                                    src, re.I))
+        with self.assertRaises(ValueError):                            # parts are a closed list
+            main_module.build_app(argparse.Namespace(), {}, parts={"camera": object()})
 
     def test_listening_hook_drives_api_state_and_listen_hook_is_gone(self):
         import argparse

@@ -93,6 +93,7 @@ vals = {
     "STT_URL": stt_url,
     "SERVE_CMD": " ".join(shlex.quote(str(p)) for p in (serve or [])),
     "TTS_BIN": argmax_bin,
+    "TTS_KIND": tts.get("kind", ""),
     "PORT_GLOB": (s.get("flipper", {}).get("serial_port", {}) or {}).get("mac", ""),
     "EXAMPLE_PASS": "1" if s["security"]["passphrase"] == ex["security"]["passphrase"] else "0",
     "ENROLLMENT": check.get("enrollment") or "cache/owner_voice.wav",
@@ -262,14 +263,16 @@ print(p.pid)' "$SERVE_CMD" cache/argmax-serve.log 2>>cache/argmax-serve.log)"
       fail "Argmax STT not answering at $STT_BASE. Start it: argmax-cli serve"
     fi
   else
-    warn "no stt.mac.url: no speech recognition (typed text still works)"
+    fail "no Argmax STT configured (stt.mac): the product needs speech recognition"
   fi
 
   # ---- 5. the rest -----------------------------------------------------------------------------
-  if [ -n "$TTS_BIN" ] && command -v "$TTS_BIN" >/dev/null 2>&1; then
+  if [ "$TTS_KIND" != "argmax" ]; then
+    fail "tts.mac.kind is '$TTS_KIND': the product speaks with Argmax (\"kind\": \"argmax\")"
+  elif [ -n "$TTS_BIN" ] && command -v "$TTS_BIN" >/dev/null 2>&1; then
     ok "TTS command found: $TTS_BIN"
   else
-    warn "TTS command '$TTS_BIN' not found: Faraday will print instead of speaking"
+    fail "TTS command '$TTS_BIN' not found: fix tts.mac.command (Faraday must speak)"
   fi
 
   # Object detection (hardware/detect.py): the model comes with git pull; OpenCV must be

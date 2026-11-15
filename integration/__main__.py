@@ -35,6 +35,9 @@ from hardware.settings import CONFIG_DIR, for_os, load_settings  # noqa: E402
 from integration.app import App  # noqa: E402
 
 
+PARTS = frozenset({"flipper", "capture_factory", "speaker", "stream_factory", "stt", "chime"})
+
+
 def build_app(args: argparse.Namespace, settings, known_outlets=None,
               parts: Optional[Dict[str, Any]] = None) -> App:
     """The whole app, wired as on the Mac. `parts` is for the automated tests and
@@ -42,6 +45,9 @@ def build_app(args: argparse.Namespace, settings, known_outlets=None,
     changing any wiring ("flipper", "capture_factory", "speaker" (gate -> TTS),
     "stream_factory" (mic), "stt", "chime"). The product never passes it."""
     parts = parts or {}
+    unknown = set(parts) - PARTS
+    if unknown:
+        raise ValueError(f"build_app: unknown parts {sorted(unknown)} (known: {sorted(PARTS)})")
     if "flipper" in parts:
         flipper = parts["flipper"]
     else:
@@ -91,8 +97,9 @@ def build_app(args: argparse.Namespace, settings, known_outlets=None,
         if "stream_factory" in parts:
             recorder.stream_factory = parts["stream_factory"]
         chime = parts["chime"] if "chime" in parts else (lambda: play_chime(gate, speaker_device))
-        app.voice = Voice(recorder, parts.get("stt") or SpeechToText.from_settings(settings),
-                          app.submit, listen=audio.get("listen"), wake=wake,
+        stt = parts["stt"] if "stt" in parts else SpeechToText.from_settings(settings)
+        app.voice = Voice(recorder, stt,
+                          app.submit, out=lambda line: app.out(line), listen=audio.get("listen"), wake=wake,
                           diarizer=diarizer,
                           diarize_grace_s=Diarizer.grace_s(settings),
                           owner_voice=owner_voice, owner_voice_grace_s=OwnerVoice.grace_s(settings),
@@ -169,7 +176,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             stream.reconfigure(errors="replace")
         except AttributeError:
             pass
-    ap = argparse.ArgumentParser(prog="python3 -m integration", description="Start Faraday")
+    ap = argparse.ArgumentParser(prog="python3 -m integration", description="Start Faraday",
+                                 allow_abbrev=False)        # no prefix can bring back an old flag
     ap.add_argument("--no-mic", action="store_true", help="no microphone at all")
     ap.add_argument("--no-wake", action="store_true", help='mic only in windows, no "Hey Faraday"')
     ap.add_argument("--no-controls", action="store_true", help="no camera stream / intercom server")

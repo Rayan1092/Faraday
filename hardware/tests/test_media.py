@@ -171,6 +171,26 @@ class IntercomPlayer(unittest.TestCase):
         self.assertTrue(ended.wait(5))
         self.assertFalse(gate.muted)
 
+    def test_speaker_that_fails_to_open_never_leaves_the_mic_muted(self):
+        """Review of #56: the gate was muted before the stream opened, so a missing
+        speaker left the door mic deaf until a restart."""
+        class Broken:
+            def __init__(self, **kw):
+                pass
+
+            def start(self):
+                raise OSError("no output device")
+
+            def close(self):
+                pass
+        gate = MicGate()
+        ic = Intercom(gate, stream_factory=Broken, hold_s=0.2)
+        with self.assertLogs("hardware.intercom", "ERROR"):
+            for chunk in list(self.chunks())[:3]:
+                ic.feed(chunk, 16000)
+        self.assertFalse(gate.muted)
+        self.assertFalse(ic.active)
+
     def test_closes_by_itself_when_chunks_stop(self):
         gate = MicGate()
         ic = Intercom(gate, stream_factory=FakeOutput, hold_s=0.2)

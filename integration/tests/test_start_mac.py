@@ -95,6 +95,8 @@ class StartMac(unittest.TestCase):
         s = json.loads((ROOT / "config" / "settings.example.json").read_text(encoding="utf-8"))
         s["llm"]["profiles"]["mac"] = {"base_url": self.lm.base, "model": "bonsai-test"}
         s["stt"]["mac"]["url"] = self.argmax.base + "/v1/audio/transcriptions"
+        # a TTS binary that exists here (the product needs one: a missing one is a FAIL)
+        s["tts"]["mac"]["command"] = [Path(sys.executable).as_posix(), "tts", "--text", "{text}"]
         self.settings = s
 
     def tearDown(self):
@@ -252,6 +254,19 @@ class StartMac(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertLess(_time.monotonic() - t0, 25)           # not loop turns x curl timeouts
         self.assertIn("starting it", out)
+
+    def test_product_needs_argmax_speech(self):
+        """Owner 2026-11-15: the real product only. A stand-in TTS kind or a missing
+        TTS binary is a FAIL, not a quiet fallback to printed speech."""
+        self.settings["tts"]["mac"]["kind"] = "standin"
+        code, out = self.run_script(self.settings)
+        self.assertEqual(code, 1, out)
+        self.assertIn("the product speaks with Argmax", out)
+        self.settings["tts"]["mac"]["kind"] = "argmax"
+        self.settings["tts"]["mac"]["command"] = ["/no/such/argmax-cli", "tts"]
+        code, out = self.run_script(self.settings)
+        self.assertEqual(code, 1, out)
+        self.assertIn("Faraday must speak", out)
 
     def test_missing_settings_created_with_mac_profile(self):
         code, out = self.run_script(None, FARADAY_SKIP_CHECKS="1")

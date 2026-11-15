@@ -9,8 +9,8 @@ python3 -m integration            # the product itself (real Flipper, camera, mi
 
 The real product only (owner decision 2026-11-15): no fake radio, typed speech,
 stand-in camera, printed speech or offline option in the start command. The
-automated tests and the demo rehearsal (`integration/tests/test_rehearsal.py`)
-pass their stand-ins to `build_app(..., parts=...)` directly.
+automated tests (and the demo rehearsal test) pass their stand-ins to
+`build_app(..., parts=...)` directly.
 
 | Flow | How |
 |---|---|
