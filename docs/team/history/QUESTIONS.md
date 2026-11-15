@@ -57,3 +57,20 @@ Each has the default I used, so work continued. Answer inline and I'll adjust.
     - Not started: your brief says only after 1-9 pass on the Mac.
 18. **Owner follow-up rule.**
     - Default: a question opens an *owner* window only if the speak action's `caused_by` is an owner speech_heard (Dell's brain sets it). This replaces the 30 s timer and answers Dell's PLAN Q31.
+19. **Vision model: the 9B or the 4B** (owner 2026-11-15: "measure the 4B too").
+    - Default: the 9B stays. `python3 -m hardware.check vision` recommends the 4B only if the 9B misses the 5 s target and the 4B makes it. It then prints the `"vision_model"` line to add, and `start_mac.sh` loads that model too.
+20. **People stay sensitive** (detector item, 2026-11-15).
+    - Default: as you said. A person box at 0.35 counts at once, with no 3-of-5 wait. So a coat or a shadow could still be taken for a person.
+    - If ghost people show up on the Mac, the same steadiness rule can apply to people (for example 2 of 5 frames).
+21. **Going out of view when close.**
+    - Default: camera stays at 1280x720 (16:9). The stream is already the whole frame; Dell is fixing the page's crop.
+    - If you still go out of view with Dell's fix, the camera itself may crop its sensor for 16:9. `python3 -m hardware.check camera` now prints the frame size. Try `"width": 1280, "height": 960` under `"camera"`.
+22. **Launcher Wi-Fi warning** (Dell's PLAN Q39 (1); Dell left the wording to you).
+    - Default: `Wi-Fi is ON (en0). Turn it off: the event rule is Wi-Fi off, and Faraday never uses the internet.` It no longer says "for the demo".
+23. **A photo now takes about 0.4 s longer** (detector item).
+    - Default: yes. The photo is checked together with the next 4 frames, so a one-frame "cell phone" can't be reported. Vision starts after that, so a description takes about 0.4 s more.
+24. **"unknown object" on photo_described.**
+    - Default: never. Only people and steady objects at 0.6 or more go on the event, into the vision hint and into the detector's description. The live stream shows unsure steady things as "unknown object".
+25. **Naming needs the same label at the threshold in 3 of 5 frames.**
+    - Default: strict, as written. A backpack seen in 5 of 5 frames at 0.62, 0.58, 0.61, 0.59 and 0.57 shows as "unknown object" and is left off the photo, because only two frames reach 0.6.
+    - Alternative: name it when it's seen in 3 of 5 and its best confidence reaches the threshold. Lowering `camera.detector.object_score` to 0.55 also names it.

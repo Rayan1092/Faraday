@@ -9,13 +9,19 @@ imported or run): module-level UPPERCASE string constants that read like a
 sentence, and literal `_speak("...")` calls. If Dell adds
 `FIXED_LINES = [...]` to any of those modules, it is picked up the same way.
 Lines the scan misses are still cached after their first use.
+
+    python3 -m integration.fixed_lines            list them
+    python3 -m integration.fixed_lines --render   render the ones not cached yet, now
+                                                  (after Dell changes lines; the app also
+                                                  does it in the background at every start)
 """
 from __future__ import annotations
 
 import ast
 import re
+import time
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 from hardware.settings import REPO_ROOT
 
@@ -66,6 +72,31 @@ def fixed_lines(root: Path = REPO_ROOT, packages: Iterable[str] = PACKAGES) -> L
     return unique
 
 
+def main(argv: Optional[List[str]] = None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(prog="python3 -m integration.fixed_lines")
+    ap.add_argument("--render", action="store_true",
+                    help="render the lines not in the TTS cache yet, now (Mac: argmax-cli)")
+    a = ap.parse_args(argv)
+    lines = fixed_lines()
+    if not a.render:
+        for line in lines:
+            print(line)
+        return 0
+    from hardware.settings import load_settings
+    from hardware.speech import TextToSpeech
+    tts = TextToSpeech.from_settings(load_settings())
+    if not getattr(tts, "can_cache", False):
+        print("This machine's TTS keeps no cache (it needs tts kind argmax with cache on).")
+        return 1
+    missing = [line for line in lines if tts.cached(line) is None]
+    print(f"{len(lines)} fixed lines, {len(missing)} not rendered yet. Rendering ...")
+    t0 = time.monotonic()
+    made = tts.prerender(missing)
+    print(f"Rendered {made} in {time.monotonic() - t0:.0f} s. "
+          f"{len(lines) - len(missing) + made} of {len(lines)} are cached.")
+    return 0 if made == len(missing) else 1
+
+
 if __name__ == "__main__":
-    for line in fixed_lines():
-        print(line)
+    raise SystemExit(main())

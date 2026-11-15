@@ -31,12 +31,27 @@ from hardware.settings import REPO_ROOT, for_os
 log = logging.getLogger("hardware.speech")
 MUTE_TAIL_S = 0.4          # keep the mic muted a moment after speech (room echo)
 
+# Words the TTS voice gets wrong, written the way it says them right. Applied to
+# every line before it is spoken, rendered or looked up in the cache (owner
+# 2026-11-15: "passphrase" came out as "pass phase").
+SAY_AS = ((re.compile(r"\bpass-?phrase(s?)\b", re.I), "pass phrase"),)
+
+
+def spoken(text: str) -> str:
+    """The line as it should be pronounced (SAY_AS); same text otherwise."""
+    for pattern, words in SAY_AS:
+        def fix(m: "re.Match[str]", words: str = words) -> str:
+            out = words + m.group(1)
+            return out[:1].upper() + out[1:] if m.group(0)[:1].isupper() else out
+        text = pattern.sub(fix, text)
+    return text
+
 
 # ---- speech to text ---------------------------------------------------------------
 class SpeechToText:
     """POSTs a wav to an OpenAI-compatible /v1/audio/transcriptions URL
     (argmax-cli serve, default port 50060). kind "standin" = no STT on this
-    machine: transcribe() returns None and the console/dashboard text box is used."""
+    machine: transcribe() returns None (nothing is heard there; tests use fakes)."""
 
     def __init__(self, url: Optional[str], language: str = "en", model: Optional[str] = None,
                  timeout_s: float = 30):
@@ -55,7 +70,7 @@ class SpeechToText:
 
     def transcribe(self, wav: Path) -> Optional[str]:
         if not self.url:
-            log.warning("no STT configured on this OS (stt kind standin); type instead")
+            log.warning("no STT configured on this OS (stt kind standin): speech isn't heard here")
             return None
         data = {"language": self.language, "response_format": "json"}
         if self.model:
@@ -94,7 +109,7 @@ class TextToSpeech:
         return PrintTTS(gate)
 
     def say(self, text: str) -> bool:
-        text = " ".join(str(text).split())
+        text = spoken(" ".join(str(text).split()))
         if not text:
             return True
         self.gate.mute()
@@ -213,6 +228,7 @@ class ArgmaxTTS(TextToSpeech):
 
     # ---- command lines ----------------------------------------------------------------
     def build(self, text: str, out_wav: Path) -> List[str]:
+        text = spoken(text)
         return [part.replace("{text}", text).replace("{out_wav}", str(out_wav))
                 for part in self.command]
 
@@ -297,8 +313,8 @@ class ArgmaxTTS(TextToSpeech):
         if self.cache_dir is None:
             return None
         base = [p for p in self.command if "{text}" not in p and "{out_wav}" not in p and p != "--play"]
-        key = json.dumps({"text": " ".join(str(text).split()), "cmd": base[1:], "voice": self.voice},
-                         sort_keys=True)
+        key = json.dumps({"text": " ".join(spoken(str(text)).split()), "cmd": base[1:],
+                          "voice": self.voice}, sort_keys=True)
         return self.cache_dir / (hashlib.sha1(key.encode("utf-8")).hexdigest()[:20] + ".wav")
 
     def cached(self, text: str) -> Optional[Path]:
@@ -386,7 +402,7 @@ class ArgmaxTTS(TextToSpeech):
 
     def render(self, text: str) -> Optional[Path]:
         """Make the cached wav for a line without playing it (pre-render)."""
-        text = " ".join(str(text).split())
+        text = spoken(" ".join(str(text).split()))
         if not text or not self.can_cache:
             return None
         hit = self.cached(text)

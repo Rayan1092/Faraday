@@ -1,4 +1,4 @@
-"""Part health: when a part fails mid-demo, Faraday keeps running, says so clearly
+"""Part health: when a part fails mid-run, Faraday keeps running, says so clearly
 once, and says so again when the part is back (owner 2026-11-15).
 
 Parts and how each is watched:

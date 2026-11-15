@@ -175,6 +175,49 @@ class Voice(Base):
         self.assertFalse(gate.muted)
 
 
+class SayAs(Base):
+    """Owner 2026-11-15: the voice said "pass phase" for "passphrase"."""
+
+    def test_passphrase_is_said_as_two_words(self):
+        from hardware.speech import spoken
+        for text, want in (("Please say the passphrase.", "Please say the pass phrase."),
+                           ("Passphrase accepted.", "Pass phrase accepted."),
+                           ("Two pass-phrases", "Two pass phrases"),
+                           ("Night mode is on. Good night.", "Night mode is on. Good night.")):
+            self.assertEqual(spoken(text), want)
+
+    def test_the_cli_and_the_cache_get_the_spoken_form(self):
+        tts = self.tts()
+        self.assertTrue(tts.say("Say the passphrase."))
+        args = self.calls()[0]
+        self.assertEqual(args[args.index("--text") + 1], "Say the pass phrase.")
+        self.assertEqual(tts.cache_path("Say the passphrase."), tts.cache_path("Say the pass phrase."))
+        self.assertIsNotNone(tts.cached("Say the passphrase."))       # pre-render finds it too
+
+
+class RenderCommand(Base):
+    """python3 -m integration.fixed_lines --render (owner 2026-11-15: re-render the
+    cache after Dell's calm lines)."""
+
+    def test_renders_what_is_missing_then_nothing(self):
+        import contextlib
+        import io
+        from unittest import mock
+        from integration import fixed_lines as fl
+        cmd = [sys.executable, str(self.cli), "tts", "--text", "{text}", "--speaker", "aiden", "--play"]
+        cfg = {"kind": "argmax", "command": cmd, "cache": True, "cache_dir": str(self.dir / "cache"),
+               "voice": {"seed": 7}}
+        settings = {"tts": {"mac": cfg, "windows": cfg}, "audio": {}}
+        lines = ["Night mode is on. Good night.", "The system is already disarmed."]
+        out = io.StringIO()
+        with mock.patch("hardware.settings.load_settings", return_value=settings),                 mock.patch.object(fl, "fixed_lines", return_value=lines), contextlib.redirect_stdout(out):
+            self.assertEqual(fl.main(["--render"]), 0)
+            self.assertEqual(fl.main(["--render"]), 0)               # second time: nothing to do
+        self.assertEqual(len(list((self.dir / "cache").glob("*.wav"))), 2)
+        self.assertEqual(len(self.calls()), 2)
+        self.assertIn("2 of 2 are cached", out.getvalue())
+
+
 class Prerender(Base):
     def test_renders_missing_lines_without_playing_and_waits_for_speech(self):
         tts = self.tts()
@@ -252,8 +295,11 @@ class FixedLines(unittest.TestCase):
     def test_dells_fixed_lines_are_found(self):
         from integration.fixed_lines import fixed_lines, lines_in
         lines = fixed_lines()
-        for want in ("Night mode on. Sleep well.", "Alarm. You are being recorded. Leave now.",
-                     "I can't see the door right now.", "Welcome home. Faraday is disarmed."):
+        # Dell's final lines (owner 2026-11-15: one calm tone, brain/lines.py FIXED_LINES)
+        for want in ("Night mode is on. Good night.",
+                     "This property is protected. You are being recorded and the owner has been notified. "
+                     "Please leave now.",
+                     "I can't see the door right now.", "Welcome home. The system is disarmed."):
             self.assertIn(want, lines)
         self.assertNotIn("Owner asked who's at the door", lines)           # a log reason
         self.assertFalse(any("15:09" in line for line in lines))            # bench data

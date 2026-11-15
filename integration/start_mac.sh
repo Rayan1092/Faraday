@@ -144,7 +144,7 @@ if [ "${FARADAY_SKIP_CHECKS:-0}" != "1" ]; then
   if command -v networksetup >/dev/null 2>&1; then
     WIFI_DEV="$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi|AirPort/{getline; print $2; exit}')"
     if [ -n "$WIFI_DEV" ] && networksetup -getairportpower "$WIFI_DEV" 2>/dev/null | grep -q "On"; then
-      warn "Wi-Fi is ON ($WIFI_DEV). Turn it off for the demo."
+      warn "Wi-Fi is ON ($WIFI_DEV). Turn it off: the event rule is Wi-Fi off, and Faraday never uses the internet."
     else
       ok "Wi-Fi off"
     fi
