@@ -41,7 +41,7 @@ Then the software actions run: `set_mode` goes back through `modes/`, `add_rule`
 | `lines.py` | Every fixed spoken line in one tone. `python -m brain.lines [--json]` lists them for NV's pre-rendering |
 | `prompts.py` | Prompt profiles. `small` is for 2B/4B and tuned with the bench. `9b` is for the Mac mini. Picked from the model id, or `llm.prompt_profile` |
 | `vision.py` | `describe_photo(path, caused_by, describer)` gives a `photo_described` event (PLAN.md seam 4). It tries Bonsai vision, and if that fails it still returns a valid event saying "No description available" |
-| `bench.py` | `python -m brain.bench [--profile mac] [--prompts 9b]`: every demo moment 10 times against Bonsai, plus reworded variants and two hard visitor lines. Writes `docs/bench/<date>-<model>-prompts-<profile>.md` |
+| `bench.py` | `python -m brain.bench [--profile mac] [--prompts 9b]`: every scripted moment 10 times against Bonsai, plus reworded variants and two hard visitor lines. Writes `docs/bench/<date>-<model>-prompts-<profile>.md` |
 
 Answered in plain code without calling Bonsai: `mode_changed`, disarm requests ("disarm", "turn off the alarm", ...) → "I'm sorry, I can't do that. Only the owner can disarm the system." (it never mentions the passphrase), any speech that contains the passphrase, `alert_changed`, doorbell and all motion (the baseline handles those), and "what happened while I was out?" at Home (straight to `summarize_log`, saving one model round trip).
 

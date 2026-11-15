@@ -192,7 +192,7 @@ class Brain:
             self.log(f"[brain] Bonsai call failed after {elapsed:.2f}s: {e}")
             return self._fallback(event, tool_mode, allowed, elapsed, str(e), cause=cause, label=label,
                                   ins=ins, recent=recent)
-        except Exception as e:  # never let the demo stall on a surprise
+        except Exception as e:  # a surprise must never stall the house
             elapsed = time.perf_counter() - started
             self.log(f"[brain] Bonsai call crashed after {elapsed:.2f}s: {e!r}")
             return self._fallback(event, tool_mode, allowed, elapsed, repr(e), cause=cause, label=label,
@@ -367,7 +367,7 @@ class Brain:
         """Save the visitor's words in plain code when Bonsai didn't:
         - Bonsai said "I'll take that message" but never saved it (3/10 in the benchmark).
         - Faraday had just asked "Would you like to leave a message?" and Bonsai answered
-          the visitor's reply with another greeting (NV live run, demo step 3). Then the
+          the visitor's reply with another greeting (NV live run). Then the
           reply *is* the message, unless the visitor declined."""
         if (event.type != EventType.SPEECH_HEARD or ActionType.SAVE_MESSAGE not in allowed
                 or any(a.type == ActionType.SAVE_MESSAGE for a in actions)):

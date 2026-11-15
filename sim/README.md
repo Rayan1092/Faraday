@@ -2,7 +2,7 @@
 
 **Owner: Dell laptop.**
 
-Fake hardware for development. It sends any FORMATS.md event with `source: "sim"`, and other code must treat sim events exactly like real ones. It's useful on Windows laptops without the Flipper and as the stage backup. Sim runs never sign off a step; only real-hardware tests do.
+Fake hardware for development and tests only: it isn't part of the product and nothing in the product UI reaches it. It sends any FORMATS.md event with `source: "sim"`, and other code must treat sim events exactly like real ones. It's useful on Windows laptops without the Flipper. Sim runs never sign off a step; only real-hardware tests do.
 
 ```
 python -m sim              # uses Bonsai from config/settings.json
@@ -10,24 +10,16 @@ python -m sim --offline    # rule-based fallback only, no LM Studio needed
 python -m sim -v           # also print full JSON for every event and action
 python -m sim --log x.jsonl  # write somewhere other than logs/events.jsonl (rules go to x-rules.json)
 python -m sim --dashboard  # also serve the dashboard and open it in the browser
-python -m sim --offline --dashboard --port 8081 --no-browser
-python -m sim --demo --dashboard           # BACKUP DEMO: plays the PLAN.md script by itself
-python -m sim --demo --dashboard --manual  # same, press Enter before each step
-python -m sim --demo --offline --speed 3   # quick rehearsal without Bonsai
+python -m sim --offline --dashboard --port 8090 --no-browser
 ```
-
-**Backup demo** (`sim/demo.py`): if a sensor or the Flipper fails on stage, stop the app and run this. It plays all 8 steps of the PLAN.md demo with realistic pauses, through the real pipeline and the real dashboard on the same port, so the page on the projector picks it up by itself.
-- **Clean start.** It uses its own `logs/demo-events.jsonl` and rules file, wiped every run.
-- **Passphrase.** It types the passphrase from settings, and never prints it.
-- **Keeps going.** If Bonsai mishears a step, it switches the mode by hand and notes it at the end.
-- **Honest log.** Events are `source: "sim"`, so say out loud that the sensors are simulated.
 
 Type a key, then Enter:
 
 | Key | Does |
 |---|---|
 | `d` | doorbell |
-| `m` | motion (one merged event) |
+| `m` | motion (one merged event). Armed: porch light, then a 15 s wait for a doorbell |
+| `w` | end that wait now: no doorbell came, so the warning goes up |
 | `t <text>` | speech, as if STT heard it. Speech that contains the passphrase disarms (it is redacted first) |
 | `1` / `2` / `3` | Home / Away / Night. Home from an armed mode asks for the passphrase |
 | `s` | status: mode, alert and the last 10 log entries |

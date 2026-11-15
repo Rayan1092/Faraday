@@ -8,10 +8,10 @@ Lines in quotes are what you say. Lines in *italics* are what you do. Keep it lo
 
 **Setup before you start**
 - Dashboard on the projector, mode HOME (green). Both lamps off.
-- Rules cleared on the dashboard, so the rule demo is fresh.
+- Rules cleared on the dashboard, so the rule is learned fresh.
 - LM Studio running the 9B and the 2B with Parallel above 1. Argmax running. Wi-Fi still on, so you can turn it off in front of them.
 - Practice the timing once. Bonsai takes a few seconds per answer. **[TBD: real timings on the Mac mini]**
-- **Hold the doorbell for 1 to 2 seconds.** A quick tap doesn't register. If it still doesn't fire, press "Ring doorbell" on the dashboard and say so.
+- **Hold the doorbell for 1 to 2 seconds.** A quick tap doesn't register.
 - Instructions cleared on the dashboard too, unless you want the courier to hear "side door" in beat 2.
 
 ---
@@ -61,10 +61,3 @@ Matches the demo script in docs/PLAN.md. If time is short, skip beats 3 and 8.
 ## 3:40 Close (20 s)
 
 "Faraday is useful, it's private, and it's safe. It answers your door, it never sends your doorstep anywhere, and the AI can't unlock your house. And it's eyes and captions at the door for people who need them. Thanks. Happy to show anything again."
-
----
-
-**If something breaks on stage**
-- **Mic or speech fails:** type the same sentence in the dashboard's text box. It sends the exact same event.
-- **Flipper fails:** run `python -m sim --dashboard` and press `d` or `m`. Say out loud that it's the simulator.
-- **Bonsai is slow or down:** keep going. The lights, photos and alarm still happen, and the fallback rules answer. Say: "That's the safety net we talked about."

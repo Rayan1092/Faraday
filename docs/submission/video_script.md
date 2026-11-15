@@ -19,11 +19,7 @@ All of it runs with the Wi-Fi off.
 
 The cut runs 1:53, which leaves a few seconds for real waiting times.
 
-**Needs on the Mac (Dell's list, being merged):**
-- **Item 5:** the final spoken lines, including the refusal in shot 7.
-- **Item 9:** the dashboard's centre camera with detection boxes and object chips, and "Recording saved" at an alarm.
-
-Until item 9 is in, film the boxes on the Controls page camera and the label on the dashboard's photo card.
+Everything shown is on main: the final spoken lines (including the refusal in shot 7), and the dashboard's centre camera with detection boxes, object chips and "Recording saved".
 
 ## Before you shoot
 
@@ -58,7 +54,7 @@ Until item 9 is in, film the boxes on the Controls page camera and the label on 
 | # | Time | On screen | Sound | Text on screen |
 |---|---|---|---|---|
 | 1 | 0:00 to 0:05 | Phone 1, the front walkway at dusk. A courier with a box walks up; the real porch lamp clicks on (motion). They press and hold the doorbell. | Doorbell. Faraday starts: "Hello. No one can come to the door right now. I can take a message or help with a delivery." (It carries on over shot 2.) | (captions only) |
-| 2 | 0:05 to 0:13 | Mac mini menu bar: Wi-Fi off, icon crossed out. Then the dashboard's OFFLINE badge. Then the whole setup: Mac mini, Flipper Zero, camera, speaker, two lamps. | The greeting finishes. Voiceover: "That's Faraday. All on this Mac mini, Wi-Fi off." | **Wi-Fi off. Nothing leaves the house.** |
+| 2 | 0:05 to 0:13 | Mac mini menu bar: Wi-Fi off, icon crossed out. Then the whole setup: Mac mini, Flipper Zero, camera, speaker, two lamps. | The greeting finishes. Voiceover: "That's Faraday. All on this Mac mini, Wi-Fi off." | **Wi-Fi off. Nothing leaves the house.** |
 | 3 | 0:13 to 0:21 | Screen recording of the dashboard: the live camera in the centre with a detection box around the courier, the object chips under it, and the label pill: **Delivery**, with its one-line reason. | Voiceover: "A detector spots who's there. Bonsai describes and judges." | **Detector → 9B describes → 2B judges** |
 | 4 | 0:21 to 0:32 | Phone 1: the courier talks to the speaker. Cut to the dashboard: the words under Heard & Said, the message under Messages. | Courier: "Hi, I've got a package for Sam." (cut) Faraday: "Thank you. I'll pass that along." "Please leave it by the side door." | **Owner's instruction, passed on.** |
 | 5 | 0:32 to 0:44 | Phone 1: someone in a dark hoodie walks up, the porch lamp comes on, they stand at the door and don't ring. (cut) The dashboard turns amber; label: **Suspicious**, "stayed at the door without ringing". | Faraday: "Please be aware this property is monitored and you are on camera." | At the cut: **17 seconds later.** Then: **No ring: warning.** |

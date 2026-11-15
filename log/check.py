@@ -1,4 +1,4 @@
-"""Quick look at an event log after a test run (for Join 1 and stage checks).
+"""Quick look at an event log after a test run.
 
     python -m log.check logs/join1-events.jsonl
     python -m log.check logs/join1-events.jsonl --last 30

@@ -1,4 +1,4 @@
-"""Bonsai benchmark: every demo moment that asks the model, N times each.
+"""Bonsai benchmark: every moment that asks the model, N times each.
 
     python -m brain.bench                    # profile from config/settings.json
     python -m brain.bench --profile mac      # the one-line switch for the 9B on the Mac mini

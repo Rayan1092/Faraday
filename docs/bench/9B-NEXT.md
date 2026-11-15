@@ -16,9 +16,9 @@ Keep whichever profile scores higher. If it's a tie, keep the faster one. Both r
 1. **Thinking a little.** Set `"reasoning_effort": "low"` in `config/settings.json`. The 9B may answer better with a short think. Keep it only if the worst time stays under about 8 s, and check it never hits `max_tokens` (that shows up as fallbacks).
 2. **More history.** The `9b` profile shows 12 recent log lines. Try 16. Bigger models use context better, but every line costs prefill time.
 3. **Greeting that uses the photo.** Add to the `9b` system prompt: "When greeting a visitor, mention one thing the camera saw." Check `doorbell_greeting` still offers a message.
-4. **Fewer code fix-ups.** Look at the `fixups` in the bench JSON. If the 9B never needs "saved the message Bonsai promised" or "corrected to away", that's a good line for the judges. Keep the fix-ups on for the demo anyway.
+4. **Fewer code fix-ups.** Look at the `fixups` in the bench JSON. If the 9B never needs "saved the message Bonsai promised" or "corrected to away", that's a good line for the judges. Keep the fix-ups on anyway.
 5. **Shorter answers.** Lower `max_tokens` from 200 to 120. Faster, as long as no case starts falling back.
-6. **Parallel.** With LM Studio Parallel at 2, run the demo with `python -m sim --demo --dashboard` and check the alarm confrontation arrives in a few seconds, even while a summary is running.
+6. **Parallel.** With LM Studio Parallel at 2, start Faraday with `integration/start_mac.sh --no-fresh`, ask "Hey Faraday, what happened while I was out?" and set off the alarm while the summary runs. The alarm line should still come within a few seconds.
 7. **Vision.** The 4B q2_0 already accepts images in LM Studio (PLAN.md Open Question 2). On the Mac:
    - Run `pip install -r requirements.txt`, so OpenCV is there and `describe_photo` shrinks photos to 640 px.
    - Try a real camera photo with the 9B and time it.
