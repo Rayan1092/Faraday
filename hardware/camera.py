@@ -174,6 +174,18 @@ class CameraFeed:
                 self._viewers -= 1
                 self._used_at = time.monotonic()
 
+    @property
+    def running(self) -> bool:
+        """The capture thread is on (the camera is open or being opened)."""
+        return self._thread is not None and self._thread.is_alive()
+
+    def frame_age(self) -> Optional[float]:
+        """Seconds since the last frame while the camera runs, else None (health)."""
+        with self._lock:
+            if self._frame is None or not self.running:
+                return None
+            return time.monotonic() - self._frame_at
+
     @contextlib.contextmanager
     def keep_open(self) -> Iterator["CameraFeed"]:
         """Keeps the camera open (alarm recording) without counting as a viewer,

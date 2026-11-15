@@ -348,7 +348,7 @@ class App:
                     log.exception("speaker failed")
                 finally:
                     self._speaking = False
-                if self.health is not None:
+                if self.health is not None:      # report() never raises
                     self.health.report("tts", ok, "a line could not be spoken (see the log)")
                 if self.voice is not None:
                     # a question opens a listening window; caused_by tells whose question

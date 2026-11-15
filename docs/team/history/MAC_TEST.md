@@ -72,4 +72,4 @@ Every other new setting already has the right default in the code. The full file
 
 20. While Faraday runs, unplug the Flipper: the console says `[health] Flipper DOWN: …`. Plug it back in: `[health] Flipper back`, and the lights work again.
 21. Quit `argmax-cli serve` (`pkill -f "argmax-cli serve"`): `[health] Argmax STT DOWN`. Run `integration/start_mac.sh` in a second Terminal tab with `FARADAY_DRY_RUN=1` to start it again: `[health] Argmax STT back`.
-22. Stop LM Studio's server: `[health] Bonsai (LM Studio) DOWN`. Faraday still answers from plain code (photos are described by the detector). Start it again: `… back`.
+22. Stop LM Studio's server: `[health] Bonsai (LM Studio) DOWN`. Faraday still answers from plain code (photos are described by the detector). Start it again: `… back`. Every DOWN/back line is also in `logs/health.log`.

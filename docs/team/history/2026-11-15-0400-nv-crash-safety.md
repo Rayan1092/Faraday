@@ -38,3 +38,18 @@ None of it crashes a thread. What was missing was saying so clearly, and tests.
 - **LM Studio dies:** DOWN, the photo falls back (detector) instead of hanging, then back and Bonsai describes again.
 
 MAC_TEST.md has an optional crash check (steps 20-22).
+
+## Review (fresh reviewer agent) and fixes
+
+- **Camera:** it was judged only while the feed ran, and `_touch()` cleared the flag, so a dead camera could print a false "back". Now it is judged by real frames (`CameraFeed.frame_age()`). A dead, idle camera is retried every 20 s, so "back" means frames came.
+- **HTTP probes:** LM Studio serves one request at a time, so a probe waiting behind a 9B call could print a false DOWN mid-demo. STT and LM Studio now get a plain TCP connect: a busy server still accepts, a crashed one refuses. This also leaves no lines in their logs. A timeout counts only after two polls in a row.
+- **Bonsai:** an ejected or crashed 9B looked fine. Now, every 30 s, LM Studio's `/api/v0/models` must show the profile's model as loaded. If that call is busy, the last answer is kept.
+- **Small ones:**
+  - `since` is the time of the change, not of the last poll.
+  - `report()` never raises (a broken console can't stop the speech worker or the health thread).
+  - Transitions are appended to `logs/health.log` and logged at INFO, so there are no duplicate console lines.
+- **Tests:**
+  - console output from start-up is cleared before the outage
+  - the Bonsai test asserts the detector fallback and a photo
+  - the test servers really stop listening (refused) and come back on the same port
+  - new `HealthUnit` tests: grace, `since`, one line per change, TCP refused/timeout, a broken check or printer, camera "back" only with frames
