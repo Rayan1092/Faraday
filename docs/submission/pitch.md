@@ -9,10 +9,10 @@ Lines in quotes are what you say. Lines in *italics* are what you do. Keep it lo
 **Setup before you start**
 - Dashboard on the projector, mode HOME (green). Both lamps off.
 - Rules cleared on the dashboard, so the rule demo is fresh.
-- LM Studio running the 9B with Parallel above 1. Argmax running. Wi-Fi still on, so you can turn it off in front of them.
+- LM Studio running the 9B and the 2B with Parallel above 1. Argmax running. Wi-Fi still on, so you can turn it off in front of them.
 - Practice the timing once. Bonsai takes a few seconds per answer. **[TBD: real timings on the Mac mini]**
 - **Hold the doorbell for 1 to 2 seconds.** A quick tap doesn't register. If it still doesn't fire, press "Ring doorbell" on the dashboard and say so.
-- **If the second wave doesn't turn everything red,** wave again within the minute. If it still doesn't, keep going and say the alarm needs a second trigger. **[TBD: NV's second-wave fix]**
+- Instructions cleared on the dashboard too, unless you want the courier to hear "side door" in beat 2.
 
 ---
 
@@ -30,7 +30,7 @@ We wanted the useful parts of a smart home guard without giving our doorstep awa
 
 ## 0:50 What it is (25 s)
 
-"Faraday is a home guard that runs fully offline. A Flipper Zero listens to cheap radio sensors, a doorbell and a motion sensor, and switches remote outlets for the lights. Bonsai, a small local model, decides what to say and do. Argmax handles speech. And everything stays on this box."
+"Faraday is a home guard that runs fully offline. A Flipper Zero listens to cheap radio sensors, a doorbell and a motion sensor, and switches remote outlets for the lights. Two small Bonsai models and Argmax do the AI: the 9B sees and talks, the 2B judges, Argmax hears and counts voices. Plain code does everything safety depends on. And everything stays on this box."
 
 **[SHOW WI-FI OFF]** *Driver turns the Wi-Fi off on the Mac mini and holds it up, or shows it on the projector.*
 
@@ -51,14 +51,16 @@ Matches the demo script in docs/PLAN.md. If time is short, skip beats 3 and 8.
 7. **Passphrase (step 7).** Speaker says the passphrase quietly into the mic, or types it in the dashboard's Home box. The dashboard turns green and the Flipper goes quiet.
    This is the key line, say it slowly: **"AI for understanding, code for safety.** The AI picks from a menu of eight actions, and none of them is disarm. Only the passphrase disarms the house, and that check is plain code. The AI never even sees the passphrase."
 8. **Summary (step 8).** Speaker: "What happened while I was out?" Faraday gives a short spoken summary, and it shows on the dashboard.
+9. **Eyes at the door (optional, if there's time; swap it for beat 8 if short).** *Driver stands at the camera.* Speaker: "Faraday, who's at the door?" Faraday: "Let me look." Then it says what it sees and whether it looks like a delivery or a visitor.
+   "For someone who can't see, that's eyes at the door. And for someone who can't hear, every word said at the door is captioned live." *Point at Heard & said, or open Controls and show Live captions.*
 
 ## 3:15 How we used Bonsai and Argmax (25 s)
 
-"Bonsai is small, so we built around that. Every event only gets a few choices. Thinking is off so it answers fast. And code checks every answer: wrong actions get dropped, and if it fails, simple rules take over. We benchmarked it: it went from 61% right on its own to 97% after tuning, and nothing unsafe ever got through. We use it where understanding matters: talking to visitors, turning your sentence into a rule, and summarizing the day. Argmax gives us speech in and out, on the same Mac, no cloud."
+"Each model does the job it's best at. **The 9B sees and talks:** it describes the photo and holds the conversation. **The 2B judges:** in about a second it labels the scene as a delivery, a visitor, suspicious or nobody, so a courier hears where to leave the box and an empty porch gets no greeting. **Argmax hears and counts voices,** and speaks, on the same Mac, no cloud. **Code guarantees safety.** Every model answer is checked, and if a model fails, simple rules take over. We benchmarked it: it went from 61% right on its own to 97% after tuning, and nothing unsafe ever got through."
 
 ## 3:40 Close (20 s)
 
-"Faraday is useful, it's private, and it's safe. It answers your door, it never sends your doorstep anywhere, and the AI can't unlock your house. Thanks. Happy to show anything again."
+"Faraday is useful, it's private, and it's safe. It answers your door, it never sends your doorstep anywhere, and the AI can't unlock your house. And it's eyes and captions at the door for people who need them. Thanks. Happy to show anything again."
 
 ---
 
