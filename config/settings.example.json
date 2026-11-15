@@ -74,7 +74,14 @@
       "kind": "argmax",
       "url": "http://127.0.0.1:50060/v1/audio/transcriptions",
       "model": "large-v3-v20240930_626MB",
-      "language": "en"
+      "language": "en",
+      "diarize": {
+        "_note": "Speaker count for visitor recordings -> speech_heard.voices. Flags unconfirmed: check `argmax-cli diarize --help` on the Mac. grace_s: how long STT may wait for it (0 = never delays the reply).",
+        "command": ["/Users/captain/clueless/vendor/argmax-oss-swift/.build/release/argmax-cli",
+                    "diarize", "--audio-path", "{wav}"],
+        "timeout_s": 20,
+        "grace_s": 0
+      }
     },
     "windows": {
       "kind": "standin"

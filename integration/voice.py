@@ -55,7 +55,7 @@ class Voice:
     def __init__(self, recorder: Any, stt: Any, submit: Callable[[Event], None],
                  out: Callable[[str], None] = print, *,
                  listen: Optional[Dict[str, Any]] = None, wake: Optional[Dict[str, Any]] = None,
-                 diarizer: Any = None):
+                 diarizer: Any = None, diarize_grace_s: float = 0.0):
         self.recorder, self.stt, self.submit, self.out = recorder, stt, submit, out
         listen = listen or {}
         self.max_s = float(listen.get("max_s", 6.0))
@@ -66,11 +66,13 @@ class Voice:
         self.wake_phrase = str(wake.get("phrase", DEFAULT_WAKE))
         self.wake_window_s = float(wake.get("window_s", WAKE_WINDOW_S))
         self.diarizer = diarizer
+        self.diarize_grace_s = diarize_grace_s     # how long STT may wait for the count
         self._lock = threading.Lock()
         # idle | wake (wake window open) | checking (wake audio being transcribed:
         # the loop waits, so the owner's request after "Hey Faraday." isn't eaten
         # by the next wake window) | visitor (a real listening window)
         self._state = "idle"
+        self._reason = ""                      # why the current visitor window was opened
         self._pending_doorbell = False
         self._doorbell_timer: Optional[threading.Timer] = None
         self._stop = threading.Event()
@@ -94,6 +96,7 @@ class Voice:
             if self._state == "wake":
                 self.recorder.cancel()     # the wake window yields to the visitor
             self._state = "visitor"
+            self._reason = reason
         threading.Thread(target=self._open_visitor, args=(reason,), daemon=True).start()
         return True
 
@@ -113,12 +116,14 @@ class Voice:
     def _visitor_done(self, wav: Optional[Path], seconds: float, spoke: bool) -> None:
         with self._lock:
             self._state = "idle"
+            reason = self._reason
         self._window_end.set()
         if not spoke or wav is None:
             self.out("  [mic] nobody spoke")
             return
         self.out(f"  [mic] heard {seconds:.1f} s of speech")
-        self._transcribe(wav, seconds)
+        # diarize visitor recordings only; the request after "Hey Faraday." is the owner
+        self._transcribe(wav, seconds, diarize=reason != "wake")
 
     def on_said(self, text: str) -> None:
         """Called after Faraday finished speaking a line."""
@@ -148,12 +153,20 @@ class Voice:
 
     # ---- STT (+ optional diarization) ----------------------------------------------
     def _transcribe(self, wav: Path, seconds: float, source: str = Source.SPEECH,
-                    text_override: Optional[str] = None) -> None:
+                    text_override: Optional[str] = None, diarize: bool = True) -> None:
         voices_thread = None
         voices: Dict[str, Any] = {}
-        if self.diarizer is not None:
-            voices_thread = threading.Thread(
-                target=lambda: voices.update(n=self.diarizer.count_voices(wav)), daemon=True)
+        if self.diarizer is not None and diarize:       # visitor recordings only
+            t0 = time.monotonic()
+
+            def run() -> None:
+                voices["n"] = self.diarizer.count_voices(wav)
+                voices["s"] = time.monotonic() - t0
+                if voices.get("late"):                   # STT went ahead without it
+                    self.out(f"  [diarize] {voices['n']} voice(s) in {voices['s']:.1f} s"
+                             f" (too late for this line; grace {self.diarize_grace_s:.1f} s)")
+
+            voices_thread = threading.Thread(target=run, name="faraday-diarize", daemon=True)
             voices_thread.start()
         text = text_override if text_override is not None else self.stt.transcribe(wav)
         if not text:
@@ -162,8 +175,12 @@ class Voice:
             return
         data: Dict[str, Any] = {"text": text, "audio_path": relative(wav), "duration_s": round(seconds, 2)}
         if voices_thread is not None:
-            voices_thread.join(0.5)        # diarization runs alongside STT; never delays the reply
-            if voices.get("n") is not None:
+            # Diarization ran alongside STT. Wait at most grace_s (0 by default), so
+            # it never holds up the reply; a late count is only printed.
+            voices_thread.join(self.diarize_grace_s)
+            if voices_thread.is_alive():
+                voices["late"] = True
+            elif voices.get("n") is not None:
                 data["voices"] = int(voices["n"])
         self.out(f"  [stt] heard {len(text.split())} word(s)"
                  + (f", {data['voices']} voice(s)" if "voices" in data else ""))
@@ -254,4 +271,4 @@ class Voice:
             return
         self.out("  [wake] owner request heard")
         self._set_idle_if("checking")
-        self._transcribe(wav, seconds, text_override=rest)
+        self._transcribe(wav, seconds, text_override=rest, diarize=False)   # the owner, not a visitor

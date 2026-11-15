@@ -72,8 +72,11 @@ def build_app(args: argparse.Namespace, settings) -> App:
         wake = dict(audio.get("wake", {}))
         if args.no_wake:
             wake["enabled"] = False
+        from hardware.diarize import Diarizer
         app.voice = Voice(Recorder.from_settings(settings, gate), SpeechToText.from_settings(settings),
-                          app.submit, listen=audio.get("listen"), wake=wake)
+                          app.submit, listen=audio.get("listen"), wake=wake,
+                          diarizer=Diarizer.from_settings(settings),
+                          diarize_grace_s=Diarizer.grace_s(settings))
     if app.board is not None:
         # Hooks for Dell's dashboard (PLAN Q26). listen_hook opens one window
         # (Listen button); talk_hook is the old Talk button, same thing now.

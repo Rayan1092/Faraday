@@ -91,6 +91,7 @@ A transcript from Argmax STT on the Mac, or from the Windows stand-in. Before an
 | `text` | string | required | not empty |
 | `audio_path` | string or null | `null` | `captures/audio/....wav` |
 | `duration_s` | number or null | `null` | length of the recording |
+| `voices` | int or null | `null` | distinct voices in the recording, from `argmax-cli diarize` run alongside STT on visitor recordings (PLAN Q28). Present only if diarization finished in time; it never delays the reply |
 
 ```json
 {
