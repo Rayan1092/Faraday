@@ -40,11 +40,12 @@ from shared import (Action, ActionType, AlertLevel, ChangedBy, Event, EventType,
 from log import EventLog
 from modes import ModeState
 from rules import InstructionStore, RuleStore, baseline_actions, lights_off_on_disarm, merge
+from rules.baseline import DOORBELL_GREETING
 from rules import instructions as owner_instructions
 
 from . import lines, look, owner, summary, threat
 from .threat import ThreatAssessor
-from .core import Brain
+from .core import Brain, _age_s
 from .settings import load_settings, passphrase
 from modes.passphrase import REDACTED
 
@@ -52,6 +53,7 @@ SNAPSHOT_REASON = "Snapshot from the dashboard"
 INSTRUCTION_REFUSED = ("I can only pass on words to visitors. "
                        "Lights, modes and the alarm stay with you.")
 CHECKING = "Let me check."
+GREET_AGAIN_S = 60  # a second doorbell press within this gets no second greeting
 MAX_DEPTH = 4  # event -> action -> follow-up event chains, so nothing can loop
 TRACE_WINDOW = 50  # log entries searched when tracing caused_by
 
@@ -209,7 +211,11 @@ class Pipeline:
 
         mode, alert = self.modes.mode, self.modes.alert
         done: List[Action] = []
+        greet = event.type == EventType.DOORBELL and self._greet_visitor(event, alert)
         for action in baseline_actions(event, mode, alert):
+            if (action.type == ActionType.SPEAK and action.args.get("text") == DOORBELL_GREETING
+                    and not greet):
+                continue   # an alert is on, or they already heard it: no friendly greeting again
             self._emit(action, result, done)
         # Passphrase disarm: the lights Faraday turned on go off (plain code, logged).
         for action in merge(done, lights_off_on_disarm(event, self.log.recent(500))):
@@ -223,12 +229,17 @@ class Pipeline:
                     and cause[2] == AlertLevel.ALARM):
                 self._confront_later(event)  # the threat label below won't repeat it
 
-        if event.type == EventType.DOORBELL and mode == Mode.AWAY and self.instructions is not None:
+        if (event.type == EventType.DOORBELL and mode == Mode.AWAY and greet
+                and self.instructions is not None):
             # Right after the fixed greeting: the owner's words for visitors ("tell them
             # I'm in the back garden"). Delivery words wait until the visitor says why.
             words = [owner_instructions.spoken_line(i) for i in self.instructions.relevant("visitor")]
-            if words:
-                self._emit(make_action(ActionType.SPEAK, {"text": " ".join(words)[:240]}, Source.BRAIN,
+            text = ""
+            for w in words:                      # whole sentences only, within the speak limit
+                if len((text + " " + w).strip()) <= 240:
+                    text = (text + " " + w).strip()
+            if text:
+                self._emit(make_action(ActionType.SPEAK, {"text": text}, Source.BRAIN,
                                        caused_by=event.id), result, done)
 
         if event.type == EventType.PHOTO_DESCRIBED:
@@ -310,6 +321,20 @@ class Pipeline:
             self._photo_cause[action.id] = (cause, self.modes.mode, self.modes.alert)
         if self.on_action:
             self.on_action(action)
+
+    def _greet_visitor(self, bell: Event, alert: str) -> bool:
+        """The friendly doorbell greeting only while the alert is normal (never next to
+        the alarm line, never to someone already labelled suspicious), and once per
+        visit: a second press within GREET_AGAIN_S gets no greeting."""
+        if alert != AlertLevel.NORMAL:
+            return False
+        for entry in self.log.recent(TRACE_WINDOW):
+            if (entry.get("kind") == "action" and entry.get("type") == ActionType.SPEAK
+                    and (entry.get("args") or {}).get("text") == DOORBELL_GREETING):
+                age = _age_s(entry.get("timestamp"), bell.timestamp)
+                if age is not None and 0 <= age <= GREET_AGAIN_S:
+                    return False
+        return True
 
     def _owner_request(self, event: Event, result: Result, done: List[Action], mode: str) -> None:
         """One owner request, one fixed intent (brain/owner.py). Plain code does it and

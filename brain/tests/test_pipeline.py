@@ -145,6 +145,18 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(p.handle(events.photo_described(photo.id)).actions, [])
         self.assertEqual(len(client.calls), calls)  # answered in code, no greeting
 
+    def test_second_press_and_alerts_get_no_friendly_greeting(self):
+        p, _, _ = self.pipeline(None, Mode.AWAY, use_client=False)
+        first = [a.args.get("text") for a in p.handle(events.doorbell()).actions]
+        again = [a.args.get("text") for a in p.handle(events.doorbell()).actions]
+        self.assertIn(DOORBELL_GREETING, first)
+        self.assertNotIn(DOORBELL_GREETING, again)              # within 60 s: once is enough
+        p, _, _ = self.pipeline(None, Mode.AWAY, use_client=False)
+        p.handle(events.motion())                                # warning
+        ring = p.handle(events.doorbell()).actions
+        self.assertNotIn(DOORBELL_GREETING, [a.args.get("text") for a in ring])
+        self.assertIn(ActionType.TAKE_PHOTO, [a.type for a in ring])   # the photo still happens
+
     def test_no_filler_anywhere(self):
         cases = [(Mode.HOME, events.speech("Turn on the porch light"), True),   # owner at home
                  (Mode.AWAY, events.speech("Package for Sam."), False),        # offline

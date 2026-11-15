@@ -222,38 +222,6 @@ class Brain:
         actions, passed = self._pass_on_delivery(actions, event, mode, allowed, ins, recent)
         if passed:
             fixups.append("corrected: passed on the owner's delivery instruction")
-        delivery_ins = next((i for i in ins if i["audience"] == oi.DELIVERY), None)
-        if label == ThreatCategory.DELIVERY and delivery_ins is not None:
-            # The owner said where deliveries go: that line, never a different spot.
-            if not any(a.type == ActionType.SPEAK and oi.mentions(a.args["text"], delivery_ins)
-                       for a in actions):
-                actions = [a for a in actions if not (a.type == ActionType.SPEAK
-                                                      and fb.mentions_dropoff(a.args["text"]))]
-                extra, _ = filter_actions([fb._speak(oi.spoken_line(delivery_ins))], event, mode, allowed)
-                actions = actions + extra
-                fixups.append("corrected: passed on the owner's delivery instruction")
-        elif label == ThreatCategory.DELIVERY and not any(
-                a.type == ActionType.SPEAK and fb.mentions_dropoff(a.args["text"]) for a in actions):
-            # A delivery always gets drop-off instructions.
-            extra, _ = filter_actions([fb._speak(fb.DELIVERY_LINE)], event, mode, allowed)
-            actions = actions + extra
-            fixups.append("added the delivery instructions")
-        elif cause == EventType.DOORBELL and label != ThreatCategory.DELIVERY and not any(
-                a.type == ActionType.SPEAK and "message" in a.args["text"].lower() for a in actions):
-            # A doorbell visitor must always be offered to leave a message.
-            extra, _ = filter_actions([fb._speak(fb.OFFER_MESSAGE)], event, mode, allowed)
-            actions = actions + extra
-            fixups.append("added the message offer")
-        greet_ins = [i for i in ins if i["audience"] != oi.DELIVERY]
-        if (event.type == EventType.PHOTO_DESCRIBED and cause == EventType.DOORBELL
-                and label != ThreatCategory.DELIVERY):
-            # The first greeting passes on the owner's words for visitors.
-            for one in greet_ins:
-                if not any(a.type == ActionType.SPEAK and oi.mentions(a.args["text"], one)
-                           for a in actions):
-                    extra, _ = filter_actions([fb._speak(oi.spoken_line(one))], event, mode, allowed)
-                    actions = actions + extra
-                    fixups.append("corrected: passed on the owner's instruction")
         return Decision(actions, "bonsai", elapsed, dropped, fixups=fixups, role=role)
 
     def instructions_for(self, event: Event, mode: str, cause: str, label: str,

@@ -108,14 +108,6 @@ def _decide(event: Any, mode: str, recent: Optional[List[dict]] = None):
     return run
 
 
-def _doorbell_photo():
-    bell = events.doorbell()
-    photo = make_action(ActionType.TAKE_PHOTO, {"reason": "doorbell while away"}, Source.RULES,
-                        caused_by=bell.id)
-    described = events.photo_described(photo.id)
-    return described, [bell.to_dict(), photo.to_dict()]
-
-
 FACTS = ["The house was armed at 15:09.", "The doorbell rang once.",
          "Motion at the door twice. The alarm went off.",
          f"The camera saw: {events.FAKE_DESCRIPTION}",
@@ -242,25 +234,6 @@ class _MemoryInstructions:
     def relevant(self, label: str = "") -> List[Dict[str, Any]]:
         want = {"delivery": ("delivery", "anyone")}.get(label, ("visitor", "anyone"))
         return [i for i in self.items if i["audience"] in want and label not in ("suspicious", "nobody")]
-
-
-def _with_instruction(said: str, description: str, label: str):
-    """A doorbell photo with its threat label, while the owner's instruction is stored."""
-    def run(brain: Brain) -> Tuple[Optional[Decision], Optional[str], float]:
-        bell = events.doorbell()
-        photo = make_action(ActionType.TAKE_PHOTO, {"reason": "doorbell while away"}, Source.RULES,
-                            caused_by=bell.id)
-        described = events.photo_described(photo.id, description)
-        tag = make_event(EventType.THREAT_ASSESSED, {"category": label, "reason": "bench"},
-                         Source.BRAIN, caused_by=described.id)
-        before = brain.instructions
-        brain.instructions = _MemoryInstructions(said)
-        try:
-            d = brain.decide(described, Mode.AWAY, [bell.to_dict(), photo.to_dict(), tag.to_dict()])
-        finally:
-            brain.instructions = before
-        return d, None, d.elapsed_s or 0.0
-    return run
 
 
 def _speech_with_instruction(said: str, heard: str):
