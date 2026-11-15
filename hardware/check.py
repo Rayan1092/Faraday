@@ -26,6 +26,9 @@ def camera(settings) -> int:
     print(f"{time.monotonic() - t0:.1f}s  source={ev.source}  photo={ev.data['photo_path'] or '(none)'}")
     print(f"description: {ev.data['description']}  (by {ev.data.get('described_by') or 'nobody'})")
     if ev.data.get("detections") is not None:
+        named = getattr(cam.detector, "named", None)
+        if named is not None:
+            print(f"detector: objects named at {named:.2f} or more (camera.detector.object_score)")
         print(f"detector: people={ev.data.get('people')} faces={ev.data.get('faces')} "
               + ", ".join(f"{d['label']} x{d['count']} {d['confidence']:.2f}" for d in ev.data["detections"]))
     if ev.data["photo_path"]:

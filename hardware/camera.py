@@ -245,9 +245,9 @@ class CameraFeed:
                     if (self.detector is not None and watched
                             and t0 - self._detect_at >= 1.0 / max(0.5, self.detect_fps)):
                         if self._filter is None:
-                            from hardware.detect import StreamFilter
-                            self._filter = StreamFilter()
-                        if t0 - self._detect_at > 2.0:
+                            from hardware.detect import NAMED, StreamFilter
+                            self._filter = StreamFilter(named=getattr(self.detector, "named", NAMED))
+                        if t0 - self._detect_at > max(2.0, 2.5 / max(0.5, self.detect_fps)):
                             self._filter.reset()       # the stream paused: old frames don't count
                         self._detect_at = t0
                         found = self.detector.detect(frame)

@@ -87,7 +87,7 @@ Facts this is built on (owner, 2026-11-14):
   },
 
   "camera": {"index": 0, "width": 1280, "height": 720, "alarm_record_s": 10,
-             "detector": {"enabled": true, "model": "hardware/models/yolox_tiny.onnx", "score": 0.35, "fps": 5}},
+             "detector": {"enabled": true, "model": "hardware/models/yolox_tiny.onnx", "score": 0.35, "object_score": 0.6, "fps": 5}},
 
   "security": {"passphrase": "YOUR PASSPHRASE HERE, plain words, no digits"},
 

@@ -260,10 +260,69 @@ class Steadiness(unittest.TestCase):
         info = det.analyse(np.zeros((480, 640, 3), np.uint8))
         self.assertEqual([d["label"] for d in info["detections"]], ["backpack", "person"])
 
+    def test_object_score_is_a_setting(self):
+        """Owner 2026-11-15: a phone at the ear scores about 0.4-0.5; the threshold
+        is camera.detector.object_score (default 0.6) to tune on the Mac."""
+        phone = Detection("cell phone", 0.45, (100, 100, 140, 180))
+        for settings, want in (({}, []), ({"camera": {"detector": {"object_score": 0.4}}}, ["cell phone"]),
+                               ({"camera": {"detector": {"object_score": "x"}}}, [])):
+            with self.subTest(settings=settings):
+                det = Detector.from_settings(settings)
+                self.assertIsNotNone(det)
+                det.objects = type("Stub", (), {"detect": lambda self, frame: [phone]})()
+                det.faces = None
+                info = det.analyse_frames([np.zeros((480, 640, 3), np.uint8)] * 5)
+                self.assertEqual([d["label"] for d in info["detections"]], want)
+        f = StreamFilter(named=0.4)
+        for _ in range(3):
+            shown = f.update([phone])
+        self.assertEqual([d.label for d in shown], ["cell phone"])
+
     def test_unknown_object_drawn_without_a_percentage(self):
         frame = np.zeros((120, 200, 3), np.uint8)
         img = draw(frame, [Detection(UNKNOWN, 0.5, (150, 40, 199, 100))])   # at the right edge
-        self.assertGreater(int(img[30:40, 120:199].max()), 0)              # label moved inside
+        self.assertTrue(img[24:40, :150].any())          # the label moved left, inside the frame
+
+    def test_one_object_seen_as_two_labels_in_a_frame_is_one_thing(self):
+        """Review of #66: "cell phone" 0.65 and "remote" 0.40 on the same phone."""
+        f = StreamFilter()
+        for _ in range(3):
+            shown = f.update([self.phone(0.65), Detection("remote", 0.40, (102, 104, 140, 184))])
+        self.assertEqual([d.label for d in shown], ["cell phone"])
+
+    def test_no_unknown_box_on_top_of_a_named_one(self):
+        bag = Detection("handbag", 0.7, (100, 100, 200, 200))
+        ghost = Detection("handbag", 0.45, (140, 110, 240, 210))          # IoU 0.37: NMS kept both
+        f = StreamFilter()
+        for _ in range(3):
+            shown = f.update([bag, ghost])
+        self.assertEqual([d.label for d in shown], ["handbag"])
+        held = Detection("cell phone", 0.45, (40, 40, 60, 80))            # at the ear: unknown
+        person = Detection("person", 0.9, (0, 0, 200, 400))
+        f = StreamFilter()
+        for _ in range(3):
+            shown = f.update([person, held])
+        self.assertEqual(sorted(d.label for d in shown), ["person", UNKNOWN])
+
+    def test_something_new_next_to_a_steady_object_does_not_take_its_box(self):
+        case = Detection("suitcase", 0.8, (300, 300, 400, 400))
+        phone = Detection("cell phone", 0.9, (330, 280, 420, 380))         # overlaps it (IoU ~0.4)
+        f = StreamFilter()
+        for _ in range(4):
+            f.update([case])
+        shown = f.update([phone, case])
+        self.assertEqual([(d.label, d.box) for d in shown], [("suitcase", case.box)])  # phone: 1 of 5
+
+    def test_a_photo_reports_only_what_is_in_the_photo(self):
+        """Review of #66: steady in the next frames but not in the photo itself."""
+        case = Detection("suitcase", 0.8, (300, 300, 400, 400))
+        det = self.stub([[], [case], [case], [case], []])
+        info = det.analyse_frames([np.zeros((480, 640, 3), np.uint8)] * 5)
+        self.assertEqual(info["detections"], [])
+        moved = case._replace(box=(310, 300, 410, 400))
+        det = self.stub([[case], [moved], [moved], [], []])
+        info = det.analyse_frames([np.zeros((480, 640, 3), np.uint8)] * 5)
+        self.assertEqual([d.box for d in info["boxes"]], [case.box])        # its box in the photo
 
     def test_live_stream_shows_unsure_steady_things_as_unknown(self):
         import shutil

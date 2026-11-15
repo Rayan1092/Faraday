@@ -21,6 +21,27 @@ New in `hardware/detect.py`:
 - **Live stream:** `StreamFilter` applies the same rules to the 5-per-second detection frames. After a pause of over 2 s the old frames don't count.
 - `python -m hardware.detect photo.jpg` also lists what wasn't reported (under 0.6).
 
+### The threshold is a setting (owner, 2026-11-15)
+
+"A phone at my ear scores about 0.4-0.5 and would show as 'unknown object'." The threshold is `camera.detector.object_score`, default 0.6. In `config/settings.json`, the detector line under `"camera"` becomes:
+
+```json
+"detector": {"enabled": true, "model": "hardware/models/yolox_tiny.onnx", "score": 0.35, "object_score": 0.6, "fps": 5},
+```
+
+Set it to 0.4 to name the phone at your ear. The object still has to be steady (3 of 5 frames at that confidence). `score` (0.35) is the lowest box the detector keeps, so an `object_score` below it does nothing. `python3 -m hardware.check camera` prints the threshold in use.
+
+### Review fixes (fresh reviewer, before merging)
+
+- One object seen as two labels in a frame ("cell phone" 0.65 and "remote" 0.40 on one phone) is one thing. The second box only votes for a label.
+- The best overlaps are matched first, so something new next to a steady object can't take its box.
+- **A photo reports only what is in the photo itself**, and steady across the frames, at its box in the photo. Before this, an object seen only in the next frames could be reported for a photo that didn't show it.
+- The live view draws no grey "unknown object" on top of a named one. It still draws one next to a person (the phone at the ear).
+- A low detection rate (`fps` 0.5) no longer clears the window before every update.
+- The label clamp test now fails without the clamp.
+
+Left for the owner (QUESTIONS 25): naming needs the same label at the threshold in 3 of the 5 frames. So a backpack at 0.62, 0.58, 0.61, 0.59, 0.57 is "unknown object". Lowering `object_score` to 0.55 would name it.
+
 ## 2. Camera framing
 
 Owner: "the Controls page crops the frame, so I go out of view when close and boxes get cut. Make sure the stream sends the full frame and boxes match (Dell fixes the page side)."

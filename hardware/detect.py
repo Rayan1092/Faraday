@@ -22,8 +22,8 @@ that wasn't there was reported). People stay sensitive: any person box at SCORE
 - steady: seen in at least 3 of the last 5 frames (the same place, any label, so
   a phone flickering between "cell phone" and "remote" is one thing), else it
   isn't shown at all;
-- named only if one label reached NAMED (0.6) in at least 3 of those frames,
-  else the live stream shows it as "unknown object".
+- named only if one label reached NAMED (0.6; setting camera.detector.object_score)
+  in at least 3 of those frames, else the live stream shows it as "unknown object".
 A photo is checked over itself plus the next 4 frames (about 0.4 s), and only
 people and named objects go on photo_described, into the vision hint and into
 the detector's own description. StreamFilter does the same for the live boxes.
@@ -68,6 +68,7 @@ PLURAL = {"person": "people", "knife": "knives", "mouse": "mice", "sheep": "shee
           "wine glass": "wine glasses", "sandwich": "sandwiches", "toothbrush": "toothbrushes"}
 CLOSE = 0.3           # a person box this tall (share of the frame) is close to the camera
 NAMED = 0.6           # an object (not a person) is named only at this confidence or more
+                      # (camera.detector.object_score; below `score` (0.35) has no effect)
 STEADY = (3, 5)       # ... and only if seen in at least 3 of the last 5 frames
 MATCH_IOU = 0.3       # the same thing in two frames: boxes overlapping at least this much
 UNKNOWN = "unknown object"
@@ -194,32 +195,51 @@ class Steady(NamedTuple):
     name: Optional[str]          # the confident label, or None ("unknown object")
     confidence: float            # the named label's best confidence (else the latest box's)
     frame: int                   # index of the frame its latest box came from
+    first: Optional[Detection]   # its box in frames[0] (the photo), or None if not seen there
+
+
+SAME_OBJECT_IOU = 0.5   # a second box this much on top of a matched one, same frame: same object
 
 
 def steady_objects(frames: Sequence[Sequence[Detection]], need: int = STEADY[0],
                    named: float = NAMED, iou: float = MATCH_IOU) -> List[Steady]:
     """Objects other than people seen in at least `need` of `frames` (oldest
     first). The same object in two frames = boxes overlapping at least `iou`,
-    whatever the label. Named only if one label reached `named` confidence in
+    whatever the label; the best overlaps are matched first, so a steady object
+    keeps its own box when something new appears next to it. A second box on an
+    object in the same frame (one phone as "cell phone" and "remote" at once)
+    only votes for a label. Named only if one label reached `named` confidence in
     at least `need` frames. People are never in the result (callers keep them)."""
     tracks: List[Dict[str, Any]] = []
     for fi, found in enumerate(frames):
-        for d in found:
-            if d.label == "person":
+        objs = [d for d in found if d.label != "person"]
+        pairs = sorted(((_iou(t["latest"].box, d.box), ti, di)
+                        for ti, t in enumerate(tracks) for di, d in enumerate(objs)), reverse=True)
+        primary: Dict[int, int] = {}                 # detection index -> track, one each
+        taken = set()
+        for overlap, ti, di in pairs:
+            if overlap < iou:
+                break
+            if ti not in taken and di not in primary:
+                primary[di] = ti
+                taken.add(ti)
+        votes: Dict[int, int] = {}                   # extra boxes on an object seen this frame
+        for di, d in enumerate(objs):                # most confident first (detect() sorts)
+            if di in primary:
                 continue
-            best, best_iou = None, iou
-            for ti, t in enumerate(tracks):
-                if t["frame"] == fi:
-                    continue                          # one box per object per frame
-                overlap = _iou(t["latest"].box, d.box)
-                if overlap >= best_iou:
-                    best, best_iou = ti, overlap
-            if best is None:
-                tracks.append({"latest": d, "frame": fi, "frames": set(), "named": {}})
-                best = len(tracks) - 1
-            t = tracks[best]
-            t["latest"], t["frame"] = d, fi
-            t["frames"].add(fi)
+            on = [(_iou(objs[dj].box, d.box), tj) for dj, tj in primary.items()]
+            best = max(on, default=(0.0, None))
+            if best[0] >= SAME_OBJECT_IOU:
+                votes[di] = best[1]
+                continue
+            tracks.append({"latest": d, "frame": -1, "frames": set(), "named": {}, "boxes": {}})
+            primary[di] = len(tracks) - 1
+        for di, ti in list(primary.items()) + list(votes.items()):
+            d, t = objs[di], tracks[ti]
+            if di in primary:
+                t["latest"], t["frame"] = d, fi
+                t["frames"].add(fi)
+                t["boxes"][fi] = d
             if d.confidence >= named:
                 hits, top = t["named"].get(d.label, (set(), 0.0))
                 hits.add(fi)
@@ -230,10 +250,11 @@ def steady_objects(frames: Sequence[Sequence[Detection]], need: int = STEADY[0],
             continue                                  # a flicker: not shown at all
         names = sorted(((len(h), top, label) for label, (h, top) in t["named"].items()
                         if len(h) >= need), reverse=True)
+        first = t["boxes"].get(0)
         if names:
-            out.append(Steady(t["latest"], names[0][2], round(names[0][1], 2), t["frame"]))
+            out.append(Steady(t["latest"], names[0][2], round(names[0][1], 2), t["frame"], first))
         else:
-            out.append(Steady(t["latest"], None, t["latest"].confidence, t["frame"]))
+            out.append(Steady(t["latest"], None, t["latest"].confidence, t["frame"], first))
     return out
 
 
@@ -254,13 +275,14 @@ class StreamFilter:
         self.frames.append(list(found))
         latest = len(self.frames) - 1
         shown = [d for d in found if d.label == "person"]
-        for s in steady_objects(list(self.frames), self.need, self.named):
-            if s.frame != latest:
-                continue                              # not in this frame: no box now
-            if s.name is None:
-                shown.append(s.detection._replace(label=UNKNOWN))
-            else:
+        now = [s for s in steady_objects(list(self.frames), self.need, self.named)
+               if s.frame == latest]                  # not in this frame: no box now
+        named_boxes = [s.detection.box for s in now if s.name]
+        for s in now:
+            if s.name is not None:
                 shown.append(s.detection._replace(label=s.name, confidence=s.confidence))
+            elif not any(_iou(s.detection.box, b) >= MATCH_IOU for b in named_boxes):
+                shown.append(s.detection._replace(label=UNKNOWN))   # (not a 2nd box on a named thing)
         return shown
 
 
@@ -337,8 +359,9 @@ class Faces:
 class Detector:
     """Objects (YOLOX, or HOG people as the fallback) plus visible faces."""
 
-    def __init__(self, objects: Any, faces: Optional[Faces] = None):
+    def __init__(self, objects: Any, faces: Optional[Faces] = None, named: float = NAMED):
         self.objects, self.faces = objects, faces
+        self.named = named                     # objects are named only at this confidence or more
         self.engine = getattr(objects, "engine", type(objects).__name__)
         self.last_ms = 0.0
         self._warned_at = 0.0
@@ -367,7 +390,12 @@ class Detector:
         except Exception as e:
             log.warning("face counter unavailable: %r", e)
             faces = None
-        return cls(objects, faces)
+        try:
+            named = min(1.0, max(0.0, float(cfg.get("object_score", NAMED))))
+        except (TypeError, ValueError):
+            log.warning("camera.detector.object_score must be a number; using %.1f", NAMED)
+            named = NAMED
+        return cls(objects, faces, named)
 
     def detect(self, frame: np.ndarray) -> Optional[List[Detection]]:
         """Detections, or None if the detector failed (never "nobody" by mistake)."""
@@ -392,9 +420,10 @@ class Detector:
                        need: int = STEADY[0]) -> Optional[Dict[str, Any]]:
         """For a photo: frames[0] is the photo, the rest the frames right after it.
         People, close people and faces come from the photo (sensitive, as before).
-        Other objects count only if steady (in at least `need` of the frames, or
-        all of them when fewer came) and confident (NAMED). Unknown objects are
-        never reported. None if the detector failed on the photo."""
+        Other objects count only if they are in the photo, steady (in at least
+        `need` of the frames, or all of them when fewer came) and confident
+        (self.named). Unknown objects are never reported. None if the detector
+        failed on the photo."""
         if not len(frames):
             return None
         first = self.detect(frames[0])
@@ -406,8 +435,10 @@ class Detector:
             if found is not None:
                 per_frame.append(found)
         people = [d for d in first if d.label == "person"]
-        objects = [s.detection._replace(label=s.name, confidence=s.confidence)
-                   for s in steady_objects(per_frame, min(need, len(per_frame))) if s.name]
+        # only what is in the photo itself (and steady across the frames), at its photo box
+        objects = [s.first._replace(label=s.name, confidence=s.confidence)
+                   for s in steady_objects(per_frame, min(need, len(per_frame)), self.named)
+                   if s.name and s.first is not None]
         out = summary(people + objects)
         h = frames[0].shape[0]
         out["close_people"] = sum(1 for d in people if (d.box[3] - d.box[1]) >= CLOSE * h)
@@ -515,9 +546,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"{path}: {det.last_ms:.0f} ms  people={info['people']}  faces={info.get('faces')}")
         for d in info["detections"]:
             print(f"   {d['label']:<14} x{d['count']}  {d['confidence']:.2f}")
-        dropped = [d for d in raw if d.label != "person" and d.confidence < NAMED]
+        dropped = [d for d in raw if d.label != "person" and d.confidence < det.named]
         if dropped:
-            print("   not reported (under %.1f): %s" % (NAMED, ", ".join(
+            print("   not reported (under %.2f, camera.detector.object_score): %s" % (det.named, ", ".join(
                 f"{d.label} {d.confidence:.2f}" for d in dropped)))
         print(f"   says: {describe_from(info)}")
     return 0
