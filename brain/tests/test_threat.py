@@ -320,15 +320,14 @@ class PipelineEffects(unittest.TestCase):
         self.assertEqual((label.data["category"], label.data["via"]), (C.VISITOR, "bonsai"))
         self.assertEqual([a for a in result.actions if a.type == ActionType.SPEAK], [])   # no second greeting
 
-    def test_suspicious_escalates_and_confronts_early(self):
+    def test_suspicious_escalates_and_says_nothing_about_the_person(self):
         p = self.pipeline(Mode.AWAY, brain_reply={"role": "assistant", "content": "Step away from the door."})
         result = self.doorbell_photo(p, MASK)
         p.wait_background(5)
         self.assertEqual(p.modes.alert, AlertLevel.WARNING)
         self.assertIn("alert_changed", [e.type for e in result.events])
-        said = [a.args.get("text") for a in self.emitted if a.type == ActionType.SPEAK]
-        self.assertIn("Step away from the door.", said)                # the early confrontation
-        self.assertNotIn("Would you like to leave a message?", said)  # no friendly greeting
+        said = [a.args.get("text") for a in result.actions if a.type == ActionType.SPEAK]
+        self.assertEqual(said, [])                                     # owner, Mac test: no description spoken
 
     def test_nobody_says_nothing(self):
         p = self.pipeline(Mode.AWAY)

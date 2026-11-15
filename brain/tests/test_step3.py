@@ -1,4 +1,4 @@
-"""Step 3 through the whole pipeline: rules by voice, summary, alarm confrontation,
+"""Step 3 through the whole pipeline: rules by voice, summary, the fixed alarm line,
 and what a visitor may ask for."""
 import tempfile
 import threading
@@ -130,7 +130,7 @@ class Step3(unittest.TestCase):
         self.assertEqual(texts[1:], [CHECKING, "A visitor rang once and someone moved at the door."])
         self.assertEqual(client.calls, 1)  # the summary only; "what happened" is spotted in code
 
-    # ---- alarm confrontation -------------------------------------------------
+    # ---- the alarm: one fixed line, nothing about the person (owner, Mac test) ----
 
     def _to_alarm(self, p):
         p.handle(events.motion())
@@ -140,66 +140,22 @@ class Step3(unittest.TestCase):
         actions = p.handle(events.motion()).actions
         return next(a for a in actions if a.type == ActionType.TAKE_PHOTO), actions
 
-    def test_confrontation_is_background_and_after_plain_code(self):
-        client = SlowClient("You in the dark jacket, step away from the door.", delay=5)
-        p = self.pipeline(client, Mode.AWAY)
-        photo, actions = self._to_alarm(p)
-        self.assertEqual(p.modes.alert, AlertLevel.ALARM)
-        self.assertIn(ALARM_LINE, [a.args.get("text") for a in actions])       # plain code first
-        started = time.perf_counter()
-        result = p.handle(events.photo_described(photo.id, "A man in a dark jacket."))
-        self.assertLess(time.perf_counter() - started, 1.0)                     # didn't wait
-        self.assertEqual(result.actions, [])
-        client.release.set()
-        p.wait_background(5)
-        last = self.emitted[-1]
-        self.assertEqual(last.args["text"], "You in the dark jacket, step away from the door.")
-        self.assertEqual(last.source, Source.BRAIN)
-        self.assertEqual(p.log.recent(1)[0]["args"]["text"], last.args["text"])
-
-    def test_confrontation_only_at_alarm(self):
-        # (mode, reach alarm?, expected Bonsai confrontation calls)
-        for mode, alarm, calls in ((Mode.AWAY, False, 0), (Mode.NIGHT, False, 0),
-                                   (Mode.AWAY, True, 1), (Mode.NIGHT, True, 1)):
-            client = SlowClient("Step away from the door.", delay=0)
-            p = self.pipeline(client, mode)
-            if alarm:
-                photo, _ = self._to_alarm(p)
-            else:
-                p.handle(events.motion())
-                self.clock.t += 15
-                photo = next(a for a in p.tick().actions if a.type == ActionType.TAKE_PHOTO)
-            p.handle(events.photo_described(photo.id))
-            p.wait_background(5)
-            self.assertEqual(client.calls, calls, (mode, alarm))
-            said = [a.args.get("text") for a in self.emitted]
-            self.assertEqual("Step away from the door." in said, bool(calls), (mode, alarm))
-
-    def test_late_confrontation_after_disarm_is_dropped(self):
-        client = SlowClient("Step back, stranger in the jacket.", delay=5)
-        p = self.pipeline(client, Mode.AWAY)
-        photo, _ = self._to_alarm(p)
-        p.handle(events.photo_described(photo.id))
-        p.owner_passphrase(PASSPHRASE)          # owner disarms while Bonsai thinks
-        before = len(self.emitted)
-        client.release.set()
-        p.wait_background(5)
-        self.assertEqual(client.calls, 1)
-        self.assertEqual(len(self.emitted), before)
-        self.assertNotIn("Step back", p.log.path.read_text(encoding="utf-8"))
-
-    def test_confrontation_failure_uses_the_code_line(self):
-        """Mac test: a Night alarm said nothing when Bonsai's line was unusable. Now the
-        alarm line is spoken by code at once, and code's own line replaces Bonsai's."""
+    def test_the_alarm_says_only_the_fixed_line(self):
+        """Owner, Mac test: the alarm said "Leave now with your black hooded jacket and bag"
+        and there was no bag. Now the fixed line is the only thing said, in both modes,
+        and Bonsai is never asked about the photo."""
         for mode in (Mode.AWAY, Mode.NIGHT):
-            p = self.pipeline(SlowClient("", delay=0), mode)
+            client = SlowClient("Leave now with your black hooded jacket and bag.", delay=0)
+            p = self.pipeline(client, mode)
             photo, actions = self._to_alarm(p)
-            self.assertIn(ALARM_LINE, [a.args.get("text") for a in actions])
+            self.assertEqual(p.modes.alert, AlertLevel.ALARM)
+            self.assertEqual([a.args.get("text") for a in actions if a.type == ActionType.SPEAK], [ALARM_LINE])
             before = len(self.emitted)
-            p.handle(events.photo_described(photo.id, "A man in a dark jacket by the window."))
+            p.handle(events.photo_described(photo.id, "A man in a black hooded jacket with a bag."))
             p.wait_background(5)
-            new = [a.args.get("text") for a in self.emitted[before:]]
-            self.assertEqual(new, ["I can see a man in a dark jacket by the window. Please leave now."], mode)
+            self.assertEqual([a for a in self.emitted[before:] if a.type == ActionType.SPEAK], [], mode)
+            self.assertEqual(client.calls, 0, mode)
+            self.assertNotIn("Alarm.", ALARM_LINE)                 # never says "Alarm" to the person
 
     def test_no_code_line_when_the_camera_failed(self):
         p = self.pipeline(SlowClient("", delay=0), Mode.AWAY)

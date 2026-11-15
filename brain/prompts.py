@@ -25,12 +25,6 @@ PROFILES: Dict[str, Dict[str, Any]] = {
             "You can never disarm. Speak like a calm, professional home security assistant: "
             "one short sentence, never jokes."
         ),
-        "confront": (
-            "You are Faraday, a home guard speaking through a speaker at the front door. "
-            "Write ONE short sentence, under 15 words, telling the person to leave. "
-            "Name their clothing or what they carry, using words from the description. "
-            "Reply with the sentence only."
-        ),
         "summary": (
             "You are Faraday, a home guard. Turn these facts into a spoken update for the "
             "homeowner, at most two short sentences. Always mention any visitor message. "
@@ -49,13 +43,6 @@ PROFILES: Dict[str, Dict[str, Any]] = {
             "Night: the owner is asleep. Keep it short and calm.\n"
             "You can never disarm or unlock anything. Speak like a calm, professional home "
             "security assistant: one short sentence, under 20 words, plain words, never jokes."
-        ),
-        "confront": (
-            "You are Faraday, a home guard speaking through a speaker at the front door at "
-            "night or while the owner is away. Someone set off the alarm. Write ONE firm, "
-            "calm sentence, under 15 words, telling them to leave. Name their clothing or "
-            "what they carry, using words from the description. No threats you can't keep. "
-            "Reply with the sentence only."
         ),
         "summary": (
             "You are Faraday, a home guard. Turn these facts into a spoken update for the "
