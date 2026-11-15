@@ -351,9 +351,14 @@ class App:
                 if self.health is not None:      # report() never raises
                     self.health.report("tts", ok, "a line could not be spoken (see the log)")
                 if self.voice is not None:
-                    # a question opens a listening window; caused_by tells whose question
+                    # a question opens a listening window; caused_by tells whose question,
+                    # and Dell's `listen` marker ("owner"/"visitor", PLAN Q44) says it outright
+                    marker = action.args.get("listen")
                     try:
-                        self.voice.on_said(text, caused_by=self._request_behind(action))
+                        if marker:
+                            self.voice.on_said(text, caused_by=self._request_behind(action), listen=marker)
+                        else:
+                            self.voice.on_said(text, caused_by=self._request_behind(action))
                     except Exception:
                         log.exception("voice.on_said failed")
             finally:

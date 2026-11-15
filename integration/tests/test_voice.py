@@ -510,6 +510,157 @@ class Wake(Base):
         self.assertFalse(v.recorder.window_open)
 
 
+class Visit(Base):
+    """Owner 2026-11-15 (Mac test): after a ring the doorbell window timed out, and the
+    visitor's "I have a package, where should I leave it?" went to the owner channel
+    ("The system is armed"). While armed, speech within the visit is the visitor's."""
+
+    def visit(self, stt, mode="away", **listen):
+        self.mode = mode
+        rules = {"max_s": 15, "silence_s": 1.8, "no_speech_s": 1.0, "after_speech_s": 0.3, **listen}
+        v = self.voice(stt, listen=rules, mode=lambda: self.mode)
+        v.start_wake()
+        v.on_doorbell()
+        v.on_said("Hello. No one can come to the door right now.")       # the greeting
+        self.assertTrue(wait_until(lambda: any("nobody spoke" in s for s in self.said), timeout=10))
+        return v
+
+    def test_speech_after_the_doorbell_window_closed_is_the_visitors(self):
+        v = self.visit(FakeSTT("I have a package, where should I leave it?"))
+        self.say(("speech", 1.2), ("quiet", 2.5))
+        ev = self.events()[0]
+        self.assertEqual((ev.data["text"], ev.data["channel"]),
+                         ("I have a package, where should I leave it?", "visitor"))
+        self.assertEqual(v.wake_ignored, 0)
+
+    def test_the_visitor_s_pause_does_not_split_the_sentence(self):
+        self.visit(FakeSTT("Hi, I have a package for Sam."))
+        self.say(("speech", 0.8), ("quiet", 1.0), ("speech", 0.8), ("quiet", 3.0))   # a 1 s pause
+        ev = self.events()[0]
+        self.assertGreater(ev.data["duration_s"], 0.8 + 1.0 + 0.8)
+        time.sleep(0.5)
+        self.assertEqual(len(self.got), 1)
+
+    def test_away_hey_faraday_then_the_words_are_still_the_visitors(self):
+        """What the owner did at the Mac: "Hey Faraday" ... "I have a package"."""
+        v = self.visit(FakeSTT("Hey Faraday.", "I have a package, where should I leave it?"))
+        self.say(("speech", 0.8), ("quiet", 2.5))
+        self.assertTrue(wait_until(lambda: any("still listening for the visitor" in s for s in self.said),
+                                   timeout=10))
+        self.say(("speech", 1.2), ("quiet", 2.5))
+        ev = self.events()[0]
+        self.assertEqual(ev.data["channel"], "visitor")
+        self.assertEqual(self.chimes, [])
+        v.on_said("Hey Faraday, I have a package.")                   # (nothing else opens)
+
+    def test_away_hey_faraday_with_words_drops_the_phrase(self):
+        self.visit(FakeSTT("Hey Faraday, where do I leave the box?"))
+        self.say(("speech", 1.5), ("quiet", 2.5))
+        ev = self.events()[0]
+        self.assertEqual((ev.data["text"], ev.data["channel"]), ("where do I leave the box?", "visitor"))
+
+    def test_night_hey_faraday_is_still_the_owner(self):
+        """At Night the owner is home: "Hey Faraday, who's at the door?" must stay theirs."""
+        self.visit(FakeSTT("Hey Faraday, who's at the door?"), mode="night")
+        self.say(("speech", 1.5), ("quiet", 2.5))
+        ev = self.events()[0]
+        self.assertEqual((ev.data["text"], ev.data["channel"]), ("who's at the door?", "owner"))
+
+    def test_night_plain_speech_is_the_visitors(self):
+        self.visit(FakeSTT("Hello? Anyone home?"), mode="night")
+        self.say(("speech", 1.2), ("quiet", 2.5))
+        self.assertEqual(self.events()[0].data["channel"], "visitor")
+
+    def test_at_home_nothing_changes(self):
+        v = self.visit(FakeSTT("Honey, can you get the door?"), mode="home")
+        self.say(("speech", 1.2), ("quiet", 2.5))
+        self.assertTrue(wait_until(lambda: v.wake_ignored == 1, timeout=10))
+        time.sleep(0.3)
+        self.assertEqual(self.got, [])
+
+    def test_after_the_visit_speech_needs_the_wake_phrase_again(self):
+        v = self.visit(FakeSTT("Just talking to myself."), visitor_s=1.0)
+        time.sleep(4.0)              # the visit is over (by a margin: the fake mic runs at 4x, and
+        #                              a segment's start is taken as its end minus its audio length)
+        self.say(("speech", 1.2), ("quiet", 2.5))
+        self.assertTrue(wait_until(lambda: v.wake_ignored == 1, timeout=10))
+        time.sleep(0.3)
+        self.assertEqual(self.got, [])
+
+    def test_disarmed_during_the_visit_ends_it(self):
+        v = self.visit(FakeSTT("Welcome home, me."))
+        self.mode = "home"
+        self.say(("speech", 1.2), ("quiet", 2.5))
+        self.assertTrue(wait_until(lambda: v.wake_ignored == 1, timeout=10))
+        self.assertEqual(self.got, [])
+
+    def test_the_visitor_s_words_extend_the_visit(self):
+        v = self.visit(FakeSTT("I have a package."), visitor_s=5.0)
+        before = v._visit_until
+        time.sleep(0.5)
+        self.say(("speech", 1.2), ("quiet", 2.5))
+        self.events()
+        self.assertGreater(v._visit_until, before)
+
+
+class IntercomAndQuestions(Base):
+    def test_intercom_reply_window_closes_fast_if_nobody_answers(self):
+        """Owner, Mac test: the reply window caught the owner talking to someone else
+        8 s later, and Bonsai answered it."""
+        v = self.voice(FakeSTT("should not be heard"),
+                       listen={"max_s": 15, "silence_s": 1.8, "no_speech_s": 8.0, "after_speech_s": 0.3,
+                               "intercom_reply_s": 2.0})
+        t0 = time.monotonic()
+        v.on_intercom_end()
+        self.assertTrue(wait_until(lambda: any("nobody spoke" in s for s in self.said), timeout=10))
+        self.assertLess(time.monotonic() - t0, 3.0)                     # 2 s of audio at 4x, not 8
+        self.assertTrue(any("if they start within 2 s" in s for s in self.said))
+        self.say(("speech", 1.0), ("quiet", 2.5))                       # too late: not a reply
+        time.sleep(1.0)
+        self.assertEqual(self.got, [])
+
+    def test_please_say_it_again_opens_an_owner_window(self):
+        """Owner, Mac test: "Sorry, I missed the end of that. Please say it again." needed
+        "Hey Faraday" again."""
+        stt = FakeSTT("Hey Faraday, if a delivery comes tell him", "Leave it by the side door.")
+        v = self.voice(stt)
+        v.start_wake()
+        self.say(("speech", 1.2), ("quiet", 1.5))
+        owner = self.events()[0]
+        v.on_said("Sorry, I missed the end of that. Please say it again.", caused_by=owner.id)
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        self.assertTrue(any("listening (question, owner)" in s for s in self.said))
+        self.say(("speech", 1.0), ("quiet", 2.5))
+        ev = self.events(2)[1]
+        self.assertEqual((ev.data["text"], ev.data["channel"]), ("Leave it by the side door.", "owner"))
+
+    def test_dells_owner_marker_opens_an_owner_window(self):
+        """PLAN Q44: speak args listen "owner": whatever the line, the owner may answer
+        without the wake phrase, even right after a ring."""
+        v = self.voice(FakeSTT("Yes, talk to them."))
+        v.on_doorbell()
+        v.on_said("Someone is at the door. Shall I talk to them.", caused_by="evt_doorbell1", listen="owner")
+        self.assertFalse(v._pending_doorbell)
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        self.say(("speech", 1.0), ("quiet", 2.5))
+        self.assertEqual(self.events()[0].data["channel"], "owner")
+
+    def test_visitor_marker_opens_a_visitor_window(self):
+        v = self.voice(FakeSTT("Sure."))
+        v.on_said("Please leave your message after the chime.", listen="visitor")
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        self.say(("speech", 1.0), ("quiet", 2.5))
+        self.assertEqual(self.events()[0].data["channel"], "visitor")
+
+    def test_statements_still_open_nothing(self):
+        v = self.voice(FakeSTT())
+        for line in ("Understood. I've removed the delivery instruction.", "Away mode is on. I'll keep watch.",
+                     "Thank you, I'll pass that along."):
+            v.on_said(line, caused_by="evt_x")
+        time.sleep(0.5)
+        self.assertEqual(v.windows_opened, 0)
+
+
 class Hooks(unittest.TestCase):
     """control_hook wiring through the App, on the fake Flipper."""
 
@@ -577,6 +728,23 @@ class Hooks(unittest.TestCase):
         self.app._on_action(Action("speak", "brain", {"text": "Away mode on."}, caused_by=ask.id))
         self.assertTrue(wait_until(lambda: len(got) == 2))
         self.assertEqual(got, [ask.id, ask.id])
+
+    def test_the_listen_marker_reaches_the_voice(self):
+        """PLAN Q44: Dell's speak args `listen` is passed on; without it, the old call."""
+        from shared import Action
+        got = []
+
+        class Voice:
+            def on_said(self, text, caused_by=None, **kw):
+                got.append(kw.get("listen"))
+
+            def stop(self):
+                pass
+        self.app.voice = Voice()
+        self.app._on_action(Action("speak", "brain", {"text": "Say it again.", "listen": "owner"}))
+        self.app._on_action(Action("speak", "brain", {"text": "Away mode on."}))
+        self.assertTrue(wait_until(lambda: len(got) == 2))
+        self.assertEqual(got, ["owner", None])
 
     def test_on_said_failing_does_not_stop_the_speech_worker(self):
         class Broken:
