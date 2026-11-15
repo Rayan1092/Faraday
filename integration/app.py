@@ -81,6 +81,7 @@ class App:
         self._rec_thread: Optional[threading.Thread] = None
         self._started = False
         self.voice: Any = None                     # integration.voice.Voice, set by __main__
+        self.health: Any = None                    # integration.health.Health, set by __main__
         self.extras: List[Any] = []                # things with stop(): controls server, camera feed
         self.flipper.on_event = self.submit
         self.pipeline = pipeline or Pipeline.from_settings(
@@ -110,6 +111,8 @@ class App:
             t.start()
             self._threads.append(t)
         self.flipper.start()
+        if self.health is not None:
+            self.health.start()
         if self.lights_off_at_start:
             self._all_lights_off()
         if self.board is not None:
@@ -128,6 +131,8 @@ class App:
             t.join(5)
         self._threads = []
         self.pipeline.wait_background(5)
+        if self.health is not None:
+            self.health.stop()
         self._rec_stop.set()                       # finish an alarm recording cleanly
         if self._rec_thread is not None:
             self._rec_thread.join(5)
@@ -336,12 +341,15 @@ class App:
                     continue
                 text = str(action.args.get("text", ""))
                 self._speaking = True
+                ok = False
                 try:
-                    self.speaker.say(text)
+                    ok = self.speaker.say(text) is not False
                 except Exception:
                     log.exception("speaker failed")
                 finally:
                     self._speaking = False
+                if self.health is not None:      # report() never raises
+                    self.health.report("tts", ok, "a line could not be spoken (see the log)")
                 if self.voice is not None:
                     # a question opens a listening window; caused_by tells whose question
                     try:
