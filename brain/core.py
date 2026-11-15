@@ -124,7 +124,7 @@ class Brain:
     def decide(self, event: Any, mode: str, recent: Iterable[Any] = (),
                before_model: Optional[Callable[[Event, str], None]] = None) -> Decision:
         """before_model(event, mode) runs just before a Bonsai call, and only if one
-        will really be made. The pipeline uses it to say "One moment" right away."""
+        will really be made. (The "One moment" filler that used it is gone: owner, Mac test.)"""
         if isinstance(event, dict):
             event = Event.from_dict(event)
         if mode not in Mode.ALL:
@@ -154,14 +154,11 @@ class Brain:
                     {"type": ActionType.SUMMARIZE_LOG, "args": {"minutes": 1440}}])
         if event.type == EventType.MODE_CHANGED:
             return self._code(event, mode, allowed, _mode_reply(event))
-        if event.type == EventType.PHOTO_DESCRIBED and label in (ThreatCategory.SUSPICIOUS,
-                                                                  ThreatCategory.NOBODY):
-            # Nobody there: nothing to say. Suspicious: the confrontation line speaks.
-            return Decision([], "code")
-        if event.type == EventType.PHOTO_DESCRIBED and (cause == EventType.MOTION
-                                                         or mode == Mode.NIGHT):
-            # Motion lines come from the baseline (and the alarm confrontation from
-            # confront()); a night doorbell stays quiet. Nothing for the model to add.
+        if event.type == EventType.PHOTO_DESCRIBED:
+            # A photo is never answered by the model (owner, Mac test): the doorbell
+            # greeting is fixed and spoken by code at the ring, motion lines come from
+            # the baseline, the alarm line from confront(). Bonsai only replies to
+            # what a visitor says.
             return Decision([], "code")
 
         if not allowed:
@@ -225,38 +222,6 @@ class Brain:
         actions, passed = self._pass_on_delivery(actions, event, mode, allowed, ins, recent)
         if passed:
             fixups.append("corrected: passed on the owner's delivery instruction")
-        delivery_ins = next((i for i in ins if i["audience"] == oi.DELIVERY), None)
-        if label == ThreatCategory.DELIVERY and delivery_ins is not None:
-            # The owner said where deliveries go: that line, never a different spot.
-            if not any(a.type == ActionType.SPEAK and oi.mentions(a.args["text"], delivery_ins)
-                       for a in actions):
-                actions = [a for a in actions if not (a.type == ActionType.SPEAK
-                                                      and fb.mentions_dropoff(a.args["text"]))]
-                extra, _ = filter_actions([fb._speak(oi.spoken_line(delivery_ins))], event, mode, allowed)
-                actions = actions + extra
-                fixups.append("corrected: passed on the owner's delivery instruction")
-        elif label == ThreatCategory.DELIVERY and not any(
-                a.type == ActionType.SPEAK and fb.mentions_dropoff(a.args["text"]) for a in actions):
-            # A delivery always gets drop-off instructions.
-            extra, _ = filter_actions([fb._speak(fb.DELIVERY_LINE)], event, mode, allowed)
-            actions = actions + extra
-            fixups.append("added the delivery instructions")
-        elif cause == EventType.DOORBELL and label != ThreatCategory.DELIVERY and not any(
-                a.type == ActionType.SPEAK and "message" in a.args["text"].lower() for a in actions):
-            # A doorbell visitor must always be offered to leave a message.
-            extra, _ = filter_actions([fb._speak(fb.OFFER_MESSAGE)], event, mode, allowed)
-            actions = actions + extra
-            fixups.append("added the message offer")
-        greet_ins = [i for i in ins if i["audience"] != oi.DELIVERY]
-        if (event.type == EventType.PHOTO_DESCRIBED and cause == EventType.DOORBELL
-                and label != ThreatCategory.DELIVERY):
-            # The first greeting passes on the owner's words for visitors.
-            for one in greet_ins:
-                if not any(a.type == ActionType.SPEAK and oi.mentions(a.args["text"], one)
-                           for a in actions):
-                    extra, _ = filter_actions([fb._speak(oi.spoken_line(one))], event, mode, allowed)
-                    actions = actions + extra
-                    fixups.append("corrected: passed on the owner's instruction")
         return Decision(actions, "bonsai", elapsed, dropped, fixups=fixups, role=role)
 
     def instructions_for(self, event: Event, mode: str, cause: str, label: str,
@@ -293,7 +258,8 @@ class Brain:
             return actions, False
         if any(a.type == ActionType.SPEAK and oi.mentions(a.args["text"], delivery_ins) for a in actions):
             return actions, False
-        if any(oi.mentions(line, delivery_ins) for line in _said_since(recent, event.timestamp, VISIT_S)):
+        spoken = oi.spoken_line(delivery_ins).lower()   # the line to visitors, not the owner's confirmation
+        if any(spoken in line.lower() for line in _said_since(recent, event.timestamp, VISIT_S)):
             return actions, False     # already said in this visit: once is enough
         # Drop a conflicting drop-off spot (never the message confirmation), then the owner's words.
         actions = [a for a in actions if not (a.type == ActionType.SPEAK

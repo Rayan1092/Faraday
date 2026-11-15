@@ -137,7 +137,7 @@ class ThreatAssessedData:
 
 @dataclass
 class RecordingSavedData:
-    """About 10 s of camera frames saved when the alarm went off (PLAN Q32).
+    """About 10 s of camera frames saved when the alarm went off (PLAN Q33).
     Written straight to the log by integration/ (not run through the brain)."""
     path: str                           # "captures/alarm-20261115-013000/", repo-relative folder
     frames: int                         # JPEG frames saved (frame-0001.jpg, ...)

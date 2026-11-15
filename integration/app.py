@@ -72,6 +72,7 @@ class App:
         self._outlet_state: Dict[str, str] = {}   # outlet -> last command sent OK (on/off)
         self._sent_lock = threading.Lock()
         self._speaking = False                     # a line is being spoken right now
+        self._spoken_photos = 0                    # "who's at the door?" photos in progress
         self.lights_off_at_start = lights_off_at_start
         self.video: Any = None                     # hardware.camera.CameraFeed: alarm recording
         self.alarm_record_s = float(settings.get("camera", {}).get("alarm_record_s", 10))
@@ -144,12 +145,14 @@ class App:
         """Faraday may still say something: an event is being handled (the 9B may
         be writing the greeting), lines are queued, or one is being spoken. The
         voice opens a listening window only when this is False (owner 2026-11-14:
-        it opened while Faraday was still talking). A photo in progress counts:
-        its description is spoken (who's at the door)."""
+        it opened while Faraday was still talking). Only a "who's at the door?"
+        photo (take_photo from the dashboard) counts: its answer is spoken. A
+        doorbell photo isn't talked about (Dell PR "doorbell flow", PLAN Q32), so
+        it doesn't hold the visitor's window."""
         # unfinished_tasks counts items queued *or still being worked on* (task_done
         # comes after), so there is no gap between get() and the busy flag
         return (self._speaking or self.events.unfinished_tasks > 0
-                or self._speech.unfinished_tasks > 0 or self._photos.unfinished_tasks > 0)
+                or self._speech.unfinished_tasks > 0 or self._spoken_photos > 0)
 
     def _all_lights_off(self) -> None:
         """Every start: make the real lamps match the dashboard (owner 2026-11-14).
@@ -266,6 +269,9 @@ class App:
         elif action.type == ActionType.SPEAK:
             self._speech.put(action)
         elif action.type == ActionType.TAKE_PHOTO:
+            if action.source == Source.DASHBOARD:
+                with self._sent_lock:
+                    self._spoken_photos += 1       # its answer will be spoken
             self._photos.put(action)
 
     def _check_send(self, fut, action: Action) -> None:
@@ -346,6 +352,9 @@ class App:
             except Exception:
                 log.exception("camera failed")
             finally:
+                if action is not None and action.source == Source.DASHBOARD:
+                    with self._sent_lock:
+                        self._spoken_photos -= 1
                 self._photos.task_done()
 
 

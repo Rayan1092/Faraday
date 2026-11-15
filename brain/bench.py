@@ -108,14 +108,6 @@ def _decide(event: Any, mode: str, recent: Optional[List[dict]] = None):
     return run
 
 
-def _doorbell_photo():
-    bell = events.doorbell()
-    photo = make_action(ActionType.TAKE_PHOTO, {"reason": "doorbell while away"}, Source.RULES,
-                        caused_by=bell.id)
-    described = events.photo_described(photo.id)
-    return described, [bell.to_dict(), photo.to_dict()]
-
-
 FACTS = ["The house was armed at 15:09.", "The doorbell rang once.",
          "Motion at the door twice. The alarm went off.",
          f"The camera saw: {events.FAKE_DESCRIPTION}",
@@ -146,7 +138,8 @@ def _summary_ok(text: Optional[str]) -> bool:
 
 
 def cases() -> List[Case]:
-    photo, photo_recent = _doorbell_photo()
+    # The doorbell greeting and photo replies are plain code now (owner, Mac test): no
+    # Bonsai case for them. The owner's words for visitors follow the greeting (tests).
     return [
         Case("heading_out", 'Owner at home: "Faraday, I\'m heading out."', Mode.HOME,
              _decide(events.speech("Faraday, I'm heading out."), Mode.HOME),
@@ -158,8 +151,6 @@ def cases() -> List[Case]:
              _decide(events.speech("Turn on the porch light."), Mode.HOME),
              _has(ActionType.OUTLET_ON, outlet="porch_light"),
              _has(ActionType.OUTLET_ON, outlet="porch_light")),
-        Case("doorbell_greeting", "Away: photo after a doorbell (greet, offer a message)", Mode.AWAY,
-             _decide(photo, Mode.AWAY, photo_recent), _speaks, _offers_message),
         Case("visitor_message", 'Away, visitor: "Package for Sam, I left it by the side door."',
              Mode.AWAY,
              _decide(events.speech("Package for Sam, I left it by the side door."), Mode.AWAY),
@@ -219,14 +210,6 @@ def cases() -> List[Case]:
                      Mode.AWAY, "motion", 0, "nobody"),
         Case("summary", "Owner: summary of the log (free text)", Mode.HOME,
              _free_text(lambda b: b.summarize(FACTS)), _summary_ok, _summary_ok),
-        Case("i_delivery", 'Instruction, away delivery: owner said "ask them to leave it by the side door"',
-             Mode.AWAY, _with_instruction("If a delivery comes, ask them to leave it by the side door.",
-                                          BOX_TEXT, "delivery"),
-             _says("side door"), _says("side door")),
-        Case("i_visitor", 'Instruction, away doorbell: owner said "tell them I\'m in the back garden"',
-             Mode.AWAY, _with_instruction("If someone comes, tell them I'm in the back garden.",
-                                          "A woman in a red coat waving at the camera.", "visitor"),
-             _says("garden"), _says("garden")),
         Case("i_speech_delivery", 'Instruction, away visitor: "Hi, I have a package for Sam." '
              '(owner: "ask them to leave it by the side door")', Mode.AWAY,
              _speech_with_instruction("If a delivery comes, ask them to leave it by the side door.",
@@ -251,25 +234,6 @@ class _MemoryInstructions:
     def relevant(self, label: str = "") -> List[Dict[str, Any]]:
         want = {"delivery": ("delivery", "anyone")}.get(label, ("visitor", "anyone"))
         return [i for i in self.items if i["audience"] in want and label not in ("suspicious", "nobody")]
-
-
-def _with_instruction(said: str, description: str, label: str):
-    """A doorbell photo with its threat label, while the owner's instruction is stored."""
-    def run(brain: Brain) -> Tuple[Optional[Decision], Optional[str], float]:
-        bell = events.doorbell()
-        photo = make_action(ActionType.TAKE_PHOTO, {"reason": "doorbell while away"}, Source.RULES,
-                            caused_by=bell.id)
-        described = events.photo_described(photo.id, description)
-        tag = make_event(EventType.THREAT_ASSESSED, {"category": label, "reason": "bench"},
-                         Source.BRAIN, caused_by=described.id)
-        before = brain.instructions
-        brain.instructions = _MemoryInstructions(said)
-        try:
-            d = brain.decide(described, Mode.AWAY, [bell.to_dict(), photo.to_dict(), tag.to_dict()])
-        finally:
-            brain.instructions = before
-        return d, None, d.elapsed_s or 0.0
-    return run
 
 
 def _speech_with_instruction(said: str, heard: str):

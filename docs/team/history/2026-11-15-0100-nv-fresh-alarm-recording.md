@@ -12,7 +12,7 @@ Owner items 7 and 8. Built on Windows with the fake Flipper and a fake camera; t
 ## Item 8
 
 - **On `alert_changed` → `alarm`:** `CameraFeed.record(10 s)` saves every frame (about 10 per second) to `captures/alarm-<time>/frame-0001.jpg …`, plus `clip.avi` (MJPG, written here by OpenCV: 16 KB for 11 test frames). Only one recording runs at a time. The setting is `camera.alarm_record_s`, default 10.
-- **When it ends:** `integration/` writes a new **`recording_saved`** event straight to the log (`shared/events.py` `RecordingSavedData`: path, frames, duration_s, video_path, reason; source camera; caused_by the alert). It doesn't go through the pipeline, so the brain isn't asked about it. The console prints "Recording saved: …". Dell shows it (PLAN Q32, FORMATS.md).
+- **When it ends:** `integration/` writes a new **`recording_saved`** event straight to the log (`shared/events.py` `RecordingSavedData`: path, frames, duration_s, video_path, reason; source camera; caused_by the alert). It doesn't go through the pipeline, so the brain isn't asked about it. The console prints "Recording saved: …". Dell shows it (PLAN Q33, FORMATS.md).
 - With the stand-in camera (no webcam) nothing is recorded.
 
 ## Settings (Mac `config/settings.json`)

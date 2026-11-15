@@ -216,7 +216,7 @@ Sent by `brain/` right after a `photo_described`. It says what the scene at the 
 
 ### recording_saved
 
-About 10 s of camera frames saved when the alert reaches `alarm` (`camera.alarm_record_s`). `integration/` writes it straight to the log after the recording ends; it doesn't go through the pipeline, so nothing decides anything on it. The dashboard shows it as "Recording saved" (PLAN Q32). `caused_by` is the `alert_changed` event.
+About 10 s of camera frames saved when the alert reaches `alarm` (`camera.alarm_record_s`). `integration/` writes it straight to the log after the recording ends; it doesn't go through the pipeline, so nothing decides anything on it. The dashboard shows it as "Recording saved" (PLAN Q33). `caused_by` is the `alert_changed` event.
 
 | data key | type | default | notes |
 |---|---|---|---|

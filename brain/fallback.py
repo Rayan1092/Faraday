@@ -12,8 +12,6 @@ from shared import ActionType, Event, EventType, Mode
 
 RawItem = Dict[str, Any]
 
-GREETING_ARMED = "Hello. Nobody can come to the door right now. Would you like to leave a message?"
-GREETING_HOME = "Hello. Someone will be with you shortly. Would you like to leave a message?"
 CANT_DISARM = "I can't disarm. Only the owner can do that."
 MESSAGE_SAVED = "Thank you. I saved your message."
 DELIVERY_LINE = "Please leave the package by the front door. Thank you!"
@@ -47,12 +45,7 @@ def fallback(event: Event, mode: str, photo_cause: str = "", label: str = "",
     delivery_line / also_say: the owner's instructions as spoken lines (rules/instructions.py).
     """
     if event.type == EventType.PHOTO_DESCRIBED:
-        if photo_cause == EventType.MOTION or mode == Mode.NIGHT or label in ("suspicious", "nobody"):
-            return []  # motion lines are spoken by the baseline; night stays quiet
-        if label == "delivery":
-            return [_speak("Hello! " + (delivery_line or DELIVERY_LINE))]
-        greeting = GREETING_ARMED if mode in Mode.ARMED else GREETING_HOME
-        return [_speak(" ".join([greeting, *also_say])[:240])]
+        return []  # photos are never answered: the doorbell greeting is spoken at the ring
     if event.type == EventType.SPEECH_HEARD:
         return _speech(str(event.data.get("text", "")), mode)
     return []
