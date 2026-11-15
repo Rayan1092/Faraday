@@ -23,10 +23,11 @@ class SimDemo(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "events.jsonl"
             brain = Brain(None, SECRET, log=lambda _m: None)
-            pipeline = Pipeline(brain, ModeState(SECRET), EventLog(path, SECRET), say=lambda _m: None)
+            pipeline = Pipeline(brain, ModeState(SECRET, min_gap_s=0), EventLog(path, SECRET),
+                                say=lambda _m: None)   # min_gap 0: the script's motions come fast
             sim = Sim(pipeline)
             script = ["t Faraday, I'm heading out.", "d", "t Package for Sam, by the side door.",
-                      "3", "m", "m", "t Faraday, disarm", "1 wrong words",
+                      "3", "m", "w", "m", "t Faraday, disarm", "1 wrong words",
                       "t Silver, otter lantern!", "t What happened while I was out?", "s", "x"]
             with redirect_stdout(io.StringIO()) as out:
                 pipeline.start()

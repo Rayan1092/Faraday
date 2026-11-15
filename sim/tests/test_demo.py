@@ -24,11 +24,16 @@ class BackupDemo(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         d = Path(tmp.name)
         brain = Brain(None, SECRET, log=lambda _m: None)
-        pipeline = Pipeline(brain, ModeState(SECRET), EventLog(d / "e.jsonl", SECRET),
+        clock = [1000.0]
+        pipeline = Pipeline(brain, ModeState(SECRET, clock=lambda: clock[0]), EventLog(d / "e.jsonl", SECRET),
                             say=lambda _m: None, rules=RuleStore(d / "r.json"))
         sim = Sim(pipeline)
         slept, prompts = [], []
-        runner = DemoRunner(sim, secret, speed=2, manual=manual, sleep=slept.append,
+
+        def sleep(s):                      # no real waiting, but modes/ sees the time pass
+            slept.append(s)
+            clock[0] += s
+        runner = DemoRunner(sim, secret, speed=2, manual=manual, sleep=sleep,
                             wait_enter=lambda p: prompts.append(p) or "", say=lambda _m: None)
         with redirect_stdout(io.StringIO()) as out:
             pipeline.start()
@@ -45,7 +50,11 @@ class BackupDemo(unittest.TestCase):
         self.assertIn("add_rule", types)
         self.assertIn("summarize_log", types)
         self.assertEqual([e["data"]["level"] for e in log if e["type"] == "alert_changed"],
-                         ["warning", "alarm", "normal"])
+                         ["warning", "alarm", "normal"])     # the walk-up visitor (step 2) never warned
+        bell = next(i for i, e in enumerate(log) if e["type"] == "doorbell")
+        self.assertEqual(log[bell - 2]["type"], "motion")       # walked up, then rang
+        self.assertIn("Hello. No one can come to the door right now.",
+                      " ".join(str((e.get("args") or {}).get("text", "")) for e in log[bell:bell + 3]))
         lamp = [e for e in log if e["type"] == "outlet_on" and e["args"]["outlet"] == "living_room_lamp"]
         self.assertTrue(lamp)
         self.assertNotIn("otter", out.lower())               # passphrase never printed
