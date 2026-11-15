@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-from shared import Action, ActionType, ChangedBy, Event, EventType, Mode, ThreatCategory
+from shared import Action, ActionType, ChangedBy, Event, EventType, Mode, SpeechChannel, ThreatCategory
 
 from . import fallback as fb
 from .bonsai import BonsaiClient, BonsaiError
@@ -67,17 +67,35 @@ class Brain:
                       use_llm: bool = True, log: Callable[[str], None] = print) -> "Brain":
         settings = settings or load_settings()
         cfg = llm_config(settings)
-        client = BonsaiClient.from_config(cfg) if use_llm else None
+        client = BonsaiClient.from_config(cfg, log) if use_llm else None
         brain = cls(client, passphrase(settings), cfg["recent_log_lines"], log)
         brain.use_prompts(pick_profile(cfg["model"], settings.get("llm", {}).get("prompt_profile")))
         brain.smart_model = cfg["model"]
         fast = cfg.get("fast_model")
         if use_llm and fast and fast != cfg["model"]:
-            brain.fast_client = BonsaiClient.from_config({**cfg, "model": fast})
+            brain.fast_client = BonsaiClient.from_config({**cfg, "model": fast}, log)
             brain.fast_model = fast
         else:
             brain.fast_client, brain.fast_model = client, cfg["model"]
         return brain
+
+    def warm_up(self, *others: Any) -> None:
+        """Start each Bonsai client's thinking probe in the background (brain/bonsai.py)."""
+        seen = set()
+        for client in (self.client, self.fast_client) + others:
+            if client is not None and id(client) not in seen and hasattr(client, "warm_up"):
+                seen.add(id(client))
+                client.warm_up()
+
+    def thinking_report(self, *others: Any) -> List[Dict[str, Any]]:
+        """For the bench: per client, the model, chat or raw, and thinking seen."""
+        out, seen = [], set()
+        for client in (self.client, self.fast_client) + others:
+            if client is not None and id(client) not in seen and hasattr(client, "probe_result"):
+                seen.add(id(client))
+                out.append({"model": client.model, "no_think": client.no_think, "uses": client.mode,
+                            "probe": client.probe_result, "thinking_seen": client.thinking_seen})
+        return out
 
     # ---- right-sized models ------------------------------------------------
     # fast (Bonsai 2B on the Mac): quick owner commands at home, and the threat label
@@ -88,7 +106,8 @@ class Brain:
         """'fast' for quick owner commands at home, 'smart' for anything a visitor hears."""
         if self.force_role:
             return self.force_role
-        if event.type == EventType.SPEECH_HEARD and mode == Mode.HOME:
+        if (event.type == EventType.SPEECH_HEARD and mode == Mode.HOME
+                and event.data.get("channel") != SpeechChannel.VISITOR):
             return "fast"
         return "smart"
 
@@ -109,7 +128,13 @@ class Brain:
             event = Event.from_dict(event)
         if mode not in Mode.ALL:
             mode = Mode.AWAY  # unknown mode: behave as armed, the safe side
-        allowed = allowed_actions(event.type, mode)
+        tool_mode = mode
+        channel = event.data.get("channel") if event.type == EventType.SPEECH_HEARD else None
+        if channel == SpeechChannel.VISITOR:
+            tool_mode = Mode.AWAY   # a visitor gets the visitor tools in any mode: talk, message
+        allowed = allowed_actions(event.type, tool_mode)
+        if channel == SpeechChannel.OWNER and ActionType.SAVE_MESSAGE in allowed:
+            allowed.remove(ActionType.SAVE_MESSAGE)   # owner speech is never a visitor message
         recent = list(recent)
         cause = photo_cause(event, recent)
         label = threat_label(event, recent)
@@ -143,7 +168,7 @@ class Brain:
         role = self.role_for(event, mode)
         client = self.fast_client if role == "fast" else self.client
         if client is None:
-            return self._fallback(event, mode, allowed, None, "no model configured", cause=cause,
+            return self._fallback(event, tool_mode, allowed, None, "no model configured", cause=cause,
                                   label=label, ins=ins)
         system = self.prompts["system"] if role == "smart" else PROFILES[
             pick_profile(self.fast_model or "")]["system"]
@@ -156,18 +181,20 @@ class Brain:
                 self.log(f"[brain] before_model hook failed: {e!r}")
         started = time.perf_counter()
         try:
-            reply = client.chat(messages, tools_for(event.type, mode))
+            reply = client.chat(messages, [t for t in tools_for(event.type, tool_mode)
+                                           if t["function"]["name"] in allowed
+                                           or t["function"]["name"] in ("arm_away", "arm_night")])
             elapsed = time.perf_counter() - started
             items = parse_reply(reply)
         except (BonsaiError, GarbageReply) as e:
             elapsed = time.perf_counter() - started
             self.log(f"[brain] Bonsai call failed after {elapsed:.2f}s: {e}")
-            return self._fallback(event, mode, allowed, elapsed, str(e), cause=cause, label=label,
+            return self._fallback(event, tool_mode, allowed, elapsed, str(e), cause=cause, label=label,
                                   ins=ins)
         except Exception as e:  # never let the demo stall on a surprise
             elapsed = time.perf_counter() - started
             self.log(f"[brain] Bonsai call crashed after {elapsed:.2f}s: {e!r}")
-            return self._fallback(event, mode, allowed, elapsed, repr(e), cause=cause, label=label,
+            return self._fallback(event, tool_mode, allowed, elapsed, repr(e), cause=cause, label=label,
                                   ins=ins)
 
         actions, dropped = filter_actions(items, event, mode, allowed)
@@ -176,7 +203,7 @@ class Brain:
         for item, why in dropped:
             self.log(f"[brain]   dropped {_short(item)}: {why}")
         if not actions:
-            return self._fallback(event, mode, allowed, elapsed,
+            return self._fallback(event, tool_mode, allowed, elapsed,
                                   "no usable actions from Bonsai", dropped, cause, label, ins)
         # Plain-code fix-ups on top of the model's answer. Each one is recorded, so the
         # benchmark can tell "Bonsai got it right" from "code fixed it".
@@ -276,6 +303,8 @@ class Brain:
                ins: Iterable[Dict[str, Any]] = ()) -> str:
         recent = list(recent)
         lines = [f"Mode: {mode}" + (" (armed)" if mode in Mode.ARMED else "")]
+        if event.type == EventType.SPEECH_HEARD and event.data.get("channel") == SpeechChannel.VISITOR:
+            lines.append("A visitor is talking at the door, not the owner.")
         history = [line for line in (_log_line(e) for e in list(recent)[-self.recent_lines:]) if line]
         if history:
             lines.append("Recent:")
@@ -304,6 +333,10 @@ class Brain:
         also = [oi.spoken_line(i) for i in ins if i["audience"] != oi.DELIVERY]
         actions, dropped = filter_actions(fb.fallback(event, mode, cause, label, delivery, also),
                                           event, mode, allowed)
+        if not any(a.type == ActionType.SAVE_MESSAGE for a in actions):
+            # never "I'll pass that along" when nothing was saved (owner speech, say)
+            actions = [a for a in actions if not (a.type == ActionType.SPEAK
+                                                  and a.args["text"] == fb.MESSAGE_SAVED)]
         actions = self._confirm_mode(actions, event, mode, allowed)
         self.log(f"[brain] using rule-based fallback ({error})")
         return Decision(actions, "fallback", elapsed, (model_dropped or []) + dropped, error)
