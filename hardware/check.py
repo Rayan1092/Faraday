@@ -1,7 +1,7 @@
 """One-at-a-time hardware checks (real devices!). Run when you're at the hardware.
 
     python -m hardware.check camera            # snapshot -> captures/photos + Bonsai description
-    python -m hardware.check vision [photo]    # Bonsai vision only, on the newest photo; says why it fails
+    python -m hardware.check vision [photo]    # every no-think strategy, 9B + 4B, timed; Dell's brain on 9B/2B
     python -m hardware.check say "Hello"       # speaker: TTS for this OS
     python -m hardware.check record 4          # mic: 4 s -> captures/audio/*.wav -> STT (if any)
     python -m hardware.check mute              # mic stays deaf while Faraday talks
@@ -49,52 +49,165 @@ def _model_info(base_url: str, model: str) -> str:
             f"arch={me.get('arch')} quant={me.get('quantization')}. Loaded: {', '.join(loaded) or 'nothing'}")
 
 
+def _downloaded(base_url: str) -> list:
+    import requests
+    try:
+        return [m.get("id") for m in requests.get(base_url + "/v1/models", timeout=5).json().get("data", [])]
+    except Exception:
+        return []
+
+
 def vision(settings, photo=None) -> int:
+    """Every no-think strategy on the vision model (and the 4B if downloaded), timed,
+    on the newest photo. Picks the vision model's first working strategy (the 4B
+    instead only if the 9B misses the 5 s target and the 4B makes it) and saves it;
+    then Dell's brain client on the 9B and 2B (does its no-think probe work here?)."""
     from pathlib import Path
     from hardware.settings import REPO_ROOT
-    from hardware.vision import Vision
+    from hardware.vision import (FIX_HINT, PROMPT, STRATEGIES, Vision, _save_cache, encode_image,
+                                 test_image)
     v = Vision.from_settings(settings)
-    print(f"profile={settings['llm'].get('profile')} model={v.model}")
-    print(f"POST {v.url}  timeout={v.timeout_s:.0f}s  max_tokens={v.max_tokens}  "
-          f"reasoning_effort={v.reasoning_effort}")
-    print(f"LM Studio: {_model_info(v.base_url, v.model)}")
+    llm = settings["llm"]
+    prof = llm.get("profiles", {}).get(llm.get("profile"), {})
+    print(f"profile={llm.get('profile')} vision model={v.model}  POST {v.url}")
+    print(f"timeout={v.timeout_s:.0f}s  max_tokens={v.max_tokens}  reasoning_effort={v.reasoning_effort}")
+    if v.max_tokens > 200:
+        print(f'WARNING: llm.vision_max_tokens is {v.max_tokens}. Set "vision_max_tokens": 120, in '
+              "config/settings.json: more tokens only let the model think longer.")
+    models = [v.model]
+    four_b = "ternary-bonsai-2-4b-mlx"
+    if four_b != v.model and four_b in _downloaded(v.base_url):
+        models.append(four_b)                       # the owner: measure the 4B too
+    for m in models:
+        print(f"LM Studio {m}: {_model_info(v.base_url, m)}")
     if photo:
         path = Path(photo)
     else:
         photos = sorted((REPO_ROOT / settings.get("paths", {}).get("captures", "captures") / "photos")
                         .glob("*.jpg"), key=lambda p: p.stat().st_mtime)
-        if not photos:
-            print("no photo in captures/photos: run  python -m hardware.check camera  first")
-            return 1
-        path = photos[-1]
-    print(f"photo: {path} (sent as JPEG, long side shrunk to 512 px, base64 data URL)")
-    warm = v.warm_up()
-    print(f"warm-up (tiny image, loads the vision part): {warm} s" if warm is not None
-          else "warm-up FAILED (see the warning above)")
-    hint_line = None
+        path = photos[-1] if photos else None
+    b64 = encode_image(path) if path else test_image()
+    print(f"photo: {path or 'a small test image (no photo in captures/photos yet)'}")
+    prompt = PROMPT
     try:
         import cv2
         from hardware.detect import Detector, hint
         det = Detector.from_settings(settings)
-        frame = cv2.imread(str(path))
+        frame = cv2.imread(str(path)) if path else None
         if det is not None and frame is not None:
             info = det.analyse(frame)
-            if info is None:
-                print(f"detector ({det.engine}) FAILED on this photo (see the warning above)")
-            else:
+            if info is not None:
                 print(f"detector ({det.engine}, {det.last_ms:.0f} ms): {hint(info)}")
-                hint_line = hint(info) if info["detections"] else None
+                if info["detections"]:
+                    prompt += f" Hint: {hint(info)}"
     except Exception as e:
         print(f"detector unavailable: {e!r}")
-    text = v.describe(path, hint=hint_line)
-    last = v.last
-    print(f"{last.get('elapsed_s')}s  HTTP {last.get('status', '-')}  image {last.get('image_kb', '?')} KB  "
-          f"finish_reason={last.get('finish_reason')}  reasoning={last.get('reasoning_chars', 0)} chars  "
-          f"attempts={last.get('attempts')}  max_tokens={last.get('max_tokens')}")
-    if "content" in last:
-        print(f"raw answer: {last['content']!r}")
-    print(f"description: {text}" if text else f"FAILED: {last.get('error')}")
-    return 0 if text else 1
+    print()
+    print(f"{'model':28} {'strategy':9} {'time':>6}  {'result':9} answer")
+    picks = {}                                       # model -> (strategy, seconds)
+    seen = []                                        # every reply, for the verdict
+    for m in models:
+        try:                                         # load it first: no row's time includes loading
+            Vision(v.base_url, m, 120.0, v.reasoning_effort, 1, use_cache=False)._ask(
+                b64, prompt, "prefill", 120.0)
+        except Exception:
+            pass                                     # the rows show the error
+        vm = Vision(v.base_url, m, v.timeout_s, v.reasoning_effort, v.max_tokens, use_cache=False)
+        rows = []
+        for s in STRATEGIES:
+            try:
+                r = vm._ask(b64, prompt, s, v.timeout_s)
+            except Exception as e:
+                print(f"{m:28} {s:9} {'-':>6}  ERROR     {e!r}"[:200])
+                continue
+            ok = bool(r["answer"]) and not r["thinks"]
+            result = ("ok" if ok else "thinks+ok" if r["answer"] else "THINKS" if r["thinks"]
+                      else "TOO LONG" if r.get("too_long") else "empty")
+            shown = r["answer"] or f"(finish={r['finish']}, reasoning={r['reasoning_chars']} chars)"
+            print(f"{m:28} {s:9} {r['seconds']:5.1f}s  {result:9} {shown}"[:240])
+            rows.append(r)
+            seen.append(r)
+        clean = [r for r in rows if r["answer"] and not r["thinks"]]
+        answered = [r for r in rows if r["answer"]]
+        if clean or answered:                        # the app's order; else the fastest that answered
+            r = clean[0] if clean else min(answered, key=lambda x: x["seconds"])
+            picks[m] = (r["strategy"], r["seconds"])
+    print()
+    choice = pick_model(picks, v.model)
+    long_only = bool(seen) and all(r.get("too_long") and not r.get("thinks") for r in seen)
+    if choice is None and long_only:
+        print("The model doesn't think, but every answer ran past the token cap with no whole "
+              "sentence. Try \"vision_max_tokens\": 160 under \"llm\", then run this again.")
+        code = 1
+    elif choice is None:
+        print("NO strategy stops the thinking on this server. Photos will be described by the "
+              f"object detector until it's fixed: {FIX_HINT}. Then run this again.")
+        code = 1
+    else:
+        s, secs = picks[choice]
+        print(f"USE: {choice} with '{s}' ({secs:.1f} s, {'under' if secs < 5 else 'OVER'} the 5 s target).")
+        if choice != v.model:
+            print(f'  In config/settings.json under "llm" add:  "vision_model": "{choice}",')
+            print("  (start_mac.sh then loads it next to the 9B and the 2B)")
+        for m, (s2, _secs) in picks.items():
+            _save_cache(f"{v.base_url}|{m}", s2)     # the app skips the probe from its next start
+        print("  Saved: the app uses it from its next start (cache/vision_mode.json).")
+        code = 0
+    print()
+    _brain_check(settings, prof)
+    return code
+
+
+def pick_model(picks, preferred, target_s: float = 5.0):
+    """picks = {model: (strategy, seconds)} of the models that work. The preferred
+    (vision) model stays unless it misses the target and another makes it; a model
+    is recommended over it only then, or when it doesn't work at all."""
+    fast = [m for m in picks if picks[m][1] < target_s]
+    if preferred in picks and (picks[preferred][1] < target_s or not fast):
+        return preferred
+    if fast:
+        return fast[0]
+    return min(picks, key=lambda m: picks[m][1], default=None)
+
+
+def _brain_check(settings, prof) -> None:
+    """Dell's brain client (brain/bonsai.py, #42) on the 9B and 2B, built the way
+    the app builds it: its probe says whether the model thinks, then one real call
+    through whatever it picked. OK = an answer with no thinking."""
+    import time
+    from hardware.vision import FIX_HINT
+    try:
+        from brain.bonsai import BonsaiClient
+        from brain.settings import llm_config
+        cfg = llm_config(settings)
+    except Exception as e:
+        print(f"brain check skipped: {e!r}")
+        return
+    for m in dict.fromkeys([cfg.get("model"), cfg.get("fast_model")]):
+        if not m:
+            continue
+        notes = []
+        c = BonsaiClient.from_config(dict(cfg, model=m), notes.append)
+        t0 = time.perf_counter()
+        try:
+            mode = c.probe()
+            msg = c.chat([{"role": "user", "content": "Say OK."}])
+        except Exception as e:
+            print(f"brain {m}: FAILED {e!r}")
+            continue
+        took = time.perf_counter() - t0
+        reply = str(msg.get("content") or "").strip()
+        endpoint, chars = c.last.get("endpoint"), c.last.get("thought_chars", 0) or 0
+        if reply and not chars and endpoint == "raw":
+            verdict = "OK: thinks by default; Dell's no-think prompt (/v1/completions) stops it"
+        elif reply and not chars:
+            verdict = "OK: no thinking (chat)"
+        else:
+            verdict = (f"PROBLEM: it thinks ({chars} chars via {endpoint}, probe said {mode}). "
+                       f"Fix for the brain and vision at once: {FIX_HINT}")
+        print(f"brain {m}: {verdict}. {took:.1f} s, reply {reply[:30]!r}")
+        for n in notes:
+            print(f"    {n}")
 
 
 def say(settings, text: str) -> int:

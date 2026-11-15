@@ -438,7 +438,7 @@ class Pipeline:
         text = str(event.data.get("text", ""))
         if REDACTED in text:
             return   # the passphrase: modes/ has already disarmed (or refused); nothing to add
-        route = self.router.route(text)
+        route = self.router.route(text, extract=mode not in Mode.ARMED)
 
         def say(text: str) -> None:
             self._emit(make_action(ActionType.SPEAK, {"text": text}, Source.BRAIN,
@@ -477,7 +477,8 @@ class Pipeline:
                 act(ActionType.OUTLET_ON if on else ActionType.OUTLET_OFF, {"outlet": outlet})
             say(" ".join(lines.light_line(outlet, on) for outlet, on in route.lights))
         elif intent == owner.ADD_INSTRUCTION:
-            if self.instructions is None or not self._owner_instruction(event, result, done):
+            if self.instructions is None or not self._owner_instruction(event, result, done,
+                                                                        route.instruction):
                 say(lines.REPEAT)
         elif intent == owner.ADD_RULE:
             rule = route.rule or self._rule_from_model(event)
@@ -510,11 +511,13 @@ class Pipeline:
         rule = next((a for a in decision.actions if a.type == ActionType.ADD_RULE), None)
         return dict(rule.args) if rule else None
 
-    def _owner_instruction(self, event: Event, result: Result, done: List[Action]) -> bool:
+    def _owner_instruction(self, event: Event, result: Result, done: List[Action],
+                           parsed: Optional[Dict[str, str]] = None) -> bool:
         """'If a delivery comes, ask them to leave it by the side door.' At Home only (the
-        owner is talking). Stores it and confirms; refuses anything beyond words."""
+        owner is talking). Stores it and confirms; refuses anything beyond words. `parsed`:
+        what the router read (keywords, or the 2B checked by code)."""
         text = str(event.data.get("text", ""))
-        parsed = owner_instructions.parse_instruction(text)
+        parsed = parsed or owner_instructions.parse_instruction(text)
         if parsed is not None:
             ins = self.instructions.add(parsed, said=text, caused_by=event.id)
             line = owner_instructions.confirmation(ins) if ins else INSTRUCTION_REFUSED

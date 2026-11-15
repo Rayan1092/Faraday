@@ -375,11 +375,29 @@ OWNER_CASES = [
     ("o_weather", "What's the weather like tomorrow?", owner.UNCLEAR, False),
 ]
 
+# Owner, second Mac test: instructions in any phrasing. (name, text, audience, words in the request)
+INSTRUCTION_CASES = [
+    ("o_ins_want", "If a delivery comes, I want you to tell him to leave the package by the side door.",
+     "delivery", ["side door"]),
+    ("o_ins_could", "Could you tell any couriers to leave parcels behind the gate?", "delivery", ["behind the gate"]),
+    ("o_ins_friend", "When my friend Alex comes by, let him know I'm at the gym.", "visitor", ["gym"]),
+    ("o_ins_drivers", "Please ask delivery drivers to ring twice.", "delivery", ["ring twice"]),
+    ("o_ins_anyone", "If anyone comes while I'm out, tell them I'll be back at six.", "anyone", ["back at six"]),
+    ("o_ins_should", "When the Amazon guy shows up, he should put the box in the garage.", "delivery", ["garage"]),
+    ("o_ins_free", "For any parcels today, have them dropped behind the side gate.", "delivery", ["side gate"]),
+]
+
 
 def owner_cases() -> List[Case]:
-    return [Case(name, f'Owner: "Hey Faraday, {text}" -> {want}' + (" (ask to repeat)" if cut else ""),
-                 Mode.HOME, _route(text), _intent(want, cut), _intent(want, cut))
-            for name, text, want, cut in OWNER_CASES]
+    out = [Case(name, f'Owner: "Hey Faraday, {text}" -> {want}' + (" (ask to repeat)" if cut else ""),
+                Mode.HOME, _route(text), _intent(want, cut), _intent(want, cut))
+           for name, text, want, cut in OWNER_CASES]
+    for name, text, audience, words in INSTRUCTION_CASES:
+        case = Case(name, f'Owner instruction: "Hey Faraday, {text}" -> {audience}: {", ".join(words)}',
+                    Mode.HOME, _route(text), _intent(owner.ADD_INSTRUCTION), _intent(owner.ADD_INSTRUCTION))
+        case.want_instruction = (audience, words)  # type: ignore[attr-defined]
+        out.append(case)
+    return out
 
 
 def run_bench(brain: Brain, runs: int, only: Optional[List[str]] = None,
@@ -405,6 +423,13 @@ def run_bench(brain: Brain, runs: int, only: Optional[List[str]] = None,
                 cut_ok = cut is None or r.cut_off == cut
                 model_ok = r.via == "bonsai" and case.model_check(r.model_intent) and cut_ok
                 final_ok = case.final_check(r.intent) and cut_ok
+                want_ins = getattr(case, "want_instruction", None)
+                if want_ins:             # the stored instruction itself must be right
+                    ins = r.instruction or {}
+                    req = str(ins.get("request", ""))
+                    final_ok = final_ok and ins.get("audience") == want_ins[0] and all(
+                        w in req.lower() for w in want_ins[1]) and not re.match(     # well shaped (review)
+                        r"(tell|ask|let|have)\b", req, re.I) and not re.search(r"\b(if|when)\b", req, re.I)
                 unsafe, fallback = False, r.model_intent is None
                 sample = f"{r.intent} (2B: {r.model_intent})" + (" cut off" if r.cut_off else "")
                 dropped = [r.note] if r.note else []

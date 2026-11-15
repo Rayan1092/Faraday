@@ -46,7 +46,10 @@ _WHO = {
 _ARRIVE = (r"(?:comes?|came|arrives?|shows? up|turns? up|rings?|knocks?|visits?|drops? (?:by|off)"
            r"|is (?:here|at the door)|stops? by)")
 _WAKE = r"^(?:(?:hey|ok|okay|hi)\s+)?(?:faraday[\s,.!:]*)?"
-_ASK = r"(?:please\s+)?(?P<verb>ask|tell|let(?=\s+\w+\s+know\b))\s+"
+# "I want you to tell him...", "can you ask them...", "please tell...": a lead-in before the verb.
+_LEAD = (r"(?P<lead>(?:i\s+(?:want|need|would\s+like)\s+you\s+to|i'?d\s+like\s+you\s+to"
+         r"|(?:can|could|would|will)\s+you(?:\s+please)?|make\s+sure\s+(?:you|to))\s+)?")
+_ASK = _LEAD + r"(?:please\s+)?(?P<verb>ask|tell|let(?=\s+\w+\s+know\b))\s+"
 
 
 def _who_group() -> str:
@@ -76,7 +79,8 @@ _DIRECT_FORM = re.compile(
 # Never: instructions only shape speech.
 _FORBIDDEN = re.compile(
     r"\b(?:disarm\w*|arm|alarm|siren|unlock\w*|lock|locks|open\s+the\s+(?:door|gate|garage)"
-    r"|let\s+(?:them|him|her)\s+in|come\s+in(?:side)?|code|passphrase|password|pin"
+    r"|let\s+\w+\s+in(?:side|to)?|come\s+(?:on\s+)?in(?:side|to)?|inside|indoors|open\s+(?:up|it|the\s+\w+)"
+    r"|keys?|code|passphrase|password|pin"
     r"|lights?|lamps?|outlets?|switch\w*|turn\s+(?:on|off)|power|mode|security|camera|wi-?fi)\b", re.I)
 
 _FORGET = re.compile(r"\b(?:forget|cancel|delete|remove|clear|drop)\b.*\binstructions?\b", re.I)
@@ -85,21 +89,81 @@ _FORGET = re.compile(r"\b(?:forget|cancel|delete|remove|clear|drop)\b.*\binstruc
 def parse_instruction(text: str) -> Optional[Dict[str, str]]:
     """{"audience", "verb", "form", "request"} if this is an owner instruction, else None.
     form is "to" ("ask them to leave it...") or "say" ("tell them I'm in the garden")."""
-    text = text.strip().rstrip(".!")
+    text = text.strip().rstrip(".!?")
     for pattern, prefix in ((_IF_FORM, ""), (_IF_DO_FORM, "i_"), (_DIRECT_FORM, "d_")):
         m = pattern.match(text)
         if not m:
             continue
         audience = next(a for a in AUDIENCES if m.group(prefix + a))
-        req = m.group("req").strip().rstrip(".!,")
+        req = m.group("req").strip().rstrip(".!,?")
         req = re.sub(r"^please\s+", "", req, flags=re.I)
         groups = m.groupdict()
         verb = (groups.get("verb") or "ask").lower()
         form = "to" if (groups.get("to") or "").lower().startswith("to") or verb == "ask" else "say"
-        if not 2 < len(req) <= MAX_REQUEST or _CUT.search(req):
+        if not 2 < len(req) <= MAX_REQUEST or _CUT.search(req) or _NOT_A_REQUEST.match(req):
+            return None
+        if groups.get("lead") and not groups.get("to"):
+            # "Can you tell a delivery came?" is a question, not an instruction (review):
+            # after a lead-in, the request must start with "to" or "that".
             return None
         return {"audience": audience, "verb": verb, "form": form, "request": req}
     return None
+
+
+# A request that starts with what the visitor should do: "leave it by the side door".
+_DO = re.compile(r"^(?:leave|put|drop|place|wait|knock|ring|come|go|call|text|use|try|bring|take|sign|"
+                 r"keep|walk|hand|give|check|send|stay)\b", re.I)
+# Things the owner says about themselves: "I'm at the gym", "the owner is out".
+_SAY = re.compile(r"^(?:i|i'm|i'll|i've|i'd|we|we're|we'll|the owner|my|our|nobody|no one|it's)\b", re.I)
+# Words that aren't content: everything else in a request must come from the owner.
+_PLAIN = {"the", "a", "an", "to", "of", "at", "by", "on", "it", "its", "and", "or", "please", "them",
+          "him", "her", "they", "their", "your", "you", "is", "be", "owner"}
+# A question or a statement, not a request: "came", "is at the door", "what he wants".
+_NOT_A_REQUEST = re.compile(r"^(?:is|are|was|were|came|comes|has|have|had|what|who|whom|whose|whether|"
+                            r"if|how|why|when|where|did|does)\b", re.I)
+# The 2B echoing the asking part: "tell him to ...", "let him know ...", "have them ...".
+_ASKING = re.compile(r"^(?:(?:i\s+want\s+you\s+to|can\s+you|could\s+you|please)\s+)?"
+                     r"(?:tell|ask|let|have|get)\s+(?:them|him|her|me|the\s+\w+|visitors?|everyone|anyone|"
+                     r"couriers?|drivers?)\s*(?:know\s*)?(?:to\s+|that\s+)?", re.I)
+
+
+def from_model(args: Any, said: str) -> Optional[Dict[str, str]]:
+    """An instruction the 2B pulled out of natural speech (owner, Mac test: "If a
+    delivery comes, I want you to tell him to leave the package by the side door" got
+    "Sorry, I missed the end of that"). Code validates it: a known audience backed by
+    the words, a complete request of 3 to 120 characters, and nearly every word of the
+    request taken from what the owner said, so the model can't invent one. The store
+    refuses anything beyond words (is_forbidden). None if it doesn't hold."""
+    if not isinstance(args, dict):
+        return None
+    audience = str(args.get("audience", "")).strip().lower()
+    req = " ".join(str(args.get("request", "")).split()).strip().rstrip(".!,?")
+    # "let him know I'm at the gym" -> "I'm at the gym". A bare "let me know" (meant for
+    # the owner) leaves nothing, and "let me know what they want" leaves a question:
+    # both are refused below.
+    req = _ASKING.sub("", req)
+    req = re.sub(r"^(?:please\s+|to\s+|that\s+)+", "", req, flags=re.I)
+    if (audience not in AUDIENCES or not 2 < len(req) <= MAX_REQUEST or _CUT.search(req)
+            or _NOT_A_REQUEST.match(req) or re.search(r"\b(?:if|when|whenever)\b", req, re.I)):
+        return None
+    if not (_DO.match(req) or _SAY.match(req)):
+        return None                               # neither a request nor the owner's own news
+    backed = [a for a in AUDIENCES if re.search(r"\b(?:" + _WHO[a] + r")\b", said, re.I)]
+    if not backed:
+        return None                               # nobody named: not an instruction for visitors
+    if audience not in backed:
+        audience = backed[0]                      # the owner's words decide who it's for
+    heard = {w[:4] for w in re.findall(r"[a-z0-9']+", said.lower())}
+    words = [w for w in re.findall(r"[a-z0-9']+", req.lower()) if w not in _PLAIN]
+    if not words or any(w[:4] not in heard for w in words):
+        return None                               # every content word from the owner (review)
+    form = "to" if _DO.match(req) else "say"
+    return {"audience": audience, "verb": "ask" if form == "to" else "tell", "form": form, "request": req}
+
+
+def names_audience(text: str) -> bool:
+    """Does the owner name who it's for (a delivery, a visitor, anyone)?"""
+    return any(re.search(r"\b(?:" + _WHO[a] + r")\b", text or "", re.I) for a in AUDIENCES)
 
 
 def is_forbidden(parsed: Dict[str, str]) -> bool:
