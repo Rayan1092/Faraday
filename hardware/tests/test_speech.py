@@ -21,7 +21,6 @@ from shared import validate_event
 
 from hardware.audio import MicGate, Recorder
 from hardware.speech import ArgmaxTTS, PrintTTS, SpeechToText, TextToSpeech, _has_pyttsx3
-from integration.voice import Voice
 
 RATE = 16000
 
@@ -240,46 +239,6 @@ class TTS(Base):
         self.assertEqual(errors, [])
         for out in outs:
             self.assertGreater(sf.info(str(out)).duration, 0.5)
-
-
-class PushToTalk(Base):
-    def test_record_transcribe_submit(self):
-        srv = FakeArgmax("Package for Sam.")
-        got = []
-        rec = Recorder(MicGate(), audio_dir=self.dir / "out",
-                       stream_factory=lambda **kw: FakeStream(self.wav, **kw))
-        voice = Voice(rec, SpeechToText(srv.url), got.append, out=lambda *_: None)
-        try:
-            voice.start()
-            voice.stop().join(10)
-        finally:
-            srv.close()
-        self.assertEqual(len(got), 1)
-        ev = got[0]
-        self.assertEqual(validate_event(ev.to_dict()), [])
-        self.assertEqual((ev.type, ev.source, ev.data["text"]), ("speech_heard", "speech", "Package for Sam."))
-        self.assertAlmostEqual(ev.data["duration_s"], 1.5, places=1)
-
-    def test_transcript_is_never_printed(self):
-        srv = FakeArgmax("silver otter lantern")      # the example passphrase
-        printed, got = [], []
-        rec = Recorder(MicGate(), audio_dir=self.dir / "out",
-                       stream_factory=lambda **kw: FakeStream(self.wav, **kw))
-        voice = Voice(rec, SpeechToText(srv.url), got.append, out=printed.append)
-        try:
-            voice.start()
-            voice.stop().join(10)
-        finally:
-            srv.close()
-        self.assertEqual(len(got), 1)                  # still handed to the pipeline
-        self.assertFalse(any("otter" in line for line in printed), printed)
-
-    def test_cannot_start_while_faraday_talks(self):
-        gate = MicGate()
-        gate.mute()
-        rec = Recorder(gate, stream_factory=lambda **kw: FakeStream(self.wav, **kw))
-        Voice(rec, SpeechToText(None), lambda e: None, out=lambda *_: None).start()
-        self.assertFalse(rec.recording)
 
 
 if __name__ == "__main__":

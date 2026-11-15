@@ -19,7 +19,7 @@ import queue
 import threading
 from typing import Any, Callable, Dict, List, Optional
 
-from shared import Action, ActionType, Event, EventType, Mode
+from shared import Action, ActionType, Event, EventType, Mode, Source
 
 from brain.pipeline import Pipeline
 
@@ -56,6 +56,7 @@ class App:
         self._stopping = threading.Event()
         self._outlet_state: Dict[str, str] = {}   # outlet -> last command sent OK (on/off)
         self._sent_lock = threading.Lock()
+        self.voice: Any = None                     # integration.voice.Voice, set by __main__
         self.flipper.on_event = self.submit
         self.pipeline = pipeline or Pipeline.from_settings(
             settings, use_llm=use_llm, log=event_log, mode=mode, rules=rules,
@@ -89,6 +90,8 @@ class App:
             t.join(5)
         self._threads = []
         self.pipeline.wait_background(5)
+        if self.voice is not None:
+            self.voice.stop_wake()
         self.flipper.stop()
         if self.board is not None:
             self.board.stop()
@@ -98,9 +101,29 @@ class App:
         """Any thread may hand in an event (Flipper, camera, speech)."""
         self.events.put(event)
 
+    def control(self, outlet: str, on: bool) -> bool:
+        """Dashboard Controls (board.control_hook): switch an outlet through the
+        normal dispatcher, so the skip-repeat rule applies. Logged as a
+        `dashboard` action so the Lights panel follows. Returns False when the
+        outlet is already in that state or unknown."""
+        kind = ActionType.OUTLET_ON if on else ActionType.OUTLET_OFF
+        if outlet not in self.flipper.outlets:
+            self.out(f"  [controls] unknown outlet {outlet!r}")
+            return False
+        with self._sent_lock:
+            if self._outlet_state.get(outlet) == kind:
+                self.out(f"  [controls] {outlet} already {kind[7:]}")
+                return False
+        action = Action(kind, Source.DASHBOARD, {"outlet": outlet})
+        self.pipeline.log.write(action)      # not a pipeline action: log it here
+        self._on_action(action)
+        return True
+
     # ---- pipeline callbacks (any thread, must be quick) -----------------------
     def _on_pipeline_event(self, event: Event) -> None:
         self.out(f"EVENT  {event.type:<15} {_brief(event.data)}  [{event.source}]")
+        if event.type == EventType.DOORBELL and self.voice is not None:
+            self.voice.on_doorbell()           # listen for the visitor after the greeting
         if event.type in (EventType.MODE_CHANGED, EventType.ALERT_CHANGED):
             fut = self.flipper.apply_event(event)
             if fut is not None:
@@ -167,10 +190,13 @@ class App:
                 if self._stopping.is_set():
                     return
                 continue
+            text = str(action.args.get("text", ""))
             try:
-                self.speaker.say(str(action.args.get("text", "")))
+                self.speaker.say(text)
             except Exception:
                 log.exception("speaker failed")
+            if self.voice is not None:
+                self.voice.on_said(text)       # a question opens a listening window
 
     def _camera_worker(self) -> None:
         while True:
