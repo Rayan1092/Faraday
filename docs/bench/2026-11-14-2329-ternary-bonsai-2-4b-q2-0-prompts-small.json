@@ -1,0 +1,165 @@
+{
+ "cases": [
+  {
+   "name": "i_speech_delivery",
+   "title": "Instruction, away visitor: \"Hi, I have a package for Sam.\" (owner: \"ask them to leave it by the side door\")",
+   "runs": 5,
+   "model_right": 1,
+   "final_right": 5,
+   "unsafe": 0,
+   "fallback": 0,
+   "avg_s": 4.44,
+   "worst_s": 7.22,
+   "role": "smart",
+   "samples": [
+    {
+     "model_ok": false,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 7.22,
+     "role": "smart",
+     "result": [
+      [
+       "speak",
+       {
+        "text": "I'll let him know about the delivery."
+       }
+      ],
+      [
+       "speak",
+       {
+        "text": "Please leave it by the side door."
+       }
+      ]
+     ],
+     "dropped": [
+      "corrected: passed on the owner's delivery instruction"
+     ]
+    },
+    {
+     "model_ok": false,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.72,
+     "role": "smart",
+     "result": [
+      [
+       "save_message",
+       {
+        "text": "Hi, I have a package for Sam.",
+        "sender": "visitor"
+       }
+      ],
+      [
+       "speak",
+       {
+        "text": "I'll take that message and leave it by the side door."
+       }
+      ]
+     ],
+     "dropped": [
+      "saved the message Bonsai promised"
+     ]
+    },
+    {
+     "model_ok": false,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.68,
+     "role": "smart",
+     "result": [
+      [
+       "save_message",
+       {
+        "text": "Hi, I have a package for Sam.",
+        "sender": "visitor"
+       }
+      ],
+      [
+       "speak",
+       {
+        "text": "I'll take that message and leave it by the side door."
+       }
+      ]
+     ],
+     "dropped": [
+      "saved the message Bonsai promised"
+     ]
+    },
+    {
+     "model_ok": false,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 3.46,
+     "role": "smart",
+     "result": [
+      [
+       "speak",
+       {
+        "text": "I'll let him know about the delivery."
+       }
+      ],
+      [
+       "speak",
+       {
+        "text": "Please leave it by the side door."
+       }
+      ]
+     ],
+     "dropped": [
+      "corrected: passed on the owner's delivery instruction"
+     ]
+    },
+    {
+     "model_ok": true,
+     "final_ok": true,
+     "unsafe": false,
+     "fallback": false,
+     "seconds": 4.13,
+     "role": "smart",
+     "result": [
+      [
+       "speak",
+       {
+        "text": "Hello, I'm Faraday. The owner is away and armed. Please leave your package at the side door for Sam."
+       }
+      ]
+     ],
+     "dropped": []
+    }
+   ]
+  }
+ ],
+ "meta": {
+  "date": "2026-11-14T23:29-05:00",
+  "model": "ternary-bonsai-2-4b@q2_0",
+  "fast_model": "ternary-bonsai-2-4b@q2_0",
+  "force": null,
+  "profile": "nv_backup",
+  "reasoning_effort": "none",
+  "prompts": "small",
+  "machine": "Windows 11 (AMD64)",
+  "thinking": [
+   {
+    "model": "ternary-bonsai-2-4b@q2_0",
+    "no_think": "auto",
+    "uses": "chat",
+    "probe": "chat",
+    "thinking_seen": 0
+   },
+   {
+    "model": "ternary-bonsai-2-4b@q2_0",
+    "no_think": "auto",
+    "uses": "chat",
+    "probe": "chat",
+    "thinking_seen": 0
+   }
+  ],
+  "runs": 5,
+  "command": "python -m brain.bench --runs 5 --only i_speech_delivery"
+ }
+}

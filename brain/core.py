@@ -169,7 +169,7 @@ class Brain:
         client = self.fast_client if role == "fast" else self.client
         if client is None:
             return self._fallback(event, tool_mode, allowed, None, "no model configured", cause=cause,
-                                  label=label, ins=ins)
+                                  label=label, ins=ins, recent=recent)
         system = self.prompts["system"] if role == "smart" else PROFILES[
             pick_profile(self.fast_model or "")]["system"]
         messages = [{"role": "system", "content": system},
@@ -190,12 +190,12 @@ class Brain:
             elapsed = time.perf_counter() - started
             self.log(f"[brain] Bonsai call failed after {elapsed:.2f}s: {e}")
             return self._fallback(event, tool_mode, allowed, elapsed, str(e), cause=cause, label=label,
-                                  ins=ins)
+                                  ins=ins, recent=recent)
         except Exception as e:  # never let the demo stall on a surprise
             elapsed = time.perf_counter() - started
             self.log(f"[brain] Bonsai call crashed after {elapsed:.2f}s: {e!r}")
             return self._fallback(event, tool_mode, allowed, elapsed, repr(e), cause=cause, label=label,
-                                  ins=ins)
+                                  ins=ins, recent=recent)
 
         actions, dropped = filter_actions(items, event, mode, allowed)
         self.log(f"[brain] Bonsai call took {elapsed:.2f}s: {len(items)} proposed, "
@@ -204,7 +204,7 @@ class Brain:
             self.log(f"[brain]   dropped {_short(item)}: {why}")
         if not actions:
             return self._fallback(event, tool_mode, allowed, elapsed,
-                                  "no usable actions from Bonsai", dropped, cause, label, ins)
+                                  "no usable actions from Bonsai", dropped, cause, label, ins, recent)
         # Plain-code fix-ups on top of the model's answer. Each one is recorded, so the
         # benchmark can tell "Bonsai got it right" from "code fixed it".
         fixups: List[str] = []
@@ -213,6 +213,9 @@ class Brain:
         if not had_message and any(a.type == ActionType.SAVE_MESSAGE for a in actions):
             # Count it even when the number of actions didn't change (speech swapped out).
             fixups.append("saved the message Bonsai promised")
+        actions, passed = self._pass_on_delivery(actions, event, mode, allowed, ins, recent)
+        if passed:
+            fixups.append("corrected: passed on the owner's delivery instruction")
         actions, fixed = self._match_arm_words(actions, event, mode, allowed)
         if fixed:
             dropped = dropped + [fixed]
@@ -264,9 +267,34 @@ class Brain:
         if event.type == EventType.PHOTO_DESCRIBED and (cause == EventType.DOORBELL
                                                         or label == ThreatCategory.DELIVERY):
             return self.instructions.relevant(label)
-        if event.type == EventType.SPEECH_HEARD and mode in Mode.ARMED:
-            return self.instructions.relevant(latest_label(recent))
+        if event.type == EventType.SPEECH_HEARD and (mode in Mode.ARMED or event.data.get("channel")
+                                                     == SpeechChannel.VISITOR):
+            label = latest_label(recent)
+            if fb.mentions_delivery(str(event.data.get("text", ""))):
+                label = ThreatCategory.DELIVERY
+            return self.instructions.relevant(label)
         return []
+
+    def _pass_on_delivery(self, actions: List[Action], event: Event, mode: str, allowed: List[str],
+                          ins: Iterable[Dict[str, Any]], recent: Iterable[Any]) -> Tuple[List[Action], bool]:
+        """Code's guarantee (Mac test: a visitor with a package only got "I saved your
+        message"): visitor speech that mentions a delivery, or follows a delivery label,
+        gets the owner's delivery instruction in the reply."""
+        if event.type != EventType.SPEECH_HEARD or ActionType.SPEAK not in allowed:
+            return actions, False
+        delivery_ins = next((i for i in ins if i["audience"] == oi.DELIVERY), None)
+        if delivery_ins is None:
+            return actions, False
+        text = str(event.data.get("text", ""))
+        if not (fb.mentions_delivery(text) or latest_label(recent) == ThreatCategory.DELIVERY):
+            return actions, False
+        if any(a.type == ActionType.SPEAK and oi.mentions(a.args["text"], delivery_ins) for a in actions):
+            return actions, False
+        # Drop a conflicting drop-off spot, then say the owner's words.
+        actions = [a for a in actions if not (a.type == ActionType.SPEAK
+                                              and fb.mentions_dropoff(a.args["text"]))]
+        extra, _ = filter_actions([fb._speak(oi.spoken_line(delivery_ins))], event, mode, allowed)
+        return actions + extra, bool(extra)
 
     # ---- free-text calls (no tools) ----------------------------------------
 
@@ -327,7 +355,7 @@ class Brain:
                   elapsed: Optional[float], error: str,
                   model_dropped: Optional[List[Tuple[Any, str]]] = None,
                   cause: str = "", label: str = "",
-                  ins: Iterable[Dict[str, Any]] = ()) -> Decision:
+                  ins: Iterable[Dict[str, Any]] = (), recent: Iterable[Any] = ()) -> Decision:
         ins = list(ins)
         delivery = next((oi.spoken_line(i) for i in ins if i["audience"] == oi.DELIVERY), None)
         also = [oi.spoken_line(i) for i in ins if i["audience"] != oi.DELIVERY]
@@ -337,6 +365,7 @@ class Brain:
             # never "I'll pass that along" when nothing was saved (owner speech, say)
             actions = [a for a in actions if not (a.type == ActionType.SPEAK
                                                   and a.args["text"] == fb.MESSAGE_SAVED)]
+        actions, _ = self._pass_on_delivery(actions, event, mode, allowed, ins, recent)
         actions = self._confirm_mode(actions, event, mode, allowed)
         self.log(f"[brain] using rule-based fallback ({error})")
         return Decision(actions, "fallback", elapsed, (model_dropped or []) + dropped, error)
