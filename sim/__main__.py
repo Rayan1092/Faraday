@@ -8,7 +8,8 @@ so the whole thing can be tried without hardware.
 
 Keys (then Enter):
   d            doorbell
-  m            motion (one merged event)
+  m            motion (one merged event). Armed: porch light, then a 15 s grace period
+  w            wait out the grace period now: no doorbell came, so the warning goes up
   t [text]     speech, as if STT heard it (asks for text if none given)
   1 / 2 / 3    Home / Away / Night. Home from an armed mode asks for the passphrase
   s            status (mode, alert and recent log)
@@ -49,6 +50,13 @@ class Sim:
         self._pending: List[Event] = []  # fake camera replies, sent after the current event
         pipeline.on_event = self.show_event
         pipeline.on_action = self.show_action
+        tick = pipeline.tick
+
+        def tick_and_drain(force: bool = False):   # the grace timer's photo gets its fake reply
+            result = tick(force)
+            self._drain()
+            return result
+        pipeline.tick = tick_and_drain
 
     @property
     def modes(self):
@@ -73,6 +81,9 @@ class Sim:
             self.send(events.doorbell())
         elif key == "m":
             self.send(events.motion())
+        elif key == "w":
+            if self.pipeline.tick(force=True) is None:
+                print("  no warning pending")
         elif key == "t":
             text = (rest or input("  heard> ")).strip()
             if text:
@@ -189,7 +200,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if settings_path().name == "settings.example.json":
         print("Note: using settings.example.json, so the passphrase is the public example.")
     print(f"Rules: {pipeline.rules.path} ({len(pipeline.rules.all())} stored)")
-    print("Keys: d doorbell, m motion, t <text> speech, 1/2/3 home/away/night, s status, h help, q quit")
+    print("Keys: d doorbell, m motion, w no doorbell (end the grace period), t <text> speech, "
+          "1/2/3 home/away/night, s status, h help, q quit")
     board = None
     if args.dashboard:
         board = Dashboard.from_settings(pipeline, settings, args.port).start()

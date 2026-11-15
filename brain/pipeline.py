@@ -40,7 +40,8 @@ from shared import (Action, ActionType, AlertLevel, ChangedBy, Event, EventType,
 from log import EventLog
 from modes import ModeState
 from rules import InstructionStore, RuleStore, baseline_actions, lights_off_on_disarm, merge
-from rules.baseline import DOORBELL_GREETING
+from rules.baseline import DOORBELL_GREETING, warning_actions
+from modes import MotionOutcome
 from rules import instructions as owner_instructions
 
 from . import lines, look, owner, summary, threat
@@ -107,8 +108,11 @@ class Pipeline:
         settings = settings or load_settings()
         say = callbacks.get("say", print)
         brain = Brain.from_settings(settings, use_llm=use_llm, log=say)
-        window = settings.get("alerts", {}).get("alarm_window_s", 60)
-        modes = ModeState(passphrase(settings), window, mode)
+        alerts = settings.get("alerts", {})
+        modes = ModeState(passphrase(settings), alerts.get("alarm_window_s", 60), mode,
+                          min_gap_s=alerts.get("min_gap_s", 8),
+                          motion_grace_s=alerts.get("motion_grace_s", 15),
+                          visitor_quiet_s=alerts.get("visitor_quiet_s", 120))
         rules = callbacks.pop("rules", None) or RuleStore.from_settings(settings)
         for problem in rules.skipped:
             say(f"[rules] {problem}")
@@ -181,6 +185,36 @@ class Pipeline:
             self._emit(make_action(ActionType.SPEAK, {"text": look.CANT_SEE}, Source.BRAIN,
                                    caused_by=photo.id), Result(), [])
 
+    def tick(self, force: bool = False) -> Optional[Result]:
+        """End a motion grace period that's due (the timer calls this): no doorbell came,
+        so the warning goes up, the photo is taken and the warning line spoken. A
+        visitor who rang meanwhile cancelled it in modes/. force=True: end it now
+        (the backup demo at rehearsal speed)."""
+        with self.lock:
+            events = self.modes.end_grace(force)
+            if not events:
+                return None
+            result = Result()
+            mode, motion_id = self.modes.mode, events[0].caused_by
+            for e in events:
+                self._process(e, result, 0)
+            for action in warning_actions(motion_id, mode):
+                self._emit(action, result, [])
+                if action.type == ActionType.TAKE_PHOTO:   # the threat label: motion, no ring
+                    self._photo_cause[action.id] = (EventType.MOTION, mode, self.modes.alert)
+            return result
+
+    def _start_grace_timer(self) -> None:
+        timer = threading.Timer(self.modes.motion_grace_s + 0.05, self._grace_timer_fired)
+        timer.daemon = True
+        timer.start()
+
+    def _grace_timer_fired(self) -> None:
+        try:
+            self.tick()
+        except Exception as e:  # a timer thread must never crash the app
+            self.say(f"[pipeline] grace timer failed: {e!r}")
+
     def wait_background(self, timeout: float = 30) -> None:
         """Wait for background Bonsai calls (the alarm confrontation). For tests and shutdown."""
         for t in list(self._background):
@@ -212,7 +246,10 @@ class Pipeline:
         mode, alert = self.modes.mode, self.modes.alert
         done: List[Action] = []
         greet = event.type == EventType.DOORBELL and self._greet_visitor(event, alert)
-        for action in baseline_actions(event, mode, alert):
+        outcome = self.modes.last_outcome if event.type == EventType.MOTION else None
+        if outcome == MotionOutcome.GRACE:
+            self._start_grace_timer()   # no doorbell in time: the warning (tick)
+        for action in baseline_actions(event, mode, alert, outcome):
             if (action.type == ActionType.SPEAK and action.args.get("text") == DOORBELL_GREETING
                     and not greet):
                 continue   # an alert is on, or they already heard it: no friendly greeting again
@@ -478,6 +515,8 @@ class Pipeline:
 
         def run() -> None:
             line = self.brain.confront(description)
+            if not line and not look.photo_failed(event):
+                line = lines.confront_line(description)   # Bonsai's line unusable: code's
             if not line:
                 return
             try:

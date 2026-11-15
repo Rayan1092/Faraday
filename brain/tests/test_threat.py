@@ -107,8 +107,8 @@ class Escalation(unittest.TestCase):
     def test_never_lowers_and_never_acts_otherwise(self):
         home = ModeState(PASSPHRASE)
         self.assertEqual(home.on_event(self.label(C.SUSPICIOUS)), [])          # not armed
-        s = ModeState(PASSPHRASE, mode=Mode.NIGHT)
-        s.on_event(events.motion()); s.on_event(events.motion())               # alarm
+        s = ModeState(PASSPHRASE, mode=Mode.NIGHT, min_gap_s=0)
+        s.on_event(events.motion()); s.end_grace(force=True); s.on_event(events.motion())   # alarm
         self.assertEqual(s.alert, AlertLevel.ALARM)
         for cat in C.ALL:
             self.assertEqual(s.on_event(self.label(cat)), [], cat)             # nothing lowers it
@@ -171,7 +171,9 @@ class PipelineEffects(unittest.TestCase):
 
     def test_label_never_changes_mode_lights_or_disarms(self):
         p = self.pipeline(Mode.NIGHT)
+        p.modes.min_gap_s = 0
         p.handle(events.motion())
+        p.tick(force=True)
         p.handle(events.motion())
         before = (p.modes.mode, p.modes.alert)
         for description in (BOX, COAT, EMPTY, MASK):

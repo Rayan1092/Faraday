@@ -51,7 +51,9 @@ class ThroughThePipeline(unittest.TestCase):
             p = Pipeline(Brain(None, SECRET, log=lambda _m: None), ModeState(SECRET, mode=Mode.NIGHT),
                          EventLog(Path(tmp) / "e.jsonl", SECRET), on_action=emitted.append,
                          say=lambda _m: None)
+            p.modes.min_gap_s = 0
             p.handle(events.motion())
+            p.tick(force=True)                          # no doorbell: warning
             p.handle(events.motion())                   # alarm: porch light + lamp on
             emitted.clear()
             result = p.owner_passphrase(SECRET)

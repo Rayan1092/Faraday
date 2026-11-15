@@ -36,7 +36,11 @@
   },
 
   "alerts": {
-    "alarm_window_s": 60
+    "_note": "Owner 2026-11-15: motion turns the porch light on and waits motion_grace_s for a doorbell before the warning; after a doorbell motion is quiet for visitor_quiet_s; the alarm needs motion min_gap_s to alarm_window_s after the warning.",
+    "alarm_window_s": 60,
+    "min_gap_s": 8,
+    "motion_grace_s": 15,
+    "visitor_quiet_s": 120
   },
 
   "outlets": {

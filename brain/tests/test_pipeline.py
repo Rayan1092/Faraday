@@ -78,12 +78,49 @@ class PipelineTests(unittest.TestCase):
     def test_motion_is_plain_code_and_never_waits_for_bonsai(self):
         p, rec, client = self.pipeline(tool_calls(("speak", {"text": "Hello visitor!"})), Mode.NIGHT)
         result = p.handle(events.motion())
-        self.assertEqual(client.calls, [])
-        self.assertEqual([(k, t) for k, t, _ in rec.seen],
-                         [("event", "motion"), ("event", "alert_changed"),
-                          ("action", "outlet_on"), ("action", "take_photo")])
-        self.assertEqual([a.source for a in result.actions], [Source.RULES, Source.RULES])
+        self.assertEqual([(k, t) for k, t, _ in rec.seen], [("event", "motion"), ("action", "outlet_on")])
+        self.assertEqual(p.modes.alert, AlertLevel.NORMAL)                # grace: porch light only
+        self.clock.t += 15
+        warned = p.tick()                                                  # no doorbell: warning
+        self.assertEqual([(k, t) for k, t, _ in rec.seen][2:],
+                         [("event", "alert_changed"), ("action", "take_photo"), ("action", "speak")])
+        self.assertEqual([a.source for a in result.actions + warned.actions], [Source.RULES] * 3)
         self.assertEqual(p.modes.alert, AlertLevel.WARNING)
+        self.assertEqual(client.calls, [])
+
+    def test_walk_up_then_ring_is_a_visitor(self):
+        """Owner 2026-11-15: motion, then the doorbell within the grace period: no warning,
+        the normal doorbell greeting, and their shuffling about stays quiet."""
+        p, _, _ = self.pipeline(None, Mode.AWAY, use_client=False)
+        walk = [a.type for a in p.handle(events.motion()).actions]
+        self.assertEqual(walk, [ActionType.OUTLET_ON])
+        self.clock.t += 6
+        ring = p.handle(events.doorbell()).actions
+        self.assertIn(DOORBELL_GREETING, [a.args.get("text") for a in ring])
+        self.clock.t += 20
+        self.assertIsNone(p.tick())                                        # cancelled by the doorbell
+        self.clock.t += 10
+        again = p.handle(events.motion())
+        self.assertEqual([a.type for a in again.actions], [ActionType.OUTLET_ON])
+        self.assertNotIn(EventType.ALERT_CHANGED, [e.type for e in again.events])
+        self.assertEqual(p.modes.alert, AlertLevel.NORMAL)
+
+    def test_walk_up_no_ring_then_lingering(self):
+        p, _, _ = self.pipeline(None, Mode.AWAY, use_client=False)
+        p.handle(events.motion())
+        self.clock.t += 15
+        warned = p.tick()
+        self.assertIn("You're on camera. The owner has been alerted.",
+                      [a.args.get("text") for a in warned.actions])
+        photo = next(a for a in warned.actions if a.type == ActionType.TAKE_PHOTO)
+        self.assertIn("no doorbell", photo.args["reason"])
+        label = p.handle(events.photo_described(photo.id, "A man standing at the door."))
+        tag = next(e for e in label.events if e.type == EventType.THREAT_ASSESSED)
+        self.assertEqual(tag.data["category"], "suspicious")                # stayed without ringing
+        self.clock.t += 9
+        alarm = p.handle(events.motion())
+        self.assertEqual([e.data["level"] for e in alarm.events if e.type == EventType.ALERT_CHANGED],
+                         ["alarm"])
 
     def test_brain_repeats_are_not_duplicated(self):
         p, _, _ = self.pipeline(tool_calls(("speak", {"text": "Thank you."}), ("speak", {"text": "Thank you."}),
@@ -98,11 +135,15 @@ class PipelineTests(unittest.TestCase):
         p, _, _ = self.pipeline(None, Mode.NIGHT)
         p.brain.decide = lambda *a, **k: 1 / 0
         types = [a.type for a in p.handle(events.motion()).actions]
-        self.assertEqual(types, [ActionType.OUTLET_ON, ActionType.TAKE_PHOTO])
+        self.assertEqual(types, [ActionType.OUTLET_ON])
+        self.clock.t += 15
+        self.assertEqual([a.type for a in p.tick().actions], [ActionType.TAKE_PHOTO, ActionType.SPEAK])
 
     def test_second_motion_within_window_raises_alarm(self):
         p, _, _ = self.pipeline(None, Mode.AWAY, use_client=False)
         p.handle(events.motion())
+        self.clock.t += 15
+        p.tick()
         self.clock.t += 20
         result = p.handle(events.motion())
         alerts = [e.data["level"] for e in result.events if e.type == EventType.ALERT_CHANGED]
@@ -130,15 +171,14 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual([a for a in result.actions if a.type == ActionType.SPEAK], [])
             self.assertIn(EventType.THREAT_ASSESSED, [e.type for e in result.events])
         self.assertEqual(client.calls, [])                                 # Bonsai only replies to speech
-        motion = p.handle(events.motion()).actions
-        self.assertIn("You're on camera. The owner has been alerted.",
-                      [a.args.get("text") for a in motion])  # spoken by the baseline, at once
-        motion_photo = next(a for a in motion if a.type == ActionType.TAKE_PHOTO)
-        self.assertEqual(p.handle(events.photo_described(motion_photo.id)).actions, [])
+        motion = p.handle(events.motion()).actions                         # the visitor moves about
+        self.assertEqual([a.type for a in motion], [ActionType.OUTLET_ON])  # never warned
 
     def test_motion_photo_traced_even_after_a_busy_log(self):
         p, _, client = self.pipeline(tool_calls(("speak", {"text": "Hello visitor!"})), Mode.AWAY)
-        photo = next(a for a in p.handle(events.motion()).actions if a.type == ActionType.TAKE_PHOTO)
+        p.handle(events.motion())
+        self.clock.t += 15
+        photo = next(a for a in p.tick().actions if a.type == ActionType.TAKE_PHOTO)
         for i in range(12):  # push the motion event past the prompt's 10-line window
             p.log.write(events.speech(f"filler {i}"))
         calls = len(client.calls)
@@ -151,8 +191,11 @@ class PipelineTests(unittest.TestCase):
         again = [a.args.get("text") for a in p.handle(events.doorbell()).actions]
         self.assertIn(DOORBELL_GREETING, first)
         self.assertNotIn(DOORBELL_GREETING, again)              # within 60 s: once is enough
+        self.log_path = Path(self.tmp.name) / "second.jsonl"     # a fresh log: no greeting in it
         p, _, _ = self.pipeline(None, Mode.AWAY, use_client=False)
-        p.handle(events.motion())                                # warning
+        p.handle(events.motion())
+        self.clock.t += 15
+        p.tick()                                                 # warning: nobody rang
         ring = p.handle(events.doorbell()).actions
         self.assertNotIn(DOORBELL_GREETING, [a.args.get("text") for a in ring])
         self.assertIn(ActionType.TAKE_PHOTO, [a.type for a in ring])   # the photo still happens
@@ -173,6 +216,8 @@ class PipelineTests(unittest.TestCase):
     def test_spoken_passphrase_disarms_and_never_leaks(self):
         p, rec, client = self.pipeline(tool_calls(("speak", {"text": "hi"})), Mode.NIGHT)
         p.handle(events.motion())
+        self.clock.t += 15
+        p.tick()
         result = p.handle(events.speech("Okay, Blue Pelican 17."))
         self.assertEqual([e.type for e in result.events],
                          [EventType.SPEECH_HEARD, EventType.MODE_CHANGED, EventType.ALERT_CHANGED])

@@ -99,7 +99,7 @@ def rules(ctx: Context) -> Tuple[str, str]:
     if PACKAGE.search(text):
         return C.DELIVERY, "Carrying a package" + (" and rang the doorbell." if ctx.doorbells else ".")
     if ctx.cause == EventType.MOTION and ctx.mode in Mode.ARMED and not ctx.doorbells:
-        return C.SUSPICIOUS, "Someone at the door who didn't ring, while the house is armed."
+        return C.SUSPICIOUS, "Stayed at the door without ringing while the house is armed."
     return C.VISITOR, "Someone at the door" + (" who rang the doorbell." if ctx.doorbells else ".")
 
 
@@ -161,6 +161,9 @@ def check(category: str, reason: str, ctx: Context) -> Tuple[str, str, str]:
         return C.SUSPICIOUS, rule_reason, f"code escalated {category} to suspicious"
     if category == C.NOBODY and PERSON.search(ctx.description or "") and not NOBODY.search(ctx.description or ""):
         return rule_cat, rule_reason, "code rejected nobody: a person is described"
+    if category == C.SUSPICIOUS and ctx.doorbells and rule_cat in (C.VISITOR, C.DELIVERY):
+        # Owner 2026-11-15: walked up and rang, no warning signs = a visitor or a delivery.
+        return rule_cat, rule_reason, "code: rang the doorbell with no warning signs"
     clean = _clean_line(reason) or rule_reason
     if len(clean) > REASON_MAX:
         clean = clean[:REASON_MAX - 3].rsplit(" ", 1)[0] + "..."

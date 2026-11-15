@@ -21,6 +21,18 @@ OUTLET_NAMES = {"porch_light": "porch light", "living_room_lamp": "living room l
                 "spare": "spare outlet"}
 
 
+def confront_line(description: str) -> str:
+    """The code's own confrontation line, when Bonsai's is unusable: what the camera
+    sees, then leave. The alarm line itself was already spoken by code."""
+    seen = " ".join(str(description or "").split()).rstrip(".")
+    if not seen:
+        return "You are on camera. Please leave now."
+    seen = seen[0].lower() + seen[1:]
+    if len(seen) > 150:
+        seen = seen[:150].rsplit(" ", 1)[0]
+    return f"You are on camera. I can see {seen}. Please leave now."
+
+
 def light_line(outlet: str, on: bool) -> str:
     return f"The {OUTLET_NAMES.get(outlet, 'light')} is {'on' if on else 'off'}."
 

@@ -17,7 +17,7 @@ Faraday is an offline AI home guard built for the Cornell Local AI Hackathon. Su
 - **The only LLM is Bonsai 2 (2B/4B/9B)**, through LM Studio's OpenAI-compatible server. Keep prompts short, because long context uses a lot of RAM.
 - **Speech uses Argmax OSS on the Mac.** STT is `argmax-cli serve` (OpenAI-compatible `/v1/audio/transcriptions`, default port 50060). TTS runs the argmax-cli TTS command as a subprocess. On Windows, use a stand-in behind the same interface.
 - The AI chooses only from: `set_mode`, `outlet_on`, `outlet_off`, `speak`, `take_photo`, `save_message`, `summarize_log`, `add_rule`. **The AI can never disarm.** Disarming is a passphrase check in plain code in `modes/`.
-- Alert rule (in `modes/`, not the AI): the first motion in Away or Night sets `warning`. Motion again within 60 s sets `alarm`. Only the passphrase disarm returns it to `normal`. Every change sends an `alert_changed` event.
+- Alert rule (in `modes/`, not the AI; owner 2026-11-15): motion in Away or Night turns the porch light on and starts a 15 s grace period. A doorbell within it means a visitor: no warning, and motion stays quiet for 120 s. No doorbell sets `warning` (warning line, photo, threat label). Motion again 8 to 60 s after the warning, with no doorbell in between, sets `alarm`. Only the passphrase disarm returns it to `normal`. Every change sends an `alert_changed` event.
 
 ## Hardware facts
 
