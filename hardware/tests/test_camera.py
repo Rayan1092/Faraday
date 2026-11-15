@@ -130,14 +130,23 @@ class Base(unittest.TestCase):
 
 
 class Helpers(Base):
-    def test_short_description_keeps_two_sentences(self):
+    def test_short_description_keeps_every_fact_that_fits(self):
         from hardware.vision import short_description
-        self.assertEqual(short_description("A man. He waves. He leaves."), "A man. He waves.")
+        # review of #43: a two-sentence cap dropped "face covered" (Dell's threat cue)
+        three = "One person is at the door. They hold a box. Their face is covered by a hood."
+        self.assertEqual(short_description(three), three)
+        self.assertEqual(short_description("A man in a U.S. Postal Service uniform holds a package. "
+                                           "Their face is visible."),
+                         "A man in a U.S. Postal Service uniform holds a package. Their face is visible.")
+        long = "One person stands at the door holding a large box. " * 8
+        cut = short_description(long)
+        self.assertLessEqual(len(cut), 280)
+        self.assertTrue(cut.endswith("box."))
         self.assertEqual(short_description('  "<think>x</think> A box on the step "'), "A box on the step")
         self.assertEqual(short_description("**Description:** One person holds a box."),
                          "One person holds a box.")
         self.assertIsNone(short_description("   "))
-        self.assertLessEqual(len(short_description("word " * 100)), 241)
+        self.assertLessEqual(len(short_description("word " * 100)), 281)
 
     def test_reasoning_is_stripped(self):
         from hardware.vision import short_description, strip_reasoning
@@ -206,6 +215,38 @@ class VisionClient(Base):
         self.assertIsNone(text)
         self.assertEqual([r["max_tokens"] for r in lm.requests], [768, 2048])
         self.assertEqual(last["attempts"], 2)
+
+    def test_thinking_cut_off_without_tags_is_not_a_description(self):
+        """Review of #43 (HIGH): plain-text thinking that hit max_tokens before any
+        </think> was taken as the description."""
+        text, last, lm = self.describe_with(
+            content="Thinking Process: 1. Analyze the Request: The user wants a description of the photo.",
+            finish_reason="length")
+        self.assertIsNone(text)
+        self.assertEqual(last["attempts"], 2)                   # retried with 2048 first
+        text, last, lm = self.describe_with(content="Thinking Process: the photo shows", finish_reason="stop")
+        self.assertIsNone(text)
+
+    def test_retry_only_if_there_is_time_for_it(self):
+        lm = FakeLMStudio(content="", reasoning="hmm " * 50, finish_reason="length", delay_s=0.6)
+        try:
+            v = Vision(lm.url, "bonsai-9b", timeout_s=1.5)
+            with self.assertLogs("hardware.vision", "WARNING"):
+                self.assertIsNone(v.describe(self.photo))
+        finally:
+            lm.close()
+        self.assertEqual(len(lm.requests), 1)                   # 0.9 s left < 2 x 0.6 + 1
+
+    def test_a_400_for_another_reason_keeps_the_thinking_switch(self):
+        lm = FakeLMStudio(status=400, error_body={"error": "No models loaded"})
+        try:
+            v = Vision(lm.url, "bonsai-9b")
+            with self.assertLogs("hardware.vision", "WARNING"):
+                self.assertIsNone(v.warm_up())
+        finally:
+            lm.close()
+        self.assertTrue(v._extras_ok)                           # still sent next time
+        self.assertEqual(["chat_template_kwargs" in r for r in lm.requests], [True, False])
 
     def test_server_refusing_the_thinking_switch_is_retried_without_it(self):
         lm = FakeLMStudio(refuse_extras=True)
@@ -370,6 +411,28 @@ class PhotoEvents(Base):
         ev = cam.take(self.action())
         self.assertEqual(ev.data["description"],
                          "2 people are at the door. No face is visible: covered or turned away.")
+
+    def test_failed_detector_is_not_nobody(self):
+        """Review of #43: a detector that raises must not become "Nobody is there."."""
+        class Broken:
+            def analyse(self, frame):
+                return None                                     # Detector.analyse on failure
+        cam = PhotoCamera(SavedFileCamera(self.photo), Vision("http://127.0.0.1:9", "m", timeout_s=2),
+                          Broken())
+        with self.assertLogs("hardware.vision", "WARNING"):
+            ev = cam.take(self.action())
+        self.assertEqual((ev.data["description"], ev.source, ev.data["described_by"], ev.data["people"]),
+                         (NO_VISION, "camera", None, None))
+
+    def test_no_hint_when_the_detector_saw_nothing(self):
+        lm = FakeLMStudio(content="A dark porch. Nobody is there.")
+        try:
+            ev = PhotoCamera(SavedFileCamera(self.photo), Vision(lm.url, "bonsai-test"),
+                             FakeDetector(people=0)).take(self.action())
+        finally:
+            lm.close()
+        self.assertNotIn("Hint:", lm.requests[0]["messages"][0]["content"][0]["text"])
+        self.assertEqual((ev.data["people"], ev.data["detections"]), (0, []))
 
     def test_vision_down_keeps_photo_and_says_photo_saved(self):
         cam = PhotoCamera(SavedFileCamera(self.photo), Vision("http://127.0.0.1:9", "m", timeout_s=2))

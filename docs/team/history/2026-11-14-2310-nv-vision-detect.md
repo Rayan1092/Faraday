@@ -10,7 +10,7 @@ Owner items 1 and 2. Built and tested on Windows with stand-ins (no camera, no L
   - Thinking is switched off two ways: `reasoning_effort: "none"`, plus `chat_template_kwargs: {"enable_thinking": false}`. If LM Studio refuses the second field (HTTP 400), the request is retried without it.
   - `max_tokens` is 768 (setting `llm.vision_max_tokens`). A model that doesn't think stops after about 40 tokens anyway. If the answer is cut off (finish_reason `length`), there is one retry with 2048.
   - Reasoning is stripped: `<think>…</think>`, a reply that has only the closing `</think>`, an unfinished `<think>`, and a separate `reasoning_content` field.
-  - **Timeout:** one clear timeout per photo, `llm.vision_timeout_s`, default 60 s. It is named in the log and in `hardware.check vision`.
+  - **Timeout:** one clear timeout per photo, `llm.vision_timeout_s`, default 20 s. That is inside Dell's 25 s "who's at the door" wait, so the detector's description still arrives in time. It is named in the log and in `hardware.check vision`. The 2048 retry runs only if there's time for it.
 - **Warm-up:** the app sends one tiny image at startup, so LM Studio loads the vision part before the first doorbell.
 - **`python3 -m hardware.check vision [photo]`** is still the one-command Mac test. It now also prints the warm-up time, the detector's line, the attempts and the token budget.
 
@@ -33,7 +33,7 @@ Owner items 1 and 2. Built and tested on Windows with stand-ins (no camera, no L
 
 ## Settings (all optional: the code defaults are the same)
 
-Under `"llm"`: `"vision_timeout_s": 60, "vision_max_tokens": 768`.
+Under `"llm"`: `"vision_timeout_s": 20, "vision_max_tokens": 768`.
 Under `"camera"`: `"detector": {"enabled": true, "model": "hardware/models/yolox_tiny.onnx", "score": 0.35, "fps": 5}`.
 Flag `--no-detect` turns detection off.
 
@@ -41,3 +41,12 @@ Flag `--no-detect` turns detection off.
 
 - `hardware/tests/test_detect.py`: decoding maths with a stub network, duplicate merging, summary, hint and fallback sentences, the real committed models on a blank frame, boxes on the stream but not on photos, and event field validation.
 - `hardware/tests/test_camera.py`: two sentences, reasoning stripping, the retry with 2048 tokens, the server refusing the thinking switch, the hint in the prompt, the warm-up, and the detector fallback description.
+
+## Review (fresh reviewer agent) and fixes
+
+- **HIGH, fixed:** plain-text thinking cut off before `</think>` was taken as the description. Now a cut-off reply, or one that starts like reasoning ("Thinking Process…"), is no answer: retry, then the detector fallback.
+- **Description length:** the two-sentence cap dropped facts such as "face covered", which Dell's threat label uses. Now every whole sentence that fits in 280 characters is kept.
+- **Thinking switch:** any HTTP 400 used to turn it off for good (for example "No models loaded" at the warm-up). Now it's turned off only if the retry without it succeeds.
+- **Failed detector:** it looked like "nobody there". Now `Detector.detect`/`analyse` return None on failure, so the photo says "Photo saved." and no hint is sent. The warning is logged once a minute. The hint is sent only when the detector saw something, so a missed person can't become Bonsai's "Nobody is there.".
+- **Timing:** vision could outlast Dell's 25 s look timeout. The timeout is now 20 s and the retry is time-aware (PLAN Q30 note).
+- **Small ones:** boxes are clamped on all sides (empty ones dropped), and the warm-up prints "failed" instead of "None s".

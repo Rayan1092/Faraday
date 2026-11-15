@@ -53,6 +53,21 @@ class Decode(unittest.TestCase):
         # centre (212,164)/0.5 = (424,328); size (80,160)/0.5 = (160,320)
         self.assertEqual(d.box, (344, 168, 504, 488))
 
+    def test_box_wholly_in_the_padding_is_dropped(self):
+        # frame 416 x 208: rows 208..415 of the input are letterbox padding
+        index = 40 * 52 + 26                                     # centre y = 40.5*8 = 324 > 208
+        y = self.make([(index, 0, 0.9, 0.9, (0.5, 0.5, 1.0, 1.0))])
+        self.assertEqual(y.detect(np.zeros((208, 416, 3), np.uint8)), [])
+
+    def test_a_failing_detector_returns_none_not_nothing(self):
+        class Raises:
+            def detect(self, frame):
+                raise cv2.error("no NMSBoxesBatched in this OpenCV")
+        det = Detector(Raises())
+        with self.assertLogs("hardware.detect", "WARNING"):
+            self.assertIsNone(det.detect(np.zeros((10, 10, 3), np.uint8)))
+        self.assertIsNone(det.analyse(np.zeros((10, 10, 3), np.uint8)))   # warned once a minute
+
     def test_low_scores_are_dropped_and_duplicates_merged(self):
         index = 20 * 52 + 26
         y = self.make([(index, 16, 0.9, 0.9, (0.5, 0.5, 2.0, 2.0)),       # dog
@@ -112,9 +127,10 @@ class RealModel(unittest.TestCase):
         self.assertIsNotNone(det)
         self.assertIn(det.engine, ("opencv-dnn", "onnxruntime"))
         frame = np.full((720, 1280, 3), 127, np.uint8)
-        det.detect(frame)
+        self.assertEqual(det.objects.detect(frame), [])          # raises if the model is broken
         t0 = time.perf_counter()
         info = det.analyse(frame)
+        self.assertIsNotNone(info)
         self.assertLess(time.perf_counter() - t0, 2.0)
         self.assertEqual((info["people"], info["detections"]), (0, []))
         self.assertEqual(len(COCO), 80)

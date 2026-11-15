@@ -79,8 +79,11 @@ def vision(settings, photo=None) -> int:
         frame = cv2.imread(str(path))
         if det is not None and frame is not None:
             info = det.analyse(frame)
-            hint_line = hint(info)
-            print(f"detector ({det.engine}, {det.last_ms:.0f} ms): {hint_line}")
+            if info is None:
+                print(f"detector ({det.engine}) FAILED on this photo (see the warning above)")
+            else:
+                print(f"detector ({det.engine}, {det.last_ms:.0f} ms): {hint(info)}")
+                hint_line = hint(info) if info["detections"] else None
     except Exception as e:
         print(f"detector unavailable: {e!r}")
     text = v.describe(path, hint=hint_line)

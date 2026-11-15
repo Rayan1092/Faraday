@@ -67,7 +67,7 @@
     "timeout_s": 30,
     "recent_log_lines": 8,
     "reasoning_effort": "none",
-    "vision_timeout_s": 60,
+    "vision_timeout_s": 20,
     "vision_max_tokens": 768
   },
 

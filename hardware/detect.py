@@ -146,8 +146,10 @@ class Yolox:
         found = []
         for i in np.array(idx).reshape(-1):
             x, y, bw, bh = boxes[i]
-            x1, y1 = max(0, int(round(x))), max(0, int(round(y)))
-            x2, y2 = min(W - 1, int(round(x + bw))), min(H - 1, int(round(y + bh)))
+            x1, y1 = min(max(0, int(round(x))), W - 1), min(max(0, int(round(y))), H - 1)
+            x2, y2 = min(max(0, int(round(x + bw))), W - 1), min(max(0, int(round(y + bh))), H - 1)
+            if x2 <= x1 or y2 <= y1:
+                continue                      # wholly in the padding or off the frame
             found.append(Detection(COCO[int(ids[i])], round(float(conf[i]), 2), (x1, y1, x2, y2)))
         found.sort(key=lambda d: -d.confidence)
         return _agnostic(found)
@@ -184,7 +186,7 @@ class HogPeople:
         self._hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
         self._lock = threading.Lock()
 
-    def detect(self, frame: np.ndarray) -> List[Detection]:
+    def detect(self, frame: np.ndarray) -> List[Detection]:  # HogPeople
         import cv2
         h, w = frame.shape[:2]
         scale = min(1.0, 640.0 / max(h, w))
@@ -248,6 +250,7 @@ class Detector:
         self.objects, self.faces = objects, faces
         self.engine = getattr(objects, "engine", type(objects).__name__)
         self.last_ms = 0.0
+        self._warned_at = 0.0
 
     @classmethod
     def from_settings(cls, settings: Dict[str, Any]) -> Optional["Detector"]:
@@ -275,19 +278,27 @@ class Detector:
             faces = None
         return cls(objects, faces)
 
-    def detect(self, frame: np.ndarray) -> List[Detection]:
+    def detect(self, frame: np.ndarray) -> Optional[List[Detection]]:
+        """Detections, or None if the detector failed (never "nobody" by mistake)."""
         t0 = time.perf_counter()
         try:
             found = self.objects.detect(frame)
         except Exception as e:
-            log.warning("detection failed: %r", e)
-            found = []
-        self.last_ms = (time.perf_counter() - t0) * 1000
+            now = time.monotonic()
+            if now - self._warned_at > 60:          # once a minute, not 5 times a second
+                self._warned_at = now
+                log.warning("detection failed: %r", e)
+            return None
+        finally:
+            self.last_ms = (time.perf_counter() - t0) * 1000
         return found
 
-    def analyse(self, frame: np.ndarray) -> Dict[str, Any]:
-        """For a photo: summary of objects + people + visible faces."""
+    def analyse(self, frame: np.ndarray) -> Optional[Dict[str, Any]]:
+        """For a photo: summary of objects + people + visible faces, or None if the
+        detector failed."""
         found = self.detect(frame)
+        if found is None:
+            return None
         out = summary(found)
         h = frame.shape[0]
         out["close_people"] = sum(1 for d in found if d.label == "person"

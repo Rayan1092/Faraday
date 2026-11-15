@@ -213,7 +213,7 @@ class CameraFeed:
                     if (self.detector is not None and watched
                             and t0 - self._detect_at >= 1.0 / max(0.5, self.detect_fps)):
                         self._detect_at = t0
-                        found = self.detector.detect(frame)
+                        found = self.detector.detect(frame) or []    # None = failed: no boxes
                         with self._lock:
                             self._boxes, self._boxes_at = found, frame_at
                 else:
@@ -336,8 +336,10 @@ class PhotoCamera:
         self.last_info = info
         text = None
         if self.vision is not None:
-            text = (self.vision.describe(path, hint=hint(info)) if info is not None
-                    else self.vision.describe(path))
+            # the hint only when the detector saw something: a missed person must not
+            # turn into Bonsai's "Nobody is there."
+            line = hint(info) if info is not None and info["detections"] else None
+            text = self.vision.describe(path, hint=line) if line else self.vision.describe(path)
         by = "bonsai" if text else None
         if text is None and info is not None:
             text, by = describe_from(info), "detector"     # vision failed: say what we know

@@ -18,8 +18,10 @@ empty answer with a 60-token cap -> "Photo saved."):
   retry with 2048;
 - reasoning is stripped: <think>...</think>, a reply that only has the closing
   </think>, and a separate reasoning_content field;
-- one clear timeout per request (vision_timeout_s, default 60 s), named in the
-  log and in `python -m hardware.check vision`.
+- one clear timeout per photo (vision_timeout_s, default 20 s: inside Dell's
+  25 s "who's at the door" wait, so a slow vision still gives the detector's
+  description in time), named in the log and in `python -m hardware.check vision`.
+  The 2048-token retry runs only if there is time left for it.
 """
 from __future__ import annotations
 
@@ -41,10 +43,10 @@ PROMPT = ("You are a home security camera at the front door. Describe this photo
           "Mention a package or bag on the ground. Only say what you can see. No names, "
           "no guesses about who they are. Answer directly.")
 MAX_SIDE = 512
-MAX_CHARS = 240
+MAX_CHARS = 280
 DEFAULT_MAX_TOKENS = 768
 RETRY_MAX_TOKENS = 2048
-DEFAULT_TIMEOUT_S = 60.0
+DEFAULT_TIMEOUT_S = 20.0
 
 
 def _llm(settings: Dict[str, Any]) -> Dict[str, Any]:
@@ -88,19 +90,29 @@ def strip_reasoning(text: str) -> str:
     return text
 
 
-def short_description(text: str, max_sentences: int = 2) -> Optional[str]:
-    """Clean model output down to at most two short sentences, or None if empty."""
+def looks_like_thinking(text: str) -> bool:
+    """Reasoning printed as plain text, without the closing tag (cut off)."""
+    head = (text or "").lstrip()[:40].lower()
+    return head.startswith(("<think>", "thinking process", "thinking:", "okay, let me", "let me think"))
+
+
+def short_description(text: str, max_chars: int = MAX_CHARS) -> Optional[str]:
+    """Clean model output down to a short description (whole sentences, at most
+    max_chars), or None if empty. Every sentence that fits is kept: the prompt
+    asks for facts (people, what they hold, face covered) and none may be cut."""
     text = re.sub(r"[*_#`]+", "", strip_reasoning(text))      # markdown
     text = text.strip().strip('"').strip()
     text = re.sub(r"^\s*(description|answer)\s*:\s*", "", text, flags=re.I)
     text = " ".join(text.split())
     if not text:
         return None
-    sentences = re.findall(r".+?(?:[.!?](?=\s|$)|$)", text)
-    out = " ".join(s.strip() for s in sentences[:max_sentences] if s.strip())
-    if len(out) > MAX_CHARS:
-        out = out[:MAX_CHARS].rsplit(" ", 1)[0].rstrip(",;:") + "."
-    return out or None
+    if len(text) <= max_chars:
+        return text
+    cut = text[:max_chars]
+    end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+    if end >= 40:
+        return cut[:end + 1]
+    return cut.rsplit(" ", 1)[0].rstrip(",;:") + "."
 
 
 one_sentence = short_description      # old name
@@ -136,14 +148,21 @@ class Vision:
         return body
 
     def _post(self, body: Dict[str, Any], timeout: float) -> requests.Response:
+        t0 = time.monotonic()
         r = requests.post(self.url, json=body, timeout=timeout)
         if r.status_code == 400 and "chat_template_kwargs" in body:
-            # an older server may refuse the extra field: once without it
-            log.info("vision: server refused chat_template_kwargs (%s); retrying without",
-                     r.text[:120])
-            self._extras_ok = False
-            body = {k: v for k, v in body.items() if k != "chat_template_kwargs"}
-            r = requests.post(self.url, json=body, timeout=timeout)
+            # an older server may refuse the extra field: try once without it, and
+            # stop sending it only if that worked (a 400 can also mean "no model loaded")
+            left = timeout - (time.monotonic() - t0)
+            if left <= 1:
+                return r
+            plain = {k: v for k, v in body.items() if k != "chat_template_kwargs"}
+            r2 = requests.post(self.url, json=plain, timeout=left)
+            if r2.status_code < 400:
+                log.info("vision: server refused chat_template_kwargs (%s); not sending it again",
+                         r.text[:120])
+                self._extras_ok = False
+            return r2
         return r
 
     def describe(self, path: Path, hint: Optional[str] = None) -> Optional[str]:
@@ -158,12 +177,15 @@ class Vision:
             last["image_kb"] = round(len(b64) * 3 / 4 / 1024, 1)
             prompt = PROMPT + (f" Hint: {hint}" if hint else "")
             budget = self.max_tokens
+            first_took = 0.0
             while True:
                 left = self.timeout_s - (time.monotonic() - t0)
                 if left <= 1:
                     raise requests.Timeout()
                 last["attempts"] += 1
+                started = time.monotonic()
                 r = self._post(self._body(b64, prompt, budget), left)
+                first_took = first_took or (time.monotonic() - started)
                 last["status"] = r.status_code
                 if r.status_code >= 400:
                     # LM Studio says why in the body (model not loaded, no image support, ...)
@@ -178,9 +200,14 @@ class Vision:
                             reasoning_chars=len(reasoning) + (len(content) - len(strip_reasoning(content))),
                             max_tokens=budget)
                 text = short_description(content)
+                cut_off = finish == "length" and "</think>" not in content
+                if text is not None and (cut_off or looks_like_thinking(strip_reasoning(content))):
+                    text = None                # reasoning cut off mid-way is not a description
+                    thought = True
                 if text is not None:
                     return text
-                if finish == "length" and budget < RETRY_MAX_TOKENS:
+                left = self.timeout_s - (time.monotonic() - t0)
+                if finish == "length" and budget < RETRY_MAX_TOKENS and left >= 2 * first_took + 1:
                     log.warning("vision: answer cut off after %d tokens%s; retrying with %d",
                                 budget, " of thinking" if thought else "", RETRY_MAX_TOKENS)
                     budget = RETRY_MAX_TOKENS

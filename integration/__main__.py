@@ -207,8 +207,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     if vision is not None and not args.offline:
         # LM Studio loads the vision part on the first image: do it now, not at the doorbell
         import threading
-        threading.Thread(target=lambda: print(f"  [vision] warm-up {vision.warm_up()} s"),
-                         name="faraday-vision-warmup", daemon=True).start()
+        def warm_vision() -> None:
+            secs = vision.warm_up()
+            print(f"  [vision] warm-up {secs} s" if secs is not None
+                  else "  [vision] warm-up failed (is the model loaded in LM Studio? see the log)")
+        threading.Thread(target=warm_vision, name="faraday-vision-warmup", daemon=True).start()
     detector = getattr(app.camera, "detector", None)
     if detector is not None:
         print(f"Object detection: {detector.engine}"
