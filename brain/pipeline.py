@@ -32,7 +32,7 @@ from shared import (Action, ActionType, AlertLevel, ChangedBy, Event, EventType,
 
 from log import EventLog
 from modes import ModeState
-from rules import RuleStore, baseline_actions, merge
+from rules import RuleStore, baseline_actions, lights_off_on_disarm, merge
 
 from . import summary, threat
 from .threat import ThreatAssessor
@@ -143,6 +143,9 @@ class Pipeline:
         mode, alert = self.modes.mode, self.modes.alert
         done: List[Action] = []
         for action in baseline_actions(event, mode, alert):
+            self._emit(action, result, done)
+        # Passphrase disarm: the lights Faraday turned on go off (plain code, logged).
+        for action in merge(done, lights_off_on_disarm(event, self.log.recent(500))):
             self._emit(action, result, done)
         if self.rules is not None:
             for action in merge(done, self.rules.fire(event, mode)):

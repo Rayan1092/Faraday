@@ -10,8 +10,8 @@ from __future__ import annotations
 import json
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from shared import (Action, ActionType, AlertLevel, Event, EventType, Mode, Outlet, Source,
-                    make_action)
+from shared import (Action, ActionType, AlertLevel, ChangedBy, Event, EventType, Mode, Outlet,
+                    Source, make_action)
 
 ANNOUNCE_DOORBELL = "Someone is at the door."
 WARNING_LINE = "You're on camera. The owner has been alerted."
@@ -57,6 +57,27 @@ def baseline_actions(event: Event, mode: str,
     modes/ set for it (motion while armed is always warning or alarm)."""
     return [make_action(kind, args, Source.RULES, caused_by=event.id)
             for kind, args in steps_for(event.type, mode, alert or AlertLevel.NORMAL)]
+
+
+def lights_off_on_disarm(event: Event, entries: Iterable[dict]) -> List[Action]:
+    """On a passphrase disarm, switch off every light Faraday itself turned on.
+
+    Reads the log: an outlet whose last command was outlet_on from the rules or the
+    brain gets an outlet_off (source rules). Lights the owner switched on from the
+    dashboard are left alone, and lights already off aren't sent again.
+    """
+    if (event.type != EventType.MODE_CHANGED
+            or event.data.get("changed_by") != ChangedBy.PASSPHRASE):
+        return []
+    last: Dict[str, Tuple[str, str]] = {}
+    for e in entries:
+        if e.get("kind") == "action" and e.get("type") in (ActionType.OUTLET_ON, ActionType.OUTLET_OFF):
+            outlet = (e.get("args") or {}).get("outlet")
+            if outlet:
+                last[outlet] = (e["type"], str(e.get("source")))
+    return [make_action(ActionType.OUTLET_OFF, {"outlet": outlet}, Source.RULES, caused_by=event.id)
+            for outlet, (kind, source) in sorted(last.items())
+            if kind == ActionType.OUTLET_ON and source in (Source.RULES, Source.BRAIN)]
 
 
 def _key(action: Action) -> Tuple[str, str]:
