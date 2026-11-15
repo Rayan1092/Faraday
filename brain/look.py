@@ -45,11 +45,15 @@ def is_look_request(text: str) -> bool:
 
 
 def photo_failed(photo: Event) -> bool:
-    """The camera gave no photo, or vision gave no description (NV's camera worker then
-    sends source "camera" and no model; the sim sends source "sim")."""
+    """The camera gave no photo, or nothing described it. NV's camera worker sends
+    `described_by` "bonsai" (vision) or "detector" (vision failed, the object detector
+    wrote the description: still worth saying), and source "camera" with no
+    described_by when there's no description at all ("Photo saved.")."""
     data = photo.data or {}
     if not data.get("photo_path") or not str(data.get("description", "")).strip():
         return True
+    if data.get("described_by") in ("bonsai", "detector"):
+        return False
     return photo.source == Source.CAMERA
 
 
