@@ -145,7 +145,9 @@ class Rehearsal(unittest.TestCase):
         for prof in s["llm"]["profiles"].values():
             prof["base_url"] = self.lm.url
         s["flipper"].update(burst_gap_s=0.3, led_refresh_s=0, led_settle_s=0.3)
-        s["alerts"] = dict(s.get("alerts", {}), motion_grace_s=1.0, min_gap_s=0.4, visitor_quiet_s=2.0)
+        # grace 2.0 s, not 1.0: headroom when the machine is busy (Dell PLAN Q40; the grace counts
+        # from the motion's first packet, and the walk-up ring comes after the porch light send)
+        s["alerts"] = dict(s.get("alerts", {}), motion_grace_s=2.0, min_gap_s=0.4, visitor_quiet_s=2.0)
         # no_speech_s 6.0 = 1.5 s of wall time at the mic's 4x speed: room for a busy machine
         s["audio"]["listen"] = {"max_s": 15, "silence_s": 1.0, "no_speech_s": 6.0, "after_speech_s": 0.2}
         s["audio"]["wake"] = {"enabled": True, "phrase": "hey faraday", "silence_s": 0.6, "max_s": 10}
@@ -270,7 +272,7 @@ class Rehearsal(unittest.TestCase):
         # a repeat ring gets no greeting: the visitor's window still opens within ~2 s
         self.step("window after a ring with no greeting", lambda: sum(
             "listening (doorbell)" in s for s in self.out) > n_windows, 5)
-        time.sleep(1.0 + 1.3)                                             # grace + settle
+        time.sleep(2.0 + 1.3)                                             # grace + settle
         self.assertEqual(len(self.events("alert_changed")), n_alerts, "a visitor who walks up and rings is never warned")
         self.assertEqual(modes.alert, "normal")
         self.quiet()

@@ -4,7 +4,7 @@ The real product only (owner decision 2026-11-15): the Flipper, Dell's pipeline
 (modes, log, rules, Bonsai), the camera with vision and object detection, the
 mic with the wake phrase and listening windows, Argmax speech, the dashboard
 and the controls page. There are no fake or stand-in options here; the tests
-and the demo rehearsal pass their stand-ins to build_app() directly.
+and the rehearsal test pass their stand-ins to build_app() directly.
 
 Hands-free: the mic opens by itself after a doorbell and after every question
 Faraday asks, and the wake phrase "Hey Faraday" is listened for while idle. It is
@@ -41,7 +41,7 @@ PARTS = frozenset({"flipper", "capture_factory", "speaker", "stream_factory", "s
 def build_app(args: argparse.Namespace, settings, known_outlets=None,
               parts: Optional[Dict[str, Any]] = None) -> App:
     """The whole app, wired as on the Mac. `parts` is for the automated tests and
-    the demo rehearsal only: it swaps a hardware piece for a stand-in without
+    the rehearsal test only: it swaps a hardware piece for a stand-in without
     changing any wiring ("flipper", "capture_factory", "speaker" (gate -> TTS),
     "stream_factory" (mic), "stt", "chime"). The product never passes it."""
     parts = parts or {}
@@ -105,7 +105,7 @@ def build_app(args: argparse.Namespace, settings, known_outlets=None,
                           owner_voice=owner_voice, owner_voice_grace_s=OwnerVoice.grace_s(settings),
                           urgent=lambda: app.pipeline.modes.alert != "normal",
                           busy=app.speech_busy, chime=chime)
-    # Part health (owner 2026-11-15): a part failing mid-demo is said once, clearly,
+    # Part health (owner 2026-11-15): a part failing mid-run is said once, clearly,
     # and again when it's back; nothing stops (integration/health.py).
     from hardware.settings import REPO_ROOT
     from integration.health import Health, camera_check, lm_studio_check, tcp_check

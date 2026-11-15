@@ -93,7 +93,7 @@ A transcript from Argmax STT on the Mac, or from the Windows stand-in. Before an
 | `duration_s` | number or null | `null` | length of the recording |
 | `voices` | int or null | `null` | distinct voices in the recording, from `argmax-cli diarize` run alongside STT on visitor recordings (PLAN Q28). Present only if diarization finished in time; it never delays the reply |
 | `owner_voice` | bool or null | `null` | owner requests only: `true` = the enrolled owner's voice, `false` = another voice, `null` = not checked or can't tell. From `argmax-cli diarize` on the enrollment plus the request (`hardware/owner_voice.py`). **Display only**: nothing is allowed or refused because of it (PLAN Q35) |
-| `channel` | string or null | `null` | `"owner"`: said after the wake phrase "Hey Faraday" (or answering Faraday's question back to the owner). `"visitor"`: from a listening window (doorbell, Faraday's question to a visitor). `null` for typed text (PLAN Q29) |
+| `channel` | string or null | `null` | `"owner"`: said after the wake phrase "Hey Faraday" (or answering Faraday's question back to the owner). `"visitor"`: from a listening window (doorbell, Faraday's question to a visitor). `null` for typed text (sim and tests only; PLAN Q29) |
 
 ```json
 {

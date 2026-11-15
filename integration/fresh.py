@@ -1,7 +1,7 @@
 """--fresh: start with an empty log and no old captures.
 
 Moves logs/ (events.jsonl, rules.json, instructions.json, ...) and captures/
-(photos, audio, alarm recordings) into old_runs/<time>/, so a demo starts clean
+(photos, audio, alarm recordings) into old_runs/<time>/, so each run starts clean
 and nothing is deleted. old_runs/ is gitignored. The TTS cache (cache/) and
 the models stay where they are.
 """

@@ -4,6 +4,52 @@ Everything since the last Mac session (vision, object detection, hands-free wind
 
 `argmax-cli` below means `/Users/captain/clueless/vendor/argmax-oss-swift/.build/release/argmax-cli`.
 
+## Retest first: everything from the night of 2026-11-15, in this order
+
+All of this was built and tested on Windows with fakes and the Bonsai 2 4B; only the Mac can confirm it. NV and Dell items are in one list. The older full list is further down, for reference.
+
+**Settings first** (`config/settings.json`; it isn't in git, so new defaults can't reach it):
+- Under `"llm"`: `"vision_max_tokens": 120,` (it was 768). If you raised `"vision_timeout_s"`, set it back to `20`.
+- Under `"camera"`, the detector line becomes:
+  `"detector": {"enabled": true, "model": "hardware/models/yolox_tiny.onnx", "score": 0.35, "object_score": 0.6, "fps": 5},`
+- Under `"alerts"`: if it has `"visitor_quiet_s": 120`, change it to `60` (Dell's grace timer).
+
+1. **Pull, with Wi-Fi on:** `cd ~/Faraday && git pull`. Then turn Wi-Fi off.
+2. **Bring everything up:** open LM Studio, then `FARADAY_DRY_RUN=1 integration/start_mac.sh`. Expect all OK and READY.
+3. **Vision without thinking:** `python3 -m hardware.check vision` (under a minute).
+   - On the 9B, `plain` says THINKS. The **`prefill`** row should be `ok` with a factual sentence ("Nobody is there." with nobody in view), under 5 s.
+   - Then `USE: …`, and `brain …: OK` for the 9B and the 2B.
+   - **If it says `NO strategy stops the thinking`:** in LM Studio go to My Models → the 9B → gear → Prompt Template. Add `{%- set enable_thinking = false -%}` as the first line, save, reload the model, and run it again.
+   - If `USE` names the 4B, add the `"vision_model"` line it prints.
+4. **Voice cache, before starting Faraday:** `python3 -m integration.fixed_lines --render --fresh`. It deletes the old takes and renders Dell's new lines; about a minute. Expect `… of … are cached` with both numbers equal.
+5. **Camera and detector:** `python3 -m hardware.check camera`.
+   - A `frame: WxH (16:9)` line.
+   - `objects named at 0.60 or more`.
+   - The detector line names only things really in view.
+6. **Start Faraday:** `integration/start_mac.sh`. Watch for `[vision] ready in X s; one description takes Y s (…, no-think: prefill)`.
+7. **Live view:** the dashboard, and the Controls page at `http://127.0.0.1:8081/`.
+   - Walk up close: you stay in view, the frame isn't cropped and the boxes aren't cut.
+   - Random things no longer flash as "cell phone". Unsure steady things show a grey "unknown object".
+   - A phone at your ear (0.4-0.5) shows as "unknown object". To name it, set `"object_score": 0.4` and restart.
+8. **Doorbell in Away:**
+   - The greeting comes, then `photo_described` a few seconds after the photo (it took 20-47 s last night). The description is one factual sentence.
+   - `grep '"photo_described"' logs/events.jsonl | tail -n 3`: the detections hold only people and real objects.
+   - Say "Hi, I have a package, where should I leave it?". Expected: "You can leave it by the door. I'll let the owner know it arrived.", and the dashboard label turns to delivery (Dell).
+9. **Walk-up, then ring:** no warning.
+10. **Motion alone:** the warning comes 15 s after the wave, and the console prints `[motion] …` lines saying why (Dell).
+11. **Motion again: the alarm.**
+    - Only the fixed line is spoken: "This property is protected. You are being recorded and the owner has been notified. Please leave now." No description and no phantom bag (Dell).
+    - The recording is saved.
+12. **Disarm:**
+    - A wrong phrase gets "The system is armed. I can't make changes right now."
+    - The passphrase gets "Welcome home. The system is disarmed."
+    - Nothing says "pass phase".
+13. **"Hey Faraday, who's at the door?"** The answer is facts only, for example "One person is at the front door." The description stays on the dashboard (Dell).
+14. **"Hey Faraday, what happened while I was out?"** The times and counts match the log (Dell).
+15. **"Hey Faraday, if a delivery comes, I want you to tell him to leave the package by the side door."** It's accepted, not "please say it again" (Dell).
+
+---
+
 ## Three edits in `config/settings.json`
 
 1. Under `"audio"`, replace the `listen` and `wake` lines. The old values override the new defaults:
