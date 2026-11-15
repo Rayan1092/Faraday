@@ -227,6 +227,11 @@ def cases() -> List[Case]:
              Mode.AWAY, _with_instruction("If someone comes, tell them I'm in the back garden.",
                                           "A woman in a red coat waving at the camera.", "visitor"),
              _says("garden"), _says("garden")),
+        Case("i_speech_delivery", 'Instruction, away visitor: "Hi, I have a package for Sam." '
+             '(owner: "ask them to leave it by the side door")', Mode.AWAY,
+             _speech_with_instruction("If a delivery comes, ask them to leave it by the side door.",
+                                      "Hi, I have a package for Sam."),
+             _says("side door"), _says("side door")),
         Case("confrontation", "Alarm: one line that mentions what the camera sees (free text)",
              Mode.AWAY, _free_text(lambda b: b.confront(events.FAKE_DESCRIPTION)),
              _line_mentions("jacket", "box", "cardboard", "dark"),
@@ -261,6 +266,23 @@ def _with_instruction(said: str, description: str, label: str):
         brain.instructions = _MemoryInstructions(said)
         try:
             d = brain.decide(described, Mode.AWAY, [bell.to_dict(), photo.to_dict(), tag.to_dict()])
+        finally:
+            brain.instructions = before
+        return d, None, d.elapsed_s or 0.0
+    return run
+
+
+def _speech_with_instruction(said: str, heard: str):
+    """A visitor talking after the doorbell greeting (Mac test), the instruction stored."""
+    def run(brain: Brain) -> Tuple[Optional[Decision], Optional[str], float]:
+        bell = events.doorbell()
+        greet = make_action(ActionType.SPEAK, {"text": "Hello. No one can come to the door right now. "
+                                               "I can take a message or help with a delivery."},
+                            Source.RULES, caused_by=bell.id)
+        before = brain.instructions
+        brain.instructions = _MemoryInstructions(said)
+        try:
+            d = brain.decide(events.speech(heard, "visitor"), Mode.AWAY, [bell.to_dict(), greet.to_dict()])
         finally:
             brain.instructions = before
         return d, None, d.elapsed_s or 0.0

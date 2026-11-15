@@ -66,6 +66,16 @@ def arm_intent(text: str) -> Optional[str]:
     return Mode.AWAY if leaving else Mode.NIGHT
 
 
+_DELIVERY = re.compile(r"\b(packages?|parcels?|deliver\w*|courier|a box|this box|the box|amazon|fedex|"
+                       r"dhl|usps|postman|postwoman|mailman|the mail|your mail|sign for)\b"
+                       r"|(?<![\w-])ups(?![\w-])", re.I)
+
+
+def mentions_delivery(text: str) -> bool:
+    """Is the visitor talking about a delivery?"""
+    return bool(_DELIVERY.search(text or ""))
+
+
 _DROPOFF = re.compile(r"\b(leave|drop|put|place)\b.*\b(package|parcel|it|box|door|porch)\b", re.I)
 
 
