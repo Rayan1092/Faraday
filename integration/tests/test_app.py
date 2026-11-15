@@ -310,9 +310,10 @@ class RealCameraPath(unittest.TestCase):
 
     def test_photo_reaches_log_and_dashboard(self):
         from hardware.camera import PhotoCamera
-        from hardware.tests.test_camera import FakeLMStudio, SavedFileCamera, make_scene
+        from hardware.tests.test_camera import FakeLMStudio, SavedFileCamera, isolate_vision_cache, make_scene
         from hardware.vision import Vision
         from hardware.settings import REPO_ROOT
+        isolate_vision_cache(self)
         tmp = Path(tempfile.mkdtemp(prefix="faraday-cam-"))
         photos = Path(tempfile.mkdtemp(prefix="test-", dir=REPO_ROOT / "captures"))
         lm = FakeLMStudio("Someone holds a box at the door.")

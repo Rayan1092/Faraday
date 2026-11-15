@@ -25,6 +25,8 @@ ALREADY_HOME = "The system is already disarmed."
 
 # ---- visitors --------------------------------------------------------------------
 MESSAGE_SAVED = "Thank you. I'll pass that along."
+# A visitor with a delivery and no owner instruction (owner, Mac test): code's reply.
+DELIVERY_DEFAULT = "You can leave it by the door. I'll let the owner know it arrived."
 CANT_HELP = "I'm sorry, I can't help with that."
 CANT_DISARM = "I'm sorry, I can't do that. Only the owner can disarm the system."
 
@@ -58,6 +60,13 @@ AUDIENCE_NAMES = {"delivery": "delivery instruction", "visitor": "visitor instru
                   "anyone": "instruction for anyone"}
 
 
+def delivery_line(owner_words: str) -> str:
+    """The owner's delivery instruction, then the same promise as DELIVERY_DEFAULT when
+    it's about where to leave it ("Please come back tomorrow." gets no promise)."""
+    from .fallback import mentions_dropoff
+    return f"{owner_words} I'll let the owner know it arrived." if mentions_dropoff(owner_words) else owner_words
+
+
 def light_line(outlet: str, on: bool) -> str:
     return f"The {OUTLET_NAMES.get(outlet, 'light')} is {'on' if on else 'off'}."
 
@@ -77,6 +86,7 @@ FIXED_LINES = [
     "Welcome home. The system is disarmed.",
     "The system is already disarmed.",
     "Thank you. I'll pass that along.",
+    "You can leave it by the door. I'll let the owner know it arrived.",
     "I'm sorry, I can't help with that.",
     "I'm sorry, I can't do that. Only the owner can disarm the system.",
     "Sorry, I can't help with that. You can ask who's at the door, what happened, or arm the house.",
