@@ -120,7 +120,8 @@ def vision(settings, photo=None) -> int:
                 print(f"{m:28} {s:9} {'-':>6}  ERROR     {e!r}"[:200])
                 continue
             ok = bool(r["answer"]) and not r["thinks"]
-            result = "ok" if ok else "thinks+ok" if r["answer"] else "THINKS" if r["thinks"] else "empty"
+            result = ("ok" if ok else "thinks+ok" if r["answer"] else "THINKS" if r["thinks"]
+                      else "TOO LONG" if r.get("too_long") else "empty")
             shown = r["answer"] or f"(finish={r['finish']}, reasoning={r['reasoning_chars']} chars)"
             print(f"{m:28} {s:9} {r['seconds']:5.1f}s  {result:9} {shown}"[:240])
             rows.append(r)

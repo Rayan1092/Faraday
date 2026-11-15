@@ -141,10 +141,14 @@ def thought_text(content: str) -> str:
 
 
 THINKING_OPENERS = ("<think>", "thinking process", "thinking:", "here's a thinking process",
-                    "here is a thinking process", "okay, let me", "okay, so", "okay so", "ok, so",
-                    "let me think", "let me analyze", "let me look", "alright", "got it",
-                    "the user wants", "the user is asking", "the user asks", "i need to", "first, i",
-                    "analyze the", "1. analyze")
+                    "here is a thinking process", "okay,", "okay so", "ok, so", "hmm", "let me",
+                    "let's", "alright", "got it", "the user", "so, the user", "so the user",
+                    "i need to", "we need to", "first, i", "analyze the", "1. analyze")
+
+
+class ServerError(RuntimeError):
+    """LM Studio answered 5xx: server trouble (maybe this request's template), not a
+    verdict about thinking."""
 
 
 def looks_like_thinking(text: str) -> bool:
@@ -176,6 +180,17 @@ def short_description(text: str, max_chars: int = MAX_CHARS) -> Optional[str]:
 
 
 one_sentence = short_description      # old name
+
+
+def whole_sentences(text: str) -> Optional[str]:
+    """A cut-off answer: only its complete sentences (or None)."""
+    clean = short_description(text)
+    if not clean:
+        return None
+    end = max(clean.rfind(". "), clean.rfind("! "), clean.rfind("? "))
+    if clean.endswith((".", "!", "?")) and not clean.endswith("..."):
+        return clean if len(clean) < MAX_CHARS or end < 0 else clean[:end + 1]
+    return clean[:end + 1] if end >= 0 else None
 
 
 def _load_cache() -> Dict[str, str]:
@@ -251,12 +266,17 @@ class Vision:
         out: Dict[str, Any] = {"strategy": strategy, "status": r.status_code}
         if r.status_code == 400:
             # an older server may refuse the extra fields: once without them (the prefill
-            # turn, the /no_think text and the system line stay)
-            body = {k: v for k, v in body.items()
-                    if k not in ("chat_template_kwargs", "enable_thinking", "reasoning_effort")}
+            # turn, the /no_think text and the system line stay; reasoning_effort too,
+            # unless the error names it: it is what turns thinking off on GGUF)
+            drop = {"chat_template_kwargs", "enable_thinking"}
+            if "reasoning" in r.text.lower():
+                drop.add("reasoning_effort")
+            body = {k: v for k, v in body.items() if k not in drop}
             r = requests.post(self.url, json=body, timeout=max(1.0, timeout - (time.monotonic() - t0)))
             out["status"] = r.status_code
         out["seconds"] = round(time.monotonic() - t0, 1)
+        if r.status_code >= 500:
+            raise ServerError(f"HTTP {r.status_code}: {r.text[:300]}")
         if r.status_code >= 400:
             raise RuntimeError(f"HTTP {r.status_code}: {r.text[:300]}")
         choice = r.json()["choices"][0]
@@ -267,17 +287,20 @@ class Vision:
         answer = short_description(content)
         plain_reasoning = looks_like_thinking(strip_reasoning(content)) or (
             answer is not None and looks_like_thinking(answer))
-        # One sentence never needs 120 tokens: cut off with no closed think block,
-        # it was reasoning (in whatever words), not a description.
-        cut_off = finish == "length" and "</think>" not in content
-        if plain_reasoning or cut_off:
-            answer = None
         thought = (reasoning.strip() + " " + thought_text(content)).strip()
         # thinks: it reasoned before (or instead of) answering. An empty closed
         # <think></think> is not thinking.
-        thinks = bool(thought) or plain_reasoning or cut_off
-        out.update(answer=answer, thinks=thinks, finish=finish, content=content[:500],
-                   reasoning_chars=len(thought))
+        thinks = bool(thought) or plain_reasoning
+        cut = finish == "length" and "</think>" not in content
+        if thinks and (cut or plain_reasoning):
+            answer = None                    # reasoning (cut off or as plain text) is no description
+        # Ran out of tokens with no reasoning at all: an over-long answer, not thinking.
+        # Only its whole sentences count; never a reason to drop the strategy.
+        too_long = cut and not thinks
+        if too_long:
+            answer = whole_sentences(content)
+        out.update(answer=answer, thinks=thinks, too_long=too_long, finish=finish,
+                   content=content[:500], reasoning_chars=len(thought))
         return out
 
     # ---- choosing a strategy ----------------------------------------------------------
@@ -309,9 +332,12 @@ class Vision:
                 # verdict about thinking: it never answered)
                 why = f"timed out after {timeout:.0f} s" if isinstance(e, requests.Timeout) else repr(e)
                 self.probe_results.append({"strategy": strategy, "error": why[:300], "answer": None,
-                                           "thinks": None})
+                                           "thinks": None, "no_verdict": True})
                 break
-            except Exception as e:           # an HTTP error for this request's shape: try the next
+            except ServerError as e:         # 5xx: try the next, but it's no verdict about thinking
+                reply = {"strategy": strategy, "error": str(e)[:300], "answer": None, "thinks": None,
+                         "no_verdict": True}
+            except Exception as e:           # 4xx: this request's shape is refused; try the next
                 reply = {"strategy": strategy, "error": repr(e)[:300], "answer": None, "thinks": None}
             self.probe_results.append(reply)
             if reply.get("answer") and not reply.get("thinks"):
@@ -320,7 +346,8 @@ class Vision:
         if answered:                         # it thinks a little, but answers within the cap
             return self._choose(min(answered, key=lambda r: r.get("seconds", 99)),
                                 "thinks a little but answers within the token cap")
-        if any(r.get("thinks") for r in self.probe_results):     # real replies, all thinking
+        unsure = any(r.get("no_verdict") or r.get("too_long") for r in self.probe_results)
+        if any(r.get("thinks") for r in self.probe_results) and not unsure:   # only thinking
             self.strategy = None
             self.disabled_until = time.monotonic() + RETRY_DISABLED_S
             if self.use_cache:
@@ -343,10 +370,21 @@ class Vision:
     def _reprobe_in_background(self) -> None:
         """Every 5 minutes while disabled (the template may have been fixed and the
         model reloaded): probe with the test image off the photo path."""
-        if self._lock.locked():
-            return
-        self.disabled_until = time.monotonic() + RETRY_DISABLED_S
-        threading.Thread(target=self.probe, name="faraday-vision-probe", daemon=True).start()
+        if not self._lock.acquire(blocking=False):
+            return                                    # a probe is running already
+        self.disabled_until = time.monotonic() + RETRY_DISABLED_S   # the next try after this one
+
+        def run() -> None:
+            try:
+                self._probe(None, PROMPT, None)
+            except Exception:
+                log.exception("background vision probe failed")
+            finally:
+                self._lock.release()
+        try:
+            threading.Thread(target=run, name="faraday-vision-probe", daemon=True).start()
+        except Exception:
+            self._lock.release()
 
     def warm_up(self) -> Optional[float]:
         """Before the first doorbell: load the vision part in LM Studio and pick the
@@ -387,8 +425,9 @@ class Vision:
         t0 = time.monotonic()
         deadline = t0 + self.timeout_s
         try:
-            if self.disabled_until:          # nothing stops the thinking: never make a photo wait
-                if time.monotonic() >= self.disabled_until:
+            until = self.disabled_until
+            if until:                        # nothing stops the thinking: never make a photo wait
+                if time.monotonic() >= until:
                     self._reprobe_in_background()
                 last["error"] = "vision skipped: the model thinks before every answer (" + FIX_HINT + ")"
                 return None
@@ -401,6 +440,10 @@ class Vision:
                 self._note(last, reply)
                 if reply.get("answer"):
                     return reply["answer"]
+                if reply.get("too_long") and not reply.get("thinks"):
+                    last["error"] = f"the answer ran past {self.max_tokens} tokens with no whole sentence"
+                    log.warning("vision failed: %s ('%s' kept)", last["error"], self.strategy)
+                    return None
                 if self.forced:
                     last["error"] = f"'{self.strategy}' gave no answer: the model thought ({FIX_HINT})"
                     log.warning("vision failed: %s", last["error"])
@@ -411,7 +454,7 @@ class Vision:
             # pick a strategy on this photo, but never wait behind another probe (the
             # warm-up, the background retry): the detector describes this one instead
             if not self._lock.acquire(blocking=False):
-                last["error"] = "vision is busy picking how to turn thinking off (warm-up)"
+                last["error"] = "vision is busy picking how to turn thinking off (another probe)"
                 log.warning("vision skipped: %s; the detector describes this photo", last["error"])
                 return None
             try:

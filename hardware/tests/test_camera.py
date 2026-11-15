@@ -40,8 +40,10 @@ class FakeLMStudio:
 
     def __init__(self, content="A brown package sits by the door. Nobody is there.", status=200,
                  reasoning=None, finish_reason="stop", delay_s=0.0, models=None, error_body=None,
-                 refuse_extras=False, thinks_unless=None):
+                 refuse_extras=False, thinks_unless=None, delay_for=None, reply_for=None):
         self.content, self.status, self.requests = content, status, []
+        self.delay_for = delay_for          # delay_for(body) -> seconds, instead of delay_s
+        self.reply_for = reply_for          # reply_for(body) -> (status, content, finish) or None
         # thinks_unless(body) -> bool: like the Mac's MLX 9B, the reply is all thinking
         # (finish "length", empty answer) unless the request turns thinking off this way
         self.thinks_unless = thinks_unless
@@ -73,9 +75,13 @@ class FakeLMStudio:
                     self.end_headers()
                     self.wfile.write(raw)
                     return
-                time.sleep(outer.delay_s)
+                time.sleep(outer.delay_for(body) if outer.delay_for else outer.delay_s)
                 msg = {"content": outer.content}
                 finish = outer.finish_reason
+                status = outer.status
+                special = outer.reply_for(body) if outer.reply_for else None
+                if special is not None:
+                    status, msg["content"], finish = special
                 if outer.reasoning is not None:
                     msg["reasoning_content"] = outer.reasoning
                 if outer.thinks_unless is not None and not outer.thinks_unless(body):
@@ -84,7 +90,7 @@ class FakeLMStudio:
                 raw = json.dumps(outer.error_body if outer.error_body is not None else
                                  {"choices": [{"message": msg, "finish_reason": finish}]}).encode()
                 try:
-                    self.send_response(outer.status)
+                    self.send_response(status)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(raw)))
                     self.end_headers()
@@ -361,13 +367,86 @@ class VisionClient(Base):
     def test_a_timeout_is_no_verdict_about_thinking(self):
         """Review of #64: a slow first image (prefill timed out) must not lead to
         "thinks before every answer" because plain then thought."""
-        lm = FakeLMStudio(delay_s=1.2, thinks_unless=prefill)
+        lm = FakeLMStudio(delay_for=lambda body: 1.2 if prefill(body) else 0.0,
+                          thinks_unless=lambda body: False)               # plain would think
         try:
             v = Vision(lm.url, "m9b", timeout_s=3)
             self.assertIsNone(v.probe(per_request=0.5))
         finally:
             lm.close()
         self.assertEqual((len(v.probe_results), v.disabled_until, v.strategy), (1, 0.0, None))
+        self.assertIn("timed out", v.probe_results[0]["error"])
+
+    def test_a_long_answer_is_not_thinking(self):
+        """Review of #64: one wordy answer (120 tokens, no reasoning) must not turn
+        vision off or drop the saved strategy."""
+        long = ("One person in a dark hooded jacket stands at the door. They hold a brown box "
+                "with both hands and look at the camera while the porch light shines on")
+        lm = FakeLMStudio(content=long, finish_reason="length")
+        try:
+            v = Vision(lm.url, "m9b", strategy="auto")
+            v.strategy = "prefill"
+            self.assertEqual(v.describe(self.photo),
+                             "One person in a dark hooded jacket stands at the door.")
+            lm.content = "One person in a dark hooded jacket stands at the door holding"
+            with self.assertLogs("hardware.vision", "WARNING"):
+                self.assertIsNone(v.describe(self.photo))                 # no whole sentence
+            self.assertEqual((v.strategy, v.disabled_until), ("prefill", 0.0))
+            self.assertEqual(len(lm.requests), 2)                         # no re-probe
+        finally:
+            lm.close()
+
+    def test_a_server_error_is_no_verdict_but_the_next_is_tried(self):
+        lm = FakeLMStudio(thinks_unless=lambda body: False,
+                          reply_for=lambda body: (500, "template error", "stop") if prefill(body) else None)
+        try:
+            v = Vision(lm.url, "m9b")
+            with self.assertLogs("hardware.vision", "WARNING"):
+                self.assertIsNone(v.describe(self.photo))
+        finally:
+            lm.close()
+        self.assertEqual([r["strategy"] for r in v.probe_results], ["prefill", "plain"])
+        self.assertEqual(v.disabled_until, 0.0)                           # 500 + thinking: no verdict
+
+    def test_inside_the_lock_it_rechecks(self):
+        """Another probe finished between the check and the lock: use its pick, or
+        its verdict (review of #64)."""
+        class Lock:
+            def __init__(self, v, on_acquire):
+                self.real, self.v, self.on_acquire = threading.Lock(), v, on_acquire
+
+            def acquire(self, blocking=True, timeout=-1):
+                got = self.real.acquire(blocking, timeout)
+                if got:
+                    self.on_acquire(self.v)
+                return got
+
+            def release(self):
+                self.real.release()
+
+            def locked(self):
+                return self.real.locked()
+
+            def __enter__(self):
+                self.acquire()
+                return self
+
+            def __exit__(self, *exc):
+                self.release()
+        lm = FakeLMStudio(thinks_unless=prefill)
+        try:
+            v = Vision(lm.url, "m9b")
+            v._lock = Lock(v, lambda v: setattr(v, "strategy", "prefill"))
+            self.assertIsNotNone(v.describe(self.photo))
+            self.assertEqual(len(lm.requests), 1)
+            self.assertFalse(v._lock.locked())
+            w = Vision(lm.url, "m9b-other")
+            w._lock = Lock(w, lambda w: setattr(w, "disabled_until", time.monotonic() + 300))
+            self.assertIsNone(w.describe(self.photo))
+            self.assertEqual(len(lm.requests), 1)                         # no request at all
+            self.assertFalse(w._lock.locked())
+        finally:
+            lm.close()
 
     def test_a_photo_never_waits_behind_the_warm_up(self):
         lm = FakeLMStudio()
