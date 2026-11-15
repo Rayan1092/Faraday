@@ -86,6 +86,7 @@ class ServerTests(unittest.TestCase):
         self.pipeline.start()
         self.pipeline.owner_set_mode(Mode.AWAY)
         self.pipeline.handle(events.motion())
+        self.pipeline.tick(force=True)            # no doorbell in the grace period
         s = self.state()
         self.assertEqual((s["mode"], s["alert"]), ("away", "warning"))
         self.assertEqual(s["status"]["color"], "yellow")

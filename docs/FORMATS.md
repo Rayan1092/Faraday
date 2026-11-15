@@ -92,7 +92,7 @@ A transcript from Argmax STT on the Mac, or from the Windows stand-in. Before an
 | `audio_path` | string or null | `null` | `captures/audio/....wav` |
 | `duration_s` | number or null | `null` | length of the recording |
 | `voices` | int or null | `null` | distinct voices in the recording, from `argmax-cli diarize` run alongside STT on visitor recordings (PLAN Q28). Present only if diarization finished in time; it never delays the reply |
-| `owner_voice` | bool or null | `null` | owner requests only: `true` = the enrolled owner's voice, `false` = another voice, `null` = not checked or can't tell. From `argmax-cli diarize` on the enrollment plus the request (`hardware/owner_voice.py`). **Display only**: nothing is allowed or refused because of it (PLAN Q34) |
+| `owner_voice` | bool or null | `null` | owner requests only: `true` = the enrolled owner's voice, `false` = another voice, `null` = not checked or can't tell. From `argmax-cli diarize` on the enrollment plus the request (`hardware/owner_voice.py`). **Display only**: nothing is allowed or refused because of it (PLAN Q35) |
 | `channel` | string or null | `null` | `"owner"`: said after the wake phrase "Hey Faraday" (or answering Faraday's question back to the owner). `"visitor"`: from a listening window (doorbell, Faraday's question to a visitor). `null` for typed text (PLAN Q29) |
 
 ```json
@@ -161,11 +161,12 @@ Sent by `modes/` after every mode change. The dashboard shows it. The Flipper LE
 Sent by `modes/` when the alert level changes. `source` must be `modes`, and the validator rejects any other value. The AI and rules can't change the alert level, because no action exists for it.
 
 The rule, implemented in `modes/`:
-- The first `motion` while the mode is `away` or `night` moves the alert from `normal` to `warning` (amber on the dashboard, the LED stays off).
-- Another `motion` within 60 s of the last one moves it from `warning` to `alarm` (red on the dashboard, and the Flipper LED turns red and buzzes three times). The window is `alerts.alarm_window_s` in settings.
-- If the next motion comes later than that, the alert stays at `warning` and the 60 s window restarts. No event is sent, because the level doesn't change.
+- Motion while the mode is `away` or `night` and the alert is `normal` starts a grace period (`alerts.motion_grace_s`, 15 s). The porch light goes on at once; no event yet.
+- A `doorbell` within the grace period is a visitor: the pending warning is cancelled and the alert stays `normal`. After a doorbell, motion doesn't raise the alert for `alerts.visitor_quiet_s` (120 s).
+- No doorbell by the end of the grace period moves the alert from `normal` to `warning` (amber on the dashboard, the LED stays off). `caused_by` is the motion that started it. A `suspicious` threat label while armed does the same at once.
+- Motion at least `alerts.min_gap_s` (8 s) and at most `alerts.alarm_window_s` (60 s) after the warning, with no doorbell in between, moves it from `warning` to `alarm` (red on the dashboard, and the Flipper LED turns red and buzzes three times). Sooner is the same wave and is ignored. Later is a new walk-up: a new grace period, and if nobody rings, the warning steps run again, with no event because the level doesn't change. A doorbell press counts until about 2.5 s after the grace period, because the radio reports it when the burst ends.
 - Only the passphrase disarm returns the alert to `normal`. That disarm sends `mode_changed` (to `home`, `changed_by: "passphrase"`) and then `alert_changed` (to `normal`), and both have the same `caused_by`. The Flipper LED goes off again.
-- Motion in `home` mode and doorbell presses never change the alert level. Switching between `away` and `night` doesn't reset it.
+- Motion in `home` mode and doorbell presses at home never change the alert level. Switching between `away` and `night` doesn't reset it, but ends a visitor's quiet period and a pending warning.
 
 The validator allows only these steps: `normal→warning`, `warning→alarm`, `warning→normal`, `alarm→normal`. Because the event doesn't carry the passphrase, `modes/` is responsible for sending `→normal` only from the passphrase disarm.
 
@@ -191,7 +192,7 @@ The validator allows only these steps: `normal→warning`, `warning→alarm`, `w
 
 Sent by `brain/` right after a `photo_described`. It says what the scene at the door looks like. `caused_by` is the `photo_described` it judges, and `source` must be `brain`.
 
-**What the label may do.** It shapes what Faraday says: a delivery gets drop-off instructions, a visitor is offered to leave a message, and `suspicious` or `nobody` get no greeting. It's also shown on the dashboard and included in the summary. `suspicious` while armed may *escalate*: plain code in `modes/` raises the alert from `normal` to `warning`, and the confrontation line comes early.
+**What the label may do.** A photo itself is never answered (the doorbell greeting is fixed and spoken at the ring); the label shapes what Faraday says to a visitor afterwards (a delivery hears the owner's drop-off words). Walked up and rang with no warning signs is a visitor or a delivery; stayed at the door without ringing while armed is `suspicious`. It's also shown on the dashboard and included in the summary. `suspicious` while armed may *escalate*: plain code in `modes/` raises the alert from `normal` to `warning`, and the confrontation line comes early.
 
 **What it can never do:** lower an alert, turn lights off, change the mode or disarm. Code still guarantees the lights and alerts from the mode table. If Bonsai's answer is invalid, plain-code rules decide (`via: "rules"`).
 

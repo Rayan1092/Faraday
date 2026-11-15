@@ -4,7 +4,8 @@ import unittest
 from shared import AlertLevel, ActionType, EventType, Mode, Source, make_action, validate_action
 
 from rules import baseline_actions, merge
-from rules.baseline import DOORBELL_GREETING, ALARM_LINE, ANNOUNCE_DOORBELL, WARNING_LINE
+from modes import MotionOutcome as O
+from rules.baseline import DOORBELL_GREETING, ALARM_LINE, ANNOUNCE_DOORBELL, WARNING_LINE, warning_actions
 from sim import events
 
 N, W, A = AlertLevel.NORMAL, AlertLevel.WARNING, AlertLevel.ALARM
@@ -27,23 +28,32 @@ def steps(actions):
 class ModeTable(unittest.TestCase):
     """The mode table in PLAN.md, row by row. Lights escalate with the alert level."""
 
-    def check(self, make, mode, alert, want):
-        self.assertEqual(steps(baseline_actions(make(), mode, alert)), want, (make, mode, alert))
+    def check(self, make, mode, alert, want, outcome=None):
+        self.assertEqual(steps(baseline_actions(make(), mode, alert, outcome)), want, (make, mode, alert))
 
     def test_home(self):
         self.check(events.doorbell, Mode.HOME, N, [("speak", ANNOUNCE_DOORBELL)])  # announce only
         for alert in (N, W, A):
             self.check(events.motion, Mode.HOME, alert, [])                     # nothing
 
+    def test_armed_motion_is_porch_light_first(self):
+        """Owner 2026-11-15: motion turns the porch light on at once; the warning waits for
+        the grace period (no doorbell), and the alarm line is spoken in both modes."""
+        for mode in (Mode.AWAY, Mode.NIGHT):
+            for outcome in (O.GRACE, O.PENDING, O.QUIET, O.IGNORED):
+                self.check(events.motion, mode, N, [PORCH], outcome)
+            self.check(events.motion, mode, A, [PORCH, LAMP, PHOTO, ("speak", ALARM_LINE)], O.ALARM)
+            self.check(events.motion, mode, A, [PORCH, LAMP], O.NONE)        # alarm already on
+            motion = events.motion()
+            warn = warning_actions(motion.id, mode)
+            self.assertEqual(steps(warn), [PHOTO, ("speak", WARNING_LINE)])
+            self.assertEqual({a.caused_by for a in warn}, {motion.id})
+
     def test_away(self):
         self.check(events.doorbell, Mode.AWAY, N, [("speak", DOORBELL_GREETING), PHOTO])  # greeting at once
-        self.check(events.motion, Mode.AWAY, W, [PORCH, PHOTO, ("speak", WARNING_LINE)])
-        self.check(events.motion, Mode.AWAY, A, [PORCH, LAMP, PHOTO, ("speak", ALARM_LINE)])
 
-    def test_night_is_quiet(self):
+    def test_night_doorbell_is_quiet(self):
         self.check(events.doorbell, Mode.NIGHT, N, [PORCH, PHOTO])
-        self.check(events.motion, Mode.NIGHT, W, [PORCH, PHOTO])
-        self.check(events.motion, Mode.NIGHT, A, [PORCH, LAMP, PHOTO])
 
     def test_doorbell_ignores_alert_level(self):
         for alert in (N, W, A):
@@ -68,7 +78,8 @@ class ModeTable(unittest.TestCase):
 class Merge(unittest.TestCase):
     def setUp(self):
         self.motion = events.motion()
-        self.base = baseline_actions(self.motion, Mode.NIGHT, W)
+        self.base = (baseline_actions(self.motion, Mode.NIGHT, N, O.GRACE)
+                     + warning_actions(self.motion.id, Mode.NIGHT))
 
     def extra(self, kind, args):
         return make_action(kind, args, Source.BRAIN, caused_by=self.motion.id)

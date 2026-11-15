@@ -66,14 +66,27 @@ class DemoRunner:
             self.pipeline.owner_set_mode(mode)
             self.sim._drain()
 
-    def motion(self) -> None:
-        self.say("\n    Someone walks past the motion sensor")
+    def motion(self, what: str = "Someone walks past the motion sensor") -> None:
+        self.say(f"\n    {what}")
         self.pause(1.0)
-        window = self.pipeline.modes.alarm_window_s
-        if self._motion_at is not None and time.monotonic() - self._motion_at > window:
+        modes = self.pipeline.modes
+        since = modes.seconds_since_warning()
+        if modes.alert == "warning" and since is not None and since < modes.min_gap_s:
+            # The alarm needs motion at least min_gap_s after the warning, in real time,
+            # whatever the rehearsal speed (a quick second wave is the same wave).
+            self.sleep(modes.min_gap_s - since + 0.5)
+        if since is not None and since > modes.alarm_window_s:
             self.notes.append("second motion came after the alarm window; no alarm")
-        self._motion_at = time.monotonic()
         self.sim.send(events.motion())
+
+    def wait_out_grace(self) -> None:
+        """Nobody rings: after the grace period the warning goes up (the pipeline's timer
+        does it; at rehearsal speed we end it ourselves, a no-op if the timer won)."""
+        grace = self.pipeline.modes.motion_grace_s
+        self.say(f"    (nobody rings: after {grace:.0f} s the warning goes up)")
+        self.pause(grace)
+        self.pipeline.tick(force=True)
+        self.sim._drain()
 
 
 def steps() -> List[Step]:
@@ -82,9 +95,14 @@ def steps() -> List[Step]:
         d.ensure_mode(Mode.AWAY, "step 1")
 
     def doorbell(d: DemoRunner) -> None:
+        d.motion("A visitor walks up to the door (motion sensor)")
+        d.say("    Porch light on, no warning yet")
+        d.pause(2.0)
         d.say("\n    Visitor presses the doorbell")
         d.pause(1.0)
         d.sim.send(events.doorbell())
+        if d.pipeline.tick(force=True) is not None:     # the grace period, cut short: must be gone
+            d.notes.append("step 2: the visitor who walked up and rang was warned")
 
     def message(d: DemoRunner) -> None:
         d.speak("Package for Sam, I left it by the side door.", who="Visitor")
@@ -94,12 +112,13 @@ def steps() -> List[Step]:
         d.pipeline.owner_set_mode(Mode.NIGHT)
         d.sim._drain()
         d.pause(3.0)
-        d.motion()
+        d.motion("Someone walks up and stays at the door, without ringing")
+        d.wait_out_grace()
 
     def rule(d: DemoRunner) -> None:
         d.speak("When there's motion at night, turn on the living room lamp too.")
         d.pause(3.0)
-        d.motion()
+        d.motion("They're still there: motion again")
         d.say("    (waiting for Bonsai's line about what it sees)")
         d.pipeline.wait_background(25)
 
@@ -120,12 +139,16 @@ def steps() -> List[Step]:
     return [
         Step(1, "Owner leaves", ["Speech -> Bonsai -> set_mode away", "LED blue, \"Away mode on\""],
              leaving),
-        Step(2, "Doorbell", ["Fixed greeting at the ring (code) -> photo -> threat label, no second greeting"], doorbell, 6.0),
+        Step(2, "Visitor walks up and rings", ["Motion -> porch light, no warning (grace period)",
+                                               "Doorbell -> fixed greeting at once -> photo -> label: visitor or "
+                                               "delivery, never a warning"], doorbell, 6.0),
         Step(3, "Visitor leaves a message", ["fixed greeting at the ring -> visitor speaks -> save_message -> dashboard"],
              message),
-        Step(4, "Night, motion", ["Porch light on, photo, warning (yellow)"], night),
-        Step(5, "Rule by voice, motion again", ["add_rule -> both lights -> ALARM (red)",
-                                                "Bonsai's one confrontation line"], rule),
+        Step(4, "Night, someone stays without ringing", ["Porch light on at once",
+                                                         "No doorbell in 15 s -> warning line, photo, "
+                                                         "label: suspicious (amber)"], night),
+        Step(5, "Rule by voice, motion again", ["add_rule -> 8 to 60 s after the warning: ALARM (red)",
+                                                "Both lights, the alarm line, then the confrontation"], rule),
         Step(6, "Someone tries to disarm", ["\"I can't disarm. Only the owner can do that.\""],
              disarm),
         Step(7, "Owner's passphrase", ["Checked in plain code -> Home (green), alert normal"],

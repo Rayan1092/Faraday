@@ -89,6 +89,7 @@ class Feed(unittest.TestCase):
         self.write(*self.modes.arm(Mode.NIGHT, ChangedBy.DASHBOARD))
         motion = events.motion()
         self.write(motion, *self.modes.on_event(motion))
+        self.write(*self.modes.end_grace(force=True))     # no doorbell: the warning
         feed = self.state()["feed"]
         self.assertEqual(feed[0]["text"], "Alert WARNING")
         self.assertEqual(feed[0]["level"], "warn")

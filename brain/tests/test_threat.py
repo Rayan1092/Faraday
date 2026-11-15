@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 
-from shared import (ActionType, AlertLevel, ChangedBy, EventType, Mode, Source, ThreatCategory,
+from shared import (ActionType, AlertLevel, ChangedBy, Event, EventType, Mode, Source, ThreatCategory,
                     make_action, make_event, validate_event)
 
 from brain import threat
@@ -44,8 +44,10 @@ class Rules(unittest.TestCase):
         # someone who didn't ring while the house is armed
         self.assertEqual(threat.rules(ctx(COAT, cause="motion", doorbells=0))[0], C.SUSPICIOUS)
         self.assertEqual(threat.rules(ctx(COAT, Mode.HOME, cause="motion", doorbells=0))[0], C.VISITOR)
-        # a courier with a box who didn't ring is still a delivery
-        self.assertEqual(threat.rules(ctx(BOX, cause="motion", doorbells=0))[0], C.DELIVERY)
+        # owner 2026-11-15: stayed at the door without ringing while armed = suspicious,
+        # even with a box (a courier who rings is a delivery)
+        self.assertEqual(threat.rules(ctx(BOX, cause="motion", doorbells=0))[0], C.SUSPICIOUS)
+        self.assertEqual(threat.rules(ctx(BOX, cause="doorbell", doorbells=1))[0], C.DELIVERY)
 
 
 class Parsing(unittest.TestCase):
@@ -107,8 +109,8 @@ class Escalation(unittest.TestCase):
     def test_never_lowers_and_never_acts_otherwise(self):
         home = ModeState(PASSPHRASE)
         self.assertEqual(home.on_event(self.label(C.SUSPICIOUS)), [])          # not armed
-        s = ModeState(PASSPHRASE, mode=Mode.NIGHT)
-        s.on_event(events.motion()); s.on_event(events.motion())               # alarm
+        s = ModeState(PASSPHRASE, mode=Mode.NIGHT, min_gap_s=0)
+        s.on_event(events.motion()); s.end_grace(force=True); s.on_event(events.motion())   # alarm
         self.assertEqual(s.alert, AlertLevel.ALARM)
         for cat in C.ALL:
             self.assertEqual(s.on_event(self.label(cat)), [], cat)             # nothing lowers it
@@ -116,6 +118,33 @@ class Escalation(unittest.TestCase):
         calm = ModeState(PASSPHRASE, mode=Mode.AWAY)
         for cat in (C.DELIVERY, C.VISITOR, C.NOBODY):
             self.assertEqual(calm.on_event(self.label(cat)), [], cat)
+
+
+class Visits(unittest.TestCase):
+    """Review: a photo from motion counted any doorbell in the last 3 minutes, so someone
+    who stayed without ringing was "a visitor who rang" after an earlier visitor."""
+
+    def test_motion_photo_counts_only_doorbells_after_that_motion(self):
+        from datetime import datetime, timedelta
+        from shared import make_action
+        t0 = datetime.now().astimezone()
+
+        def at(event, seconds):
+            d = event.to_dict()
+            d["timestamp"] = (t0 + timedelta(seconds=seconds)).isoformat(timespec="milliseconds")
+            return d
+        earlier_bell = at(events.doorbell(), 0)
+        walk = events.motion()
+        shot = make_action(ActionType.TAKE_PHOTO, {"reason": "motion at night, no doorbell"},
+                           Source.RULES, caused_by=walk.id)
+        photo = events.photo_described(shot.id, "A man standing at the door.")
+        recent = [earlier_bell, at(walk, 40), at(shot, 58)]
+        ctx = threat.context_for(Event.from_dict(at(photo, 60)), Mode.NIGHT, recent)
+        self.assertEqual((ctx.cause, ctx.doorbells), ("motion", 0))
+        self.assertEqual(threat.rules(ctx)[0], C.SUSPICIOUS)
+        # a box doesn't change that: stayed without ringing while armed
+        ctx.description = "A courier holding a cardboard box at the door."
+        self.assertEqual(threat.rules(ctx)[0], C.SUSPICIOUS)
 
 
 class PipelineEffects(unittest.TestCase):
@@ -171,7 +200,9 @@ class PipelineEffects(unittest.TestCase):
 
     def test_label_never_changes_mode_lights_or_disarms(self):
         p = self.pipeline(Mode.NIGHT)
+        p.modes.min_gap_s = 0
         p.handle(events.motion())
+        p.tick(force=True)
         p.handle(events.motion())
         before = (p.modes.mode, p.modes.alert)
         for description in (BOX, COAT, EMPTY, MASK):

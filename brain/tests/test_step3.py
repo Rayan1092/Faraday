@@ -54,7 +54,7 @@ class Step3(unittest.TestCase):
         brain.client = client
         self.clock = Clock()
         self.emitted = []
-        return Pipeline(brain, ModeState(PASSPHRASE, 60, mode, self.clock),
+        return Pipeline(brain, ModeState(PASSPHRASE, 60, mode, self.clock, doorbell_settle_s=0),
                         EventLog(self.dir / "events.jsonl", PASSPHRASE),
                         on_action=self.emitted.append, say=lambda _m: None,
                         rules=RuleStore(self.dir / "rules.json"))
@@ -134,6 +134,8 @@ class Step3(unittest.TestCase):
 
     def _to_alarm(self, p):
         p.handle(events.motion())
+        self.clock.t += 15
+        p.tick()                                  # no doorbell in the grace period: warning
         self.clock.t += 10
         actions = p.handle(events.motion()).actions
         return next(a for a in actions if a.type == ActionType.TAKE_PHOTO), actions
@@ -164,8 +166,9 @@ class Step3(unittest.TestCase):
             if alarm:
                 photo, _ = self._to_alarm(p)
             else:
-                photo = next(a for a in p.handle(events.motion()).actions
-                             if a.type == ActionType.TAKE_PHOTO)
+                p.handle(events.motion())
+                self.clock.t += 15
+                photo = next(a for a in p.tick().actions if a.type == ActionType.TAKE_PHOTO)
             p.handle(events.photo_described(photo.id))
             p.wait_background(5)
             self.assertEqual(client.calls, calls, (mode, alarm))
@@ -185,13 +188,31 @@ class Step3(unittest.TestCase):
         self.assertEqual(len(self.emitted), before)
         self.assertNotIn("Step back", p.log.path.read_text(encoding="utf-8"))
 
-    def test_confrontation_failure_is_silent(self):
+    def test_confrontation_failure_uses_the_code_line(self):
+        """Mac test: a Night alarm said nothing when Bonsai's line was unusable. Now the
+        alarm line is spoken by code at once, and code's own line replaces Bonsai's."""
+        for mode in (Mode.AWAY, Mode.NIGHT):
+            p = self.pipeline(SlowClient("", delay=0), mode)
+            photo, actions = self._to_alarm(p)
+            self.assertIn(ALARM_LINE, [a.args.get("text") for a in actions])
+            before = len(self.emitted)
+            p.handle(events.photo_described(photo.id, "A man in a dark jacket by the window."))
+            p.wait_background(5)
+            new = [a.args.get("text") for a in self.emitted[before:]]
+            self.assertEqual(new, ["You are on camera. I can see a man in a dark jacket by the window. "
+                                   "Please leave now."], mode)
+
+    def test_no_code_line_when_the_camera_failed(self):
         p = self.pipeline(SlowClient("", delay=0), Mode.AWAY)
         photo, _ = self._to_alarm(p)
         before = len(self.emitted)
-        p.handle(events.photo_described(photo.id))
+        from shared import EventType as _E, make_event
+        from shared.events import PhotoDescribedData
+        p.handle(make_event(_E.PHOTO_DESCRIBED, PhotoDescribedData(photo_path="captures/photos/x.jpg",
+                                                                   description="Photo saved."),
+                            Source.CAMERA, caused_by=photo.id))     # vision failed (NV camera worker)
         p.wait_background(5)
-        self.assertEqual(len(self.emitted), before)
+        self.assertEqual([a for a in self.emitted[before:] if a.type == ActionType.SPEAK], [])
 
 
 class _Tools:

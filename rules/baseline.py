@@ -4,6 +4,13 @@ Lights, photos and the fixed warning lines for doorbell and motion always
 happen, even if Bonsai is slow, wrong or down. Lights escalate with the alert
 level that modes/ has just set. The brain adds speech and judgment on top, and
 merge() drops anything it repeats.
+
+Motion while armed (owner, 2026-11-15): the porch light goes on at once, and that's
+all until modes/ decides. A visitor who walks up and rings is never warned.
+- No doorbell within the grace period: warning_actions() (photo + warning line),
+  run by the pipeline when modes/ raises the warning.
+- Motion again 8 to 60 s after the warning: the alarm steps (both lights, photo,
+  the alarm line), in Away and in Night.
 """
 from __future__ import annotations
 
@@ -12,6 +19,8 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from shared import (Action, ActionType, AlertLevel, ChangedBy, Event, EventType, Mode, Outlet,
                     Source, make_action)
+
+from modes.state import MotionOutcome
 
 ANNOUNCE_DOORBELL = "Someone is at the door."
 # Away: spoken by code the moment the doorbell rings, then the visitor's listening
@@ -36,31 +45,50 @@ DOORBELL: Dict[str, List[Step]] = {
     Mode.NIGHT: [_PORCH, (_PHOTO, {"reason": "doorbell at night"})],  # quiet: no speech
 }
 
-# Motion: (mode, alert level after this motion) -> steps. Keep in sync with PLAN.md.
-MOTION: Dict[Tuple[str, str], List[Step]] = {
-    (Mode.AWAY, AlertLevel.WARNING): [_PORCH, (_PHOTO, {"reason": "motion while away"}),
-                                      (_SAY, {"text": WARNING_LINE})],
-    (Mode.AWAY, AlertLevel.ALARM): [_PORCH, _LAMP, (_PHOTO, {"reason": "alarm while away"}),
-                                    (_SAY, {"text": ALARM_LINE})],
-    (Mode.NIGHT, AlertLevel.WARNING): [_PORCH, (_PHOTO, {"reason": "motion at night"})],
-    (Mode.NIGHT, AlertLevel.ALARM): [_PORCH, _LAMP, (_PHOTO, {"reason": "alarm at night"})],
-}
+# Motion while armed, by what modes/ made of it (MotionOutcome). Keep in sync with PLAN.md.
+_WHERE = {Mode.AWAY: "while away", Mode.NIGHT: "at night"}
+ALARM_STEPS: Dict[str, List[Step]] = {
+    m: [_PORCH, _LAMP, (_PHOTO, {"reason": f"alarm {where}"}), (_SAY, {"text": ALARM_LINE})]
+    for m, where in _WHERE.items()}
+# When the grace period ends with no doorbell (modes/ end_grace -> warning).
+WARNING_STEPS: Dict[str, List[Step]] = {
+    m: [(_PHOTO, {"reason": f"motion {where}, no doorbell"}), (_SAY, {"text": WARNING_LINE})]
+    for m, where in _WHERE.items()}
 
 
-def steps_for(event_type: str, mode: str, alert: str) -> List[Step]:
+def motion_steps(mode: str, outcome: Optional[str], alert: str = AlertLevel.NORMAL) -> List[Step]:
+    if mode not in Mode.ARMED:
+        return []                                      # home: nothing
+    if outcome is None:                                # no outcome given: from the alert alone
+        outcome = MotionOutcome.ALARM if alert == AlertLevel.ALARM else MotionOutcome.GRACE
+    if outcome == MotionOutcome.ALARM:
+        return ALARM_STEPS[mode]
+    if outcome == MotionOutcome.NONE:
+        return [_PORCH, _LAMP]                         # the alarm is already on
+    return [_PORCH]                                    # grace, pending, quiet, ignored
+
+
+def steps_for(event_type: str, mode: str, alert: str, outcome: Optional[str] = None) -> List[Step]:
     if event_type == EventType.DOORBELL:
         return DOORBELL.get(mode, [])
     if event_type == EventType.MOTION:
-        return MOTION.get((mode, alert), [])  # home, or armed with no alert: nothing
+        return motion_steps(mode, outcome, alert)
     return []
 
 
-def baseline_actions(event: Event, mode: str,
-                     alert: Optional[str] = AlertLevel.NORMAL) -> List[Action]:
-    """The guaranteed actions for this event, given the mode and the alert level
-    modes/ set for it (motion while armed is always warning or alarm)."""
+def baseline_actions(event: Event, mode: str, alert: Optional[str] = AlertLevel.NORMAL,
+                     outcome: Optional[str] = None) -> List[Action]:
+    """The guaranteed actions for this event, given the mode, the alert level modes/
+    set for it, and for motion what modes/ made of it (modes.MotionOutcome)."""
     return [make_action(kind, args, Source.RULES, caused_by=event.id)
-            for kind, args in steps_for(event.type, mode, alert or AlertLevel.NORMAL)]
+            for kind, args in steps_for(event.type, mode, alert or AlertLevel.NORMAL, outcome)]
+
+
+def warning_actions(motion_id: Optional[str], mode: str) -> List[Action]:
+    """Photo + warning line when a grace period ends with no doorbell, caused by the
+    motion that started it (so the threat label knows nobody rang)."""
+    return [make_action(kind, args, Source.RULES, caused_by=motion_id)
+            for kind, args in WARNING_STEPS.get(mode, [])]
 
 
 def lights_off_on_disarm(event: Event, entries: Iterable[dict]) -> List[Action]:
