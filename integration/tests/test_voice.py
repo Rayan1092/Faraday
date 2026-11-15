@@ -132,6 +132,36 @@ class Windows(Base):
         v.on_said("Hello, I'm Faraday.")                   # no "?" but a doorbell is pending
         self.assertTrue(wait_until(lambda: v.windows_opened == 1))
 
+    def test_doorbell_without_a_greeting_opens_the_window_soon(self):
+        """Found by the rehearsal: Dell's doorbell flow doesn't greet a repeat ring, and
+        the window used to wait 10 s, losing a visitor who spoke at once."""
+        v = self.voice(FakeSTT("Me again, I forgot to say it's fragile."))
+        t0 = time.monotonic()
+        v.on_doorbell()                                    # nothing will be said
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1, timeout=5))
+        self.assertLess(time.monotonic() - t0, 3.5)
+        self.assertTrue(any("listening (doorbell)" in s for s in self.said))
+
+    def test_doorbell_still_waits_for_a_greeting_being_written(self):
+        v = self.voice(FakeSTT("Hello?"))
+        self.busy = True                                   # the 9B is writing the greeting
+        v.on_doorbell()
+        time.sleep(3.0)
+        self.assertEqual(v.windows_opened, 0)
+        self.busy = False
+        v.on_said("Hello. No one can come to the door right now.")
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+
+    def test_wake_phrase_inside_a_visitor_window_is_the_owner(self):
+        """Found by the rehearsal: "Hey Faraday, <passphrase>" said while a visitor window
+        was open came out as visitor speech with the phrase still in it."""
+        v = self.voice(FakeSTT("Hey Faraday, turn off the porch light."))
+        v.listen_once("doorbell")
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        self.say(("speech", 1.2), ("quiet", 2.5))
+        ev = self.events()[0]
+        self.assertEqual((ev.data["text"], ev.data["channel"]), ("turn off the porch light.", "owner"))
+
     def test_window_waits_until_faraday_has_finished_plus_a_moment(self):
         """Owner: it opened while Faraday was still talking. Now: not while a line
         is queued or being made (busy), and only after_speech_s after unmute."""

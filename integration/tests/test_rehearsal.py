@@ -149,7 +149,7 @@ class Rehearsal(unittest.TestCase):
         s["camera"].update(alarm_record_s=1.0, idle_s=30, stream_fps=20)
         s["paths"] = {"captures": str(self.tmp / "captures"), "logs": str(self.tmp / "logs")}
         s["dashboard"] = dict(s.get("dashboard", {}), port=0)
-        s["integration"] = {"fake_flipper": True, "lights_off_at_start": True}
+        s["integration"] = {"lights_off_at_start": True}
         for key in ("mac", "windows"):            # no real diarize/TTS command on this machine
             s.get("stt", {}).get(key, {}).pop("diarize", None)
         self.settings = s
@@ -164,8 +164,10 @@ class Rehearsal(unittest.TestCase):
         self.stt = ToneSTT(self.lines)
         self.mic = LiveMic(speed=4.0)
         self.fl = FakeFlipper(s, charge_poll_s=0)
-        args = argparse.Namespace(fake=True, log=str(self.tmp / "logs" / "events.jsonl"),
-                                  standin_camera=False, print_speech=False, offline=True,
+        # The lamps were left on by an earlier session. The startup "off" turns each
+        # of them off (the fake toggles on every code, like the real outlets may).
+        self.fl.device.outlet_lit = {1: True, 2: True, 3: True}
+        args = argparse.Namespace(log=str(self.tmp / "logs" / "events.jsonl"), offline=True,
                                   mode=Mode.HOME, no_dashboard=False, port=0, no_mic=False,
                                   no_wake=False, no_controls=False, controls_port=0,
                                   no_detect=False, fresh=False)
@@ -183,6 +185,10 @@ class Rehearsal(unittest.TestCase):
         self.app.out = self.out.append
 
     def tearDown(self):
+        import os
+        dump = os.environ.get("FARADAY_REHEARSAL_DUMP")      # debugging: the whole console
+        if dump:
+            Path(dump).write_text("\n".join(self.out + ["--- said ---"] + self.said), encoding="utf-8")
         try:
             self.app.stop()
         finally:
@@ -217,6 +223,7 @@ class Rehearsal(unittest.TestCase):
         app.voice.start_wake()
         self.step("flipper connected", fl.connected.is_set, 5)
         self.step("all lights off at start", lambda: fl.device.tx[:3] == ["outlet1_off", "outlet2_off", "outlet3_off"])
+        self.step("the lamps really are off", lambda: not any(fl.device.outlet_lit.values()))
         self.quiet()
 
         # 1. The owner leaves: "Hey Faraday, I'm heading out." -> Away
@@ -250,8 +257,12 @@ class Rehearsal(unittest.TestCase):
         n_alerts = len(self.events("alert_changed"))
         fl.device.wave(packets=4, gap_s=0.05)
         time.sleep(0.6)
+        n_windows = sum("listening (doorbell)" in s for s in self.out)
         fl.device.press_doorbell()
-        time.sleep(1.0 + 1.3 + 1.0)                                       # grace + settle + margin
+        # a repeat ring gets no greeting: the visitor's window still opens within ~2 s
+        self.step("window after a ring with no greeting", lambda: sum(
+            "listening (doorbell)" in s for s in self.out) > n_windows, 5)
+        time.sleep(1.0 + 1.3)                                             # grace + settle
         self.assertEqual(len(self.events("alert_changed")), n_alerts, "a visitor who walks up and rings is never warned")
         self.assertEqual(modes.alert, "normal")
         self.quiet()
@@ -275,6 +286,8 @@ class Rehearsal(unittest.TestCase):
         # 5. The owner disarms with the passphrase (a wake request, in one breath)
         self.speak(540, 1.6)
         self.step("passphrase disarms", lambda: modes.mode == Mode.HOME and modes.alert == "normal")
+        disarm = [e for e in self.events("speech_heard") if "[passphrase]" in e["data"]["text"]][-1]
+        self.assertEqual(disarm["data"]["channel"], "owner", "the owner's wake request, even in a visitor window")
         self.step("lights off after disarm", lambda: not fl.device.outlet_lit[1] and not fl.device.outlet_lit[2])
         self.step("LED off", lambda: fl.device.rgb == [0, 0, 0])
         self.assertFalse(any(self.passphrase in json.dumps(e) for e in self.log()),
@@ -287,9 +300,12 @@ class Rehearsal(unittest.TestCase):
         self.step("summary request heard", lambda: any(
             "what happened" in e["data"]["text"].lower() for e in self.events("speech_heard")))
         ask = [e for e in self.events("speech_heard") if "what happened" in e["data"]["text"].lower()][-1]
-        self.step("summary spoken", lambda: any(
-            e["kind"] == "action" and e["type"] == "speak" and e.get("caused_by") == ask["id"]
-            for e in self.log()))
+        def summary_spoken():
+            entries = self.log()
+            causes = {ask["id"]} | {e["id"] for e in entries if e.get("caused_by") == ask["id"]}
+            return any(e["kind"] == "action" and e["type"] == "speak" and e.get("caused_by") in causes
+                       for e in entries)
+        self.step("summary spoken", summary_spoken)
         self.assertGreater(len(self.said), n_said)
         self.quiet()
 

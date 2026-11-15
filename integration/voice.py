@@ -45,7 +45,8 @@ log = logging.getLogger("integration.voice")
 DEFAULT_WAKE = "hey faraday"
 WAKE_SILENCE_S = 0.7          # a pause this long ends a wake segment
 WAKE_MAX_S = 10.0
-DOORBELL_FALLBACK_S = 10.0    # open the window even if Faraday never greeted (9B is slow)
+DOORBELL_FALLBACK_S = 2.0     # no greeting coming (Faraday has nothing to say): open after this
+DOORBELL_BUSY_POLL_S = 0.5    # a greeting is being written or spoken: check again
 DOORBELL_RETRY_S = 1.0        # a doorbell window refused (another window open): try again
 DOORBELL_GIVE_UP_S = 30.0
 OWNER_NEXT_S = 15.0           # after "Hey Faraday" alone, the next segment within this is the request
@@ -184,7 +185,10 @@ class Voice:
         return took
 
     def on_doorbell(self) -> None:
-        """A visitor rang: listen after the greeting, or after 10 s regardless."""
+        """A visitor rang: listen after the greeting. If Faraday says nothing (Dell's
+        doorbell flow doesn't greet a repeat ring, Night is quiet), the window opens
+        about 2 s after the ring, as soon as Faraday is idle (found by the rehearsal:
+        a 10 s wait lost a visitor who spoke right after ringing)."""
         self._pending_doorbell = True
         self._doorbell_since = time.monotonic()
         self._arm_doorbell(DOORBELL_FALLBACK_S)
@@ -347,6 +351,9 @@ class Voice:
     def _doorbell_fallback(self) -> None:
         if not self._pending_doorbell or self._stop.is_set():
             return
+        if self.busy() and time.monotonic() - self._doorbell_since < DOORBELL_GIVE_UP_S:
+            self._arm_doorbell(DOORBELL_BUSY_POLL_S)   # the greeting is coming: on_said opens it
+            return
         if self._visitor_window("doorbell"):
             self._pending_doorbell = False
         elif time.monotonic() - self._doorbell_since < DOORBELL_GIVE_UP_S:
@@ -498,6 +505,15 @@ class Voice:
         if channel == OWNER and check is None:
             check = self._start_voice_check(wav)        # alongside STT (display only)
         text = text_override if text_override is not None else self.stt.transcribe(wav)
+        if text and channel == VISITOR and text_override is None and self.wake_enabled:
+            rest = strip_wake(text, self.wake_phrase)
+            if rest == "":                     # just "Hey Faraday" in a visitor window
+                self.out("  [wake] yes? (heard in a visitor window)")
+                self.listen_once("wake", purpose=OWNER)
+                return
+            if rest is not None:               # "Hey Faraday, ..." while a visitor window was open
+                self.out("  [wake] owner request heard (in a visitor window)")
+                text, channel = rest, OWNER
         if not text:
             self.out("  [stt] no words recognized" + ("" if self.stt.available
                                                       else " (no STT on this OS)"))
