@@ -135,7 +135,9 @@ class ThroughThePipeline(unittest.TestCase):
             self.make(mode, brain_reply=tool_calls(("save_message", {"text": "a piece of paper"})))
             r = self.owner("A piece of paper.")
             self.assertNotIn(ActionType.SAVE_MESSAGE, kinds(r.actions), mode)
-            self.assertEqual(said(r.actions), [lines.SORRY], mode)
+            # Owner, Mac test: the new help line at Home; while armed a neutral line
+            # (a wrong passphrase sounds like this too), never about a passphrase.
+            self.assertEqual(said(r.actions), [lines.SORRY if mode == Mode.HOME else lines.ARMED_NO_CHANGE], mode)
             self.assertEqual(self.client.calls, [], mode)     # never the visitor conversation
 
     def test_cut_off_instruction_asks_to_repeat(self):

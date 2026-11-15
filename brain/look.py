@@ -5,9 +5,11 @@ Plain code, no AI for the decision:
   "is anyone outside?").
 - The pipeline answers "Checking the camera.", takes a FRESH photo (a take_photo with
   source dashboard, like the Snapshot button) and waits for its description.
-- look_line() is what Faraday says: the 9B vision description (NV's camera worker)
-  plus the threat label in words. If the camera or vision failed, or nothing came
-  back in time: "I can't see the door right now."
+- look_line() is what Faraday says: how many people the detector counted, plus the
+  threat label in words ("One person is at the front door. It looks like a
+  delivery."). Never the description: spoken lines never describe the person (owner,
+  Mac test); the description is on the dashboard. If the camera failed, or nothing
+  came back in time: "I can't see the door right now."
 """
 from __future__ import annotations
 
@@ -16,7 +18,7 @@ from typing import Optional
 
 from shared import Event, Source
 
-from .lines import CANT_SEE, LABEL_WORDS, LOOKING  # noqa: E402,F401  (one tone, brain/lines.py)
+from .lines import CANT_SEE, LABEL_WORDS, LOOKING, NOBODY_AT_DOOR  # noqa: E402,F401  (one tone)
 LOOK_REASON = "Owner asked who's at the door"
 MAX_DESCRIPTION = 190
 
@@ -60,16 +62,29 @@ def short_description(text: str, limit: int = MAX_DESCRIPTION) -> str:
     return cut[:end + 1] if end > 40 else cut.rsplit(" ", 1)[0] + "."
 
 
+_COUNT = {1: "One person is", 2: "Two people are", 3: "Three people are", 4: "Four people are"}
+
+
+def people_line(photo: Event) -> str:
+    """How many people the detector counted (a visible face counts too), in words."""
+    data = photo.data or {}
+    people, faces = data.get("people"), data.get("faces")
+    if not isinstance(people, int):
+        return "Someone is at the front door."
+    n = max(people, faces if isinstance(faces, int) else 0)
+    if n == 0:
+        return NOBODY_AT_DOOR
+    return f"{_COUNT.get(n, f'{n} people are')} at the front door."
+
+
 def look_line(photo: Event, category: Optional[str]) -> str:
-    """What Faraday says back: the description plus the label, or CANT_SEE."""
+    """What Faraday says back: the people count plus the label, or CANT_SEE. Only facts
+    from code: never the description, never an object (owner, Mac test)."""
     if photo_failed(photo):
         return CANT_SEE
-    desc = short_description(photo.data.get("description", ""))
-    if desc and desc[-1] not in ".!?":
-        desc += "."
-    tail = LABEL_WORDS.get(category or "", "")
-    said = desc.lower()
-    if tail and (tail.lower().rstrip(".") in said
-                 or (category == "nobody" and re.search(r"\b(nobody|no one|empty)\b", said))):
-        tail = ""          # "Nobody is there. Nobody is there." says it twice
-    return f"{desc} {tail}".strip()
+    if category == "nobody":
+        return NOBODY_AT_DOOR
+    first = people_line(photo)
+    if first == NOBODY_AT_DOOR:
+        return NOBODY_AT_DOOR
+    return f"{first} {LABEL_WORDS.get(category or '', '')}".strip()
