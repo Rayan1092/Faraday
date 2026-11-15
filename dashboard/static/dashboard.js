@@ -262,7 +262,10 @@
     }
   }
 
+  let lastNotes = [null, []];
+
   function renderNotes(summary, messages) {
+    lastNotes = [summary, messages];
     const box = $("summary");
     box.hidden = !summary;
     if (summary) box.textContent = summary.text;
@@ -270,12 +273,21 @@
     const list = $("messages");
     list.replaceChildren();
     if (!messages.length) list.append(el("li", "empty", "No messages."));
-    for (const m of messages) {
-      const li = el("li", "", m.text);
-      li.append(el("span", "meta", m.sender + " · " + m.time));
+    for (const m of messages) {            // newest first
+      const li = el("li");
+      li.append(el("span", "msg-text", m.text), el("span", "meta", m.sender + " · " + m.time));
       list.append(li);
     }
+    // Only whole messages: drop the oldest until the rest fit. If the newest alone is
+    // still too tall, clamp its text so its sender and time stay visible.
+    while (list.children.length > 1 && list.scrollHeight > list.clientHeight + 1) {
+      list.lastElementChild.remove();
+    }
+    if (list.firstElementChild && list.scrollHeight > list.clientHeight + 1) {
+      list.firstElementChild.classList.add("clamp");
+    }
   }
+  window.addEventListener("resize", () => renderNotes(lastNotes[0], lastNotes[1]));
 
   // ---- polling -----------------------------------------------------------------
 
