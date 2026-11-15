@@ -53,6 +53,7 @@ from typing import Any, Callable, Deque, Dict, Optional, Tuple
 from shared import Event, EventType, Mode, Source, SpeechHeardData, make_event
 
 from hardware.camera import relative
+from brain.fallback import is_closing
 
 log = logging.getLogger("integration.voice")
 
@@ -73,6 +74,9 @@ DOORBELL_GIVE_UP_S = 30.0
 OWNER_NEXT_S = 15.0           # after "Hey Faraday" alone, the next segment within this is the request
 REQUEST_GIVE_UP_S = 20.0      # a window that can't open (mic busy/broken) is dropped after this
 OWNER, VISITOR = "owner", "visitor"
+ECHO_WINDOW_S = 10.0          # a transcript matching what Faraday said this recently ...
+ECHO_OVERLAP = 0.6            # ... in this share of its words is Faraday's own voice
+DELIVERED = "let the owner know it arrived"     # the end of the delivery reply (brain/core.py)
 
 
 def wake_pattern(phrase: str = DEFAULT_WAKE) -> "re.Pattern[str]":
@@ -138,6 +142,11 @@ class Voice:
         self._request_at = 0.0
         self._wake_on = False
         self._owner_ids: Deque[str] = collections.deque(maxlen=20)   # owner speech_heard ids
+        # Owner, Mac: the side-door line looped. What Faraday said lately (an echo of it is
+        # dropped), and the delivery visit winding down after the delivery reply.
+        self._said_recent: Deque[Tuple[float, str]] = collections.deque(maxlen=20)
+        self._after_delivery = False
+        self._visit_closed = False
         self._seq = 0                              # wake segments, numbered as they end
         self._owner_next_seq: Optional[int] = None # "Hey Faraday" alone: this segment is the request
         self._chime_on_open = False                # chime when the queued owner window opens
@@ -184,6 +193,11 @@ class Voice:
         window (no wake phrase needed), "visitor" a visitor window; it wins over
         everything else, a pending doorbell included."""
         text = (text or "").strip()
+        self._said_recent.append((time.monotonic(), text))      # for the echo check
+        if DELIVERED in text.lower():
+            self._after_delivery = True        # the courier was told where: the visit winds down
+        if listen != OWNER and self._visit_closed:
+            return                             # the visit is over: no visitor window until a ring
         if listen == OWNER:
             # a pending doorbell waits for this window (its retries don't take it over)
             if self.listen_once("question", purpose=OWNER):
@@ -242,6 +256,7 @@ class Voice:
         a 10 s wait lost a visitor who spoke right after ringing)."""
         self._pending_doorbell = True
         self._doorbell_since = time.monotonic()
+        self._after_delivery = self._visit_closed = False      # a new ring: a new visit
         if self._armed():                                 # the visit: only while armed
             if not self.visiting():
                 self._ring_at = self._doorbell_since      # a new visit (a repeat ring keeps its start)
@@ -456,6 +471,8 @@ class Voice:
             return
         if not spoke or wav is None:
             self.out("  [mic] nobody spoke")
+            if purpose == VISITOR and self._after_delivery:
+                self.end_visit("silence after the delivery reply")
             return
         self.out(f"  [mic] heard {seconds:.1f} s of speech")
         threading.Thread(target=self._transcribe, args=(wav, seconds),
@@ -666,6 +683,12 @@ class Voice:
             self.out("  [stt] no words recognized" + ("" if self.stt.available
                                                       else " (no STT on this OS)"))
             return
+        if channel == VISITOR and len(text.split()) >= 3 and self.is_echo(text):   # an owner's "yes, talk to them" isn't one
+            self.out(f"  [echo] ignored, Faraday's own words: {text[:60]!r}")
+            return
+        if channel == VISITOR and self._visit_closed:
+            self.out("  [visit] over (delivery done): not a visitor reply")
+            return
         data: Dict[str, Any] = {"text": text, "audio_path": relative(wav),
                                 "duration_s": round(seconds, 2), "channel": channel}
         if voices_thread is not None:
@@ -696,3 +719,26 @@ class Voice:
         self.out(f"  [stt] heard {len(text.split())} word(s) ({channel})"
                  + (f", {data['voices']} voice(s)" if "voices" in data else ""))
         self.submit(event)
+        if channel == VISITOR and self._after_delivery and is_closing(text):
+            self.end_visit("the visitor said goodbye")   # at most "You're welcome." (brain), then over
+
+    def is_echo(self, text: str, now: Optional[float] = None) -> bool:
+        """60% or more of the words heard were in what Faraday said in the last 10 s
+        (a Bluetooth speaker plays on after the mic opens: owner, Mac)."""
+        now = time.monotonic() if now is None else now
+        heard = re.findall(r"[a-z']+", text.lower())
+        if not heard:
+            return False
+        for at, said in self._said_recent:
+            if now - at <= ECHO_WINDOW_S:
+                words = set(re.findall(r"[a-z']+", said.lower()))
+                if words and sum(w in words for w in heard) >= ECHO_OVERLAP * len(heard):
+                    return True
+        return False
+
+    def end_visit(self, why: str) -> None:
+        """No more visitor windows until the next doorbell."""
+        self._visit_until = 0.0
+        self._visit_closed = True
+        self._after_delivery = False
+        self.out(f"  [visit] over: {why}")
