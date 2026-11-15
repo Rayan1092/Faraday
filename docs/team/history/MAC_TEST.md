@@ -28,11 +28,11 @@ Every other new setting already has the right default in the code. The full file
 1. `cd ~/Faraday && git pull`. This also brings the two detection model files (about 20 MB, in `hardware/models/`).
 2. Make the two settings edits above.
 3. Pick the voice:
-   - `python3 -m hardware.tts_audition`. Its first 1.7B take downloads that model.
-   - Listen to the numbered takes. Note the time it prints per model: that is the 1.7B latency.
-   - `python3 -m hardware.tts_audition --pick N`, then paste the `"voice"` line it prints into settings.json.
+   - `python3 -m hardware.tts_audition`. Take 10, the first 1.7B take, downloads that model.
+   - Listen to the numbered takes. The 1.7B latency is **take 11's** time (take 10's includes the download); the 0.6B takes are 1-9.
+   - `python3 -m hardware.tts_audition --pick N`, then **replace** the `"voice"` line from edit 2 with the line it prints (don't keep both).
 4. Download the diarization models: `argmax-cli diarize --audio-path captures/tts_audition/take01.wav`, once.
-5. If step 8 later warns that OpenCV is older than 4.7, run `pip3 install -U opencv-python` now, while Wi-Fi is still on.
+5. `python3 -c 'import cv2; print(cv2.__version__)'`. If it is older than 4.7, run `pip3 install -U opencv-python` now, while Wi-Fi is still on (object detection needs 4.7).
 
 ## With Wi-Fi OFF
 
@@ -44,17 +44,17 @@ Every other new setting already has the right default in the code. The full file
    - **Startup output:** every line OK, including "object detection model present" and "OpenCV".
    - **Lamps:** lamps that were off must stay off. If one turns ON, set `"lights_off_at_start": false` under `"integration"`.
 9. Open the Controls page at `http://127.0.0.1:8081/` and walk into view. You should see a labelled "person" box.
-10. Ring the doorbell.
+10. Arm **Away** (console key `2`), keep away from the motion sensor, then ring the doorbell. (In Home the doorbell only says "Someone is at the door." and takes no photo; the greeting, the photo and the visitor window are Away.)
     - "[mic] listening (doorbell)" appears only after the greeting has finished.
     - Answer with a 1-second pause mid-sentence: one transcript, not two.
     - Another time, stay silent: the window closes after about 8 s.
-11. The wake phrase:
+11. The wake phrase (works while armed too):
     - "Hey Faraday, what happened while I was out?" in one breath: a reply, no chime.
     - "Hey Faraday." then wait: a chime, then say your request.
     - Plain "Faraday": nothing happens.
-12. `python3 -m log.check logs/events.jsonl --last 20`. Check `channel`:
-    - your requests show `owner`
-    - the visitor's replies show `visitor`
+12. `grep -E '"(speech_heard|photo_described)"' logs/events.jsonl | tail -n 10` (whole lines; `log.check` cuts them at 80 characters). Check:
+    - your requests show `"channel": "owner"`
+    - the visitor's replies show `"channel": "visitor"`
     - the doorbell photo shows `people`, `faces` and `detections`
 13. The voice across several lines: the same Aiden every time, not rushed. Fixed lines are instant: watch for "[tts] … fixed line(s) rendered" at startup.
 14. Hold to talk on the Controls page, then release. "[mic] listening (intercom)" appears, and the visitor's reply is heard.
