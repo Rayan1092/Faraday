@@ -41,6 +41,12 @@ Notes:
 - **Reply after `photo_described`:** traced through `caused_by` (`photo_described` → `take_photo` → event). Only a doorbell photo in Away gets a greeting. If Bonsai's reply never mentions a message, code adds "Would you like to leave a message?". Motion photos and anything at Night get no reply.
 - **Never waits for Bonsai:** motion and the doorbell are handled entirely in plain code.
 - **"One moment, please.":** said by plain code while Bonsai thinks about a visitor (speech while armed, or the photo after a doorbell).
+- **Threat label:** after each photo description, the fast Bonsai classifies the scene as delivery, visitor, suspicious or nobody (`brain/threat.py`). Code validates the answer, and rules decide if Bonsai can't. The label shapes speech:
+  - a delivery gets drop-off instructions,
+  - a visitor is offered to leave a message,
+  - `suspicious` or `nobody` get no greeting.
+
+  `suspicious` while armed raises the alert to warning and brings the confrontation forward. It can never lower safety.
 - **What a speaker may ask for depends on the mode:**
   - Home (the owner): arm, lights, rules, "what happened?".
   - Away (a visitor): messages and talk only.
@@ -106,6 +112,15 @@ A step is only signed off once it has been tested on real hardware. Sim and stan
 6. **New ideas go in PLAN.md first.** Add them to Open Questions or the step table and agree on them before building. Nothing gets built just because it would be cool.
 7. **Handoff after every task:** a note in `docs/team/history/` (see the README there).
 8. **Git identity:** commit as the configured user. No Claude attribution anywhere (see CLAUDE.md).
+
+## Cross-laptop hooks and fields
+
+Agreed fields and hooks between Dell and NV code. Add a row before building anything that crosses the seam.
+
+| What | Owner | Status | Notes |
+|---|---|---|---|
+| `threat_assessed` event | Dell (brain/) | Built, Dell PR "threat" | FORMATS.md. Sent after every `photo_described`. Category `delivery` / `visitor` / `suspicious` / `nobody` plus a reason. Shapes speech. `suspicious` while armed raises normal to warning in `modes/` and brings the confrontation forward. It never lowers an alert, switches lights off, changes the mode or disarms |
+| `speech_heard.voices` (int or null) | NV (diarization) | Agreed, not built | The voice count from Argmax diarization. Needs a FORMATS.md / `shared/` change when NV adds it. Dell's threat label already reads it if present (`Pipeline._recent_voices`) |
 
 ## Open Questions
 

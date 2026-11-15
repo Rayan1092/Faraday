@@ -131,6 +131,7 @@
       $("photo-text").textContent = photo.description || "No description.";
       $("photo-meta").textContent = photo.time + (photo.reason ? " · " + photo.reason : "");
     }
+    renderThreat(photo && photo.threat);
     if (key === lastPhotoKey) return;
     lastPhotoKey = key;
     if (!photo || !photo.url) return showPhoto(null);
@@ -139,6 +140,17 @@
     probe.onload = () => showPhoto(src);
     probe.onerror = () => showPhoto(null);
     probe.src = src;
+  }
+
+  function renderThreat(threat) {
+    const box = $("threat");
+    box.replaceChildren();
+    box.className = "threat" + (threat ? " cat-" + threat.category : "");
+    if (!threat) return;
+    const pill = el("span", "threat-pill");
+    pill.append(el("span", "threat-dot"), el("span", "threat-name", threat.name));
+    box.append(pill);
+    if (threat.reason) box.append(el("span", "threat-reason", threat.reason));
   }
 
   function showPhoto(src) {

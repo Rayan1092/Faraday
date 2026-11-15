@@ -23,7 +23,7 @@ import time
 from typing import Callable, List, Optional, Tuple
 
 from shared import (AlertLevel, ChangedBy, Event, EventType, Mode, Source,
-                    make_event)
+                    ThreatCategory, make_event)
 
 from .passphrase import find_passphrase, redact
 
@@ -57,7 +57,9 @@ class ModeState:
     # ---- incoming events ---------------------------------------------------
 
     def on_event(self, event: Event) -> List[Event]:
-        """React to an incoming event. Today only motion matters (alerts)."""
+        """React to an incoming event: motion (alerts) and the threat label."""
+        if event.type == EventType.THREAT_ASSESSED:
+            return self._on_threat(event)
         if event.type != EventType.MOTION or not self.armed:
             return []
         now = self._clock()
@@ -70,6 +72,14 @@ class ModeState:
         if self._alert == AlertLevel.WARNING and recent:
             return [self._alert_to(AlertLevel.ALARM,
                                    f"Motion again within {self.alarm_window_s:.0f} s.", event.id)]
+        return []
+
+    def _on_threat(self, event: Event) -> List[Event]:
+        """A 'suspicious' label while armed raises normal to warning. That's all it can
+        do: a label never lowers an alert, and every other category changes nothing."""
+        if (event.data.get("category") == ThreatCategory.SUSPICIOUS and self.armed
+                and self._alert == AlertLevel.NORMAL):
+            return [self._alert_to(AlertLevel.WARNING, "Suspicious person at the door.", event.id)]
         return []
 
     def screen_speech(self, event: Event) -> Tuple[Event, List[Event]]:

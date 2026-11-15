@@ -16,6 +16,7 @@ GREETING_ARMED = "Hello. Nobody can come to the door right now. Would you like t
 GREETING_HOME = "Hello. Someone will be with you shortly. Would you like to leave a message?"
 CANT_DISARM = "I can't disarm. Only the owner can do that."
 MESSAGE_SAVED = "Thank you. I saved your message."
+DELIVERY_LINE = "Please leave the package by the front door. Thank you!"
 OFFER_MESSAGE = "Would you like to leave a message?"
 RULE_SAVED = "Okay. I'll remember that."
 
@@ -36,15 +37,17 @@ _LIGHT = re.compile(r"\bturn (on|off) (the )?(porch( light)?|living room( lamp)?
                     r"|\b(porch( light)?|living room( lamp)?|lamp|lights?) (on|off)\b", re.I)
 
 
-def fallback(event: Event, mode: str, photo_cause: str = "") -> List[RawItem]:
+def fallback(event: Event, mode: str, photo_cause: str = "", label: str = "") -> List[RawItem]:
     """Doorbell/motion photos, lights and warning lines are rules/baseline.py's job.
 
     photo_cause: for photo_described, the event type that led to the photo ("doorbell",
     "motion"), traced through caused_by.
     """
     if event.type == EventType.PHOTO_DESCRIBED:
-        if photo_cause == EventType.MOTION or mode == Mode.NIGHT:
+        if photo_cause == EventType.MOTION or mode == Mode.NIGHT or label in ("suspicious", "nobody"):
             return []  # motion lines are spoken by the baseline; night stays quiet
+        if label == "delivery":
+            return [_speak("Hello! " + DELIVERY_LINE)]
         return [_speak(GREETING_ARMED if mode in Mode.ARMED else GREETING_HOME)]
     if event.type == EventType.SPEECH_HEARD:
         return _speech(str(event.data.get("text", "")), mode)
@@ -57,6 +60,14 @@ def arm_intent(text: str) -> Optional[str]:
     if leaving == bed:
         return None
     return Mode.AWAY if leaving else Mode.NIGHT
+
+
+_DROPOFF = re.compile(r"\b(leave|drop|put|place)\b.*\b(package|parcel|it|box|door|porch)\b", re.I)
+
+
+def mentions_dropoff(text: str) -> bool:
+    """Does this line tell a courier where to leave the package?"""
+    return bool(_DROPOFF.search(text))
 
 
 def is_summary_request(text: str) -> bool:

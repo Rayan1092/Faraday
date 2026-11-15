@@ -28,7 +28,7 @@ Envelope:
 |---|---|---|
 | `kind` | `"event"` | |
 | `id` | string | `evt_xxxxxxxx` |
-| `type` | string | one of the six types below |
+| `type` | string | one of the seven types below |
 | `timestamp` | string | ISO 8601, see above |
 | `source` | string | see above |
 | `caused_by` | string or null | |
@@ -177,6 +177,34 @@ The validator allows only these steps: `normal→warning`, `warning→alarm`, `w
   "source": "modes",
   "caused_by": "evt_8c21d7f0",
   "data": {"level": "warning", "previous": "normal", "reason": "Motion at the porch in night mode."}
+}
+```
+
+### threat_assessed
+
+Sent by `brain/` right after a `photo_described`. It says what the scene at the door looks like. `caused_by` is the `photo_described` it judges, and `source` must be `brain`.
+
+**What the label may do.** It shapes what Faraday says: a delivery gets drop-off instructions, a visitor is offered to leave a message, and `suspicious` or `nobody` get no greeting. It's also shown on the dashboard and included in the summary. `suspicious` while armed may *escalate*: plain code in `modes/` raises the alert from `normal` to `warning`, and the confrontation line comes early.
+
+**What it can never do:** lower an alert, turn lights off, change the mode or disarm. Code still guarantees the lights and alerts from the mode table. If Bonsai's answer is invalid, plain-code rules decide (`via: "rules"`).
+
+| data key | type | default | notes |
+|---|---|---|---|
+| `category` | string | required | `delivery`, `visitor`, `suspicious`, `nobody` |
+| `reason` | string | `""` | one short line, at most 200 characters |
+| `via` | string | `"rules"` | `bonsai` or `rules` |
+| `model` | string or null | `null` | LM Studio model id when `via` is `bonsai` |
+| `voices` | int or null | `null` | voice count from diarization, if known |
+
+```json
+{
+  "kind": "event",
+  "id": "evt_5c1d9a7e",
+  "type": "threat_assessed",
+  "timestamp": "2026-11-14T16:03:18.402-05:00",
+  "source": "brain",
+  "caused_by": "evt_e6047a55",
+  "data": {"category": "delivery", "reason": "Holding a box and rang the doorbell.", "via": "bonsai", "model": "ternary-bonsai-2-2b-mlx", "voices": 1}
 }
 ```
 

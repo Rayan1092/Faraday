@@ -62,10 +62,12 @@ class Happened:
     rules: List[str] = field(default_factory=list)
     armed_at: str = ""
     disarmed: bool = False
+    threats: Dict[str, int] = field(default_factory=dict)  # threat label -> count
 
     @property
     def empty(self) -> bool:
-        return not (self.doorbells or self.motions or self.messages or self.seen or self.rules)
+        return not (self.doorbells or self.motions or self.messages or self.seen or self.rules
+                    or self.threats)
 
 
 def collect(entries: Iterable[Entry]) -> Happened:
@@ -84,6 +86,10 @@ def collect(entries: Iterable[Entry]) -> Happened:
                 h.armed_at = str(e.get("timestamp", ""))[11:16]
             if info.get("changed_by") == "passphrase":
                 h.disarmed = True
+        elif kind == EventType.THREAT_ASSESSED:
+            cat = str(info.get("category", ""))
+            if cat and cat != "nobody":
+                h.threats[cat] = h.threats.get(cat, 0) + 1
         elif kind == EventType.PHOTO_DESCRIBED:
             text = str(info.get("description", "")).strip()
             if text and text not in h.seen:
@@ -115,6 +121,9 @@ def facts(h: Happened) -> List[str]:
         out.append(f"The camera saw: {_short(text, 100)}")
     for text in h.messages[-3:]:
         out.append(f"Visitor message: {_short(text, 120)}")
+    if h.threats:
+        out.append("The camera judged: " + ", ".join(
+            f"{n} {cat}" for cat, n in sorted(h.threats.items())) + ".")
     if h.lights:
         out.append("Lights turned on: " + ", ".join(h.lights) + ".")
     for text in h.rules[-2:]:
@@ -132,6 +141,12 @@ def spoken_list(h: Happened) -> str:
     if h.motions:
         parts.append(f"there was motion {_times(h.motions)}"
                      + (" and the alarm went off" if h.alarm else ""))
+    if h.threats.get("suspicious"):
+        n = h.threats["suspicious"]
+        parts.append(f"{n} suspicious visit" + ("s" if n > 1 else ""))
+    if h.threats.get("delivery"):
+        n = h.threats["delivery"]
+        parts.append(f"{n} deliver" + ("ies" if n > 1 else "y"))
     if h.messages:
         parts.append(f"{len(h.messages)} message" + ("s" if len(h.messages) > 1 else ""))
     if h.rules:

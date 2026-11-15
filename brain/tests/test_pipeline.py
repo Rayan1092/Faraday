@@ -121,6 +121,11 @@ class PipelineTests(unittest.TestCase):
         p, _, _ = self.pipeline(tool_calls(("speak", {"text": "Hello!"})), Mode.AWAY)
         bell_photo = next(a for a in p.handle(events.doorbell()).actions if a.type == ActionType.TAKE_PHOTO)
         texts = [a.args.get("text") for a in p.handle(events.photo_described(bell_photo.id)).actions]
+        # The sim's visitor carries a box, so the threat label says delivery: drop-off
+        # instructions instead of the message offer.
+        self.assertEqual(texts, [FILLER, "Hello!", "Please leave the package by the front door. Thank you!"])
+        visitor = events.photo_described(bell_photo.id, "A woman in a red coat waving at the camera.")
+        texts = [a.args.get("text") for a in p.handle(visitor).actions]
         self.assertEqual(texts, [FILLER, "Hello!", "Would you like to leave a message?"])
         motion = p.handle(events.motion()).actions
         self.assertIn("You're on camera. The owner has been alerted.",

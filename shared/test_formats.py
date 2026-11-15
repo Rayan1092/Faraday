@@ -100,6 +100,21 @@ class AlertChanged(unittest.TestCase):
 
 
 class NoAiDisarm(unittest.TestCase):
+    def test_threat_assessed_valid_and_invalid(self):
+        good = _event("threat_assessed", {"category": "delivery", "reason": "box", "via": "bonsai",
+                                          "model": "m", "voices": 1}, source="brain")
+        self.assertEqual(validate_event(good), [])
+        minimal = _event("threat_assessed", {"category": "nobody"}, source="brain")
+        self.assertEqual(validate_event(minimal), [])
+        for data, source in (({"category": "burglar"}, "brain"),
+                             ({"category": "visitor"}, "modes"),
+                             ({"category": "visitor", "via": "magic"}, "brain"),
+                             ({"category": "visitor", "reason": "x" * 201}, "brain"),
+                             ({"category": "visitor", "voices": -1}, "brain"),
+                             ({"category": "visitor", "voices": True}, "brain"),
+                             ({"category": "visitor", "extra": 1}, "brain")):
+            self.assertTrue(validate_event(_event("threat_assessed", data, source=source)), data)
+
     def test_set_mode_home_rejected_for_every_source(self):
         for source in Source.ALL:
             with self.subTest(source=source):
