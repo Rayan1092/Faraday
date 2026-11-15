@@ -362,7 +362,7 @@ class VisionClient(Base):
             self.assertIsNone(v.describe(self.photo))
         self.assertLess(time.monotonic() - t0, 6.0)
         self.assertEqual(len(v.probe_results), 1)                     # stopped at the first
-        self.assertEqual(v.disabled_until, 0.0)                       # no verdict: it never answered
+        self.assertNotIn("Prompt Template", v.disabled_why)           # no verdict: it never answered
 
     def test_a_timeout_is_no_verdict_about_thinking(self):
         """Review of #64: a slow first image (prefill timed out) must not lead to
@@ -374,8 +374,59 @@ class VisionClient(Base):
             self.assertIsNone(v.probe(per_request=0.5))
         finally:
             lm.close()
-        self.assertEqual((len(v.probe_results), v.disabled_until, v.strategy), (1, 0.0, None))
+        self.assertEqual((len(v.probe_results), v.strategy), (1, None))
         self.assertIn("timed out", v.probe_results[0]["error"])
+        self.assertNotIn("Prompt Template", v.disabled_why)
+
+    def test_cut_off_reasoning_without_an_opener_is_not_a_description(self):
+        """Review of #64: a monologue that runs out of tokens never becomes the
+        description, and its strategy is not saved."""
+        monologue = ("The image shows a plain door. There are no people visible. I should describe "
+                     "this in one sentence as the prompt asks. So the answer is Nobody is there. But "
+                     "wait, so I")
+        lm = FakeLMStudio(content=monologue, finish_reason="length")
+        try:
+            v = Vision(lm.url, "m9b")
+            with self.assertLogs("hardware.vision", "WARNING"):
+                self.assertIsNone(v.describe(self.photo))
+        finally:
+            lm.close()
+        self.assertIsNone(v.strategy)
+        self.assertGreater(v.disabled_until, 0.0)                         # rests: photos don't wait
+        self.assertNotIn("Prompt Template", v.disabled_why)               # but no "thinks" verdict
+        t0 = time.monotonic()
+        self.assertIsNone(v.describe(self.photo))
+        self.assertLess(time.monotonic() - t0, 0.5)
+
+    def test_empty_cut_off_reply_is_hidden_thinking(self):
+        lm = FakeLMStudio(content="", finish_reason="length")
+        try:
+            v = Vision(lm.url, "m9b")
+            with self.assertLogs("hardware.vision", "WARNING") as logs:
+                self.assertIsNone(v.describe(self.photo))
+        finally:
+            lm.close()
+        self.assertIn("enable_thinking = false", " ".join(logs.output))   # the real verdict
+
+    def test_whole_sentences_never_invents_one(self):
+        from hardware.vision import whole_sentences
+        run_on = ("A man in a dark hooded jacket stands at the front door holding a large brown "
+                  "cardboard box with both hands " * 4).strip()             # ~400 chars, no stop
+        for text, want in ((run_on, None),
+                           ("A man in a U.S. Postal Service uniform holds a package and looks at the", None),
+                           ("One person holds a box. It is about 2.", "One person holds a box."),
+                           ("A person waits... and then the", None),
+                           ("One person stands at the door. They hold a", "One person stands at the door."),
+                           ("", None)):
+            self.assertEqual(whole_sentences(text), want, text)
+
+    def test_an_answer_cut_after_the_empty_think_block_keeps_whole_sentences(self):
+        lm = FakeLMStudio(content="<think>\n\n</think>\n\nNobody is there. The porch light is on and the",
+                          finish_reason="length")
+        try:
+            self.assertEqual(Vision(lm.url, "m", strategy="plain").describe(self.photo), "Nobody is there.")
+        finally:
+            lm.close()
 
     def test_a_long_answer_is_not_thinking(self):
         """Review of #64: one wordy answer (120 tokens, no reasoning) must not turn
@@ -406,7 +457,8 @@ class VisionClient(Base):
         finally:
             lm.close()
         self.assertEqual([r["strategy"] for r in v.probe_results], ["prefill", "plain"])
-        self.assertEqual(v.disabled_until, 0.0)                           # 500 + thinking: no verdict
+        self.assertNotIn("Prompt Template", v.disabled_why)               # 500 + thinking: no verdict
+        self.assertLess(v.disabled_until - time.monotonic(), 61)          # just a minute's rest
 
     def test_inside_the_lock_it_rechecks(self):
         """Another probe finished between the check and the lock: use its pick, or

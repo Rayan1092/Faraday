@@ -72,6 +72,7 @@ AUTO = ("prefill", "plain")         # the probe: the ones that can stop the thin
 SYSTEM_NO_THINK = ("Reply with the answer only. Do not think step by step, do not reason, "
                    "do not use <think>. Answer immediately in one sentence.")
 RETRY_DISABLED_S = 300.0
+BACKOFF_S = 60.0                    # a probe that got no answer (but no thinking verdict): rest a minute
 WARM_UP_S = 60.0                    # the warm-up's first image may load the vision part
 CACHE_FILE = REPO_ROOT / "cache" / "vision_mode.json"
 FIX_HINT = ("LM Studio: My Models -> the model -> settings (gear) -> Prompt Template: add "
@@ -141,9 +142,15 @@ def thought_text(content: str) -> str:
 
 
 THINKING_OPENERS = ("<think>", "thinking process", "thinking:", "here's a thinking process",
-                    "here is a thinking process", "okay,", "okay so", "ok, so", "hmm", "let me",
-                    "let's", "alright", "got it", "the user", "so, the user", "so the user",
-                    "i need to", "we need to", "first, i", "analyze the", "1. analyze")
+                    "here is a thinking process", "okay, the user", "okay, let", "okay, i ",
+                    "okay, so", "okay let", "okay so", "ok, let", "ok, so", "ok so", "hmm", "let me",
+                    "let's", "let\u2019s", "alright", "got it", "the user", "so, the user", "so the user",
+                    "so, i", "well,", "wait,", "looking at", "we are given", "i need to", "we need to",
+                    "first, i", "analyze the", "1. analyze")
+# In a reply that ran out of tokens, these anywhere mean reasoning, not a description
+# (a door description never talks about itself, the prompt or "I").
+REASONING_WORDS = re.compile(r"\b(i|i'm|i'll|i've|me|my|we|let's|prompt|describe|sentence|wait)\b"
+                             r"|\bthe user\b", re.I)
 
 
 class ServerError(RuntimeError):
@@ -160,14 +167,19 @@ def looks_like_thinking(text: str) -> bool:
     return False
 
 
+def _clean(text: str) -> str:
+    """Model output without reasoning, markdown, quotes or a "Description:" label."""
+    text = re.sub(r"[*_#`]+", "", strip_reasoning(text))      # markdown
+    text = text.strip().strip('"').strip()
+    text = re.sub(r"^\s*(description|answer)\s*:\s*", "", text, flags=re.I)
+    return " ".join(text.split())
+
+
 def short_description(text: str, max_chars: int = MAX_CHARS) -> Optional[str]:
     """Clean model output down to a short description (whole sentences, at most
     max_chars), or None if empty. Every sentence that fits is kept: the prompt
     asks for facts (people, what they hold, face covered) and none may be cut."""
-    text = re.sub(r"[*_#`]+", "", strip_reasoning(text))      # markdown
-    text = text.strip().strip('"').strip()
-    text = re.sub(r"^\s*(description|answer)\s*:\s*", "", text, flags=re.I)
-    text = " ".join(text.split())
+    text = _clean(text)
     if not text:
         return None
     if len(text) <= max_chars:
@@ -182,15 +194,30 @@ def short_description(text: str, max_chars: int = MAX_CHARS) -> Optional[str]:
 one_sentence = short_description      # old name
 
 
-def whole_sentences(text: str) -> Optional[str]:
-    """A cut-off answer: only its complete sentences (or None)."""
-    clean = short_description(text)
-    if not clean:
-        return None
-    end = max(clean.rfind(". "), clean.rfind("! "), clean.rfind("? "))
-    if clean.endswith((".", "!", "?")) and not clean.endswith("..."):
-        return clean if len(clean) < MAX_CHARS or end < 0 else clean[:end + 1]
-    return clean[:end + 1] if end >= 0 else None
+def _sentence_ends(text: str) -> List[int]:
+    """Indexes of real sentence ends: not "U.S.", not "2." at the very end (a cut
+    decimal), not an ellipsis."""
+    ends = []
+    for m in re.finditer(r"[.!?](?=\s|$)", text):
+        i = m.start()
+        before = text[i - 1] if i else ""
+        if text[i] == "." and before == ".":
+            continue                                  # "...": unfinished
+        if text[i] == "." and before.isupper() and (i < 2 or not text[i - 2].isalpha()):
+            continue                                  # an initial: "U.S.", "J."
+        if text[i] == "." and before.isdigit() and i == len(text) - 1:
+            continue                                  # "about 2." where the reply stopped
+        ends.append(i)
+    return ends
+
+
+def whole_sentences(text: str, max_chars: int = MAX_CHARS) -> Optional[str]:
+    """A cut-off answer: only its complete sentences, at most max_chars, or None.
+    Found on the whole cleaned text, so nothing is cut mid-sentence or given a
+    made-up full stop."""
+    clean = _clean(text)
+    ends = [e for e in _sentence_ends(clean) if e < max_chars]
+    return clean[:ends[-1] + 1] if ends else None
 
 
 def _load_cache() -> Dict[str, str]:
@@ -228,6 +255,7 @@ class Vision:
         if self.strategy not in STRATEGIES:
             self.strategy = None
         self.disabled_until = 0.0           # no strategy works: skip vision; re-probe from then
+        self.disabled_why = ""
         self._warned = False
         self._lock = threading.Lock()       # one probe at a time
         # What happened on the last describe() (hardware.check vision prints it)
@@ -290,15 +318,22 @@ class Vision:
         thought = (reasoning.strip() + " " + thought_text(content)).strip()
         # thinks: it reasoned before (or instead of) answering. An empty closed
         # <think></think> is not thinking.
-        thinks = bool(thought) or plain_reasoning
-        cut = finish == "length" and "</think>" not in content
-        if thinks and (cut or plain_reasoning):
+        cut = finish == "length"
+        if cut and not content.strip() and not reasoning.strip():
+            thinks = True                    # cut off with nothing to show: hidden reasoning
+        else:
+            thinks = bool(thought) or plain_reasoning
+        still_thinking = thinks and (plain_reasoning or (cut and "</think>" not in content))
+        if still_thinking:
             answer = None                    # reasoning (cut off or as plain text) is no description
-        # Ran out of tokens with no reasoning at all: an over-long answer, not thinking.
-        # Only its whole sentences count; never a reason to drop the strategy.
-        too_long = cut and not thinks
-        if too_long:
+        too_long = False
+        if cut and not still_thinking:
+            # Ran out of tokens in the answer itself: only its whole sentences count, and
+            # only if nothing in them reads like reasoning. Never a reason to drop a strategy.
             answer = whole_sentences(content)
+            if answer is not None and REASONING_WORDS.search(answer):
+                answer = None
+            too_long = True
         out.update(answer=answer, thinks=thinks, too_long=too_long, finish=finish,
                    content=content[:500], reasoning_chars=len(thought))
         return out
@@ -318,6 +353,7 @@ class Vision:
         """probe() without the lock: the caller holds self._lock."""
         b64 = b64 or test_image()
         self.probe_results = []
+        self.disabled_why = ""                         # this probe decides anew
         if deadline is None:
             deadline = time.monotonic() + max(self.timeout_s * 2, per_request * len(strategies))
         for strategy in strategies:
@@ -350,6 +386,7 @@ class Vision:
         if any(r.get("thinks") for r in self.probe_results) and not unsure:   # only thinking
             self.strategy = None
             self.disabled_until = time.monotonic() + RETRY_DISABLED_S
+            self.disabled_why = "the model thinks before every answer (" + FIX_HINT + ")"
             if self.use_cache:
                 _save_cache(self._key, None)
             if not self._warned:
@@ -357,12 +394,21 @@ class Vision:
                 log.warning("vision: %s thinks before every answer, whatever the request. "
                             "Photos are described by the object detector until that's fixed. %s",
                             self.model, FIX_HINT)
+        elif self.probe_results:
+            # no answer, but no clear verdict (down, a server error, an over-long reply):
+            # rest a minute so photos don't wait for a probe each time; the background
+            # retry tries again after that. The saved strategy (if any) is kept.
+            self.disabled_until = time.monotonic() + BACKOFF_S
+            last = self.probe_results[-1]
+            self.disabled_why = "the last try got no answer (" + str(last.get("error") or (
+                "too long" if last.get("too_long") else "thinking"))[:160] + "); trying again soon"
         return None
 
     def _choose(self, reply: Dict[str, Any], how: str) -> Dict[str, Any]:
         if self.use_cache and not self.forced:
             _save_cache(self._key, reply["strategy"])      # before it shows: nothing races the file
         self.strategy, self.disabled_until, self._warned = reply["strategy"], 0.0, False
+        self.disabled_why = ""
         log.info("vision: %s %s with '%s' (%.1f s)", self.model, how, self.strategy,
                  reply.get("seconds", 0))
         return reply
@@ -429,7 +475,7 @@ class Vision:
             if until:                        # nothing stops the thinking: never make a photo wait
                 if time.monotonic() >= until:
                     self._reprobe_in_background()
-                last["error"] = "vision skipped: the model thinks before every answer (" + FIX_HINT + ")"
+                last["error"] = "vision skipped: " + (self.disabled_why or "no answer lately")
                 return None
             b64 = encode_image(Path(path))
             last["image_kb"] = round(len(b64) * 3 / 4 / 1024, 1)
@@ -479,11 +525,13 @@ class Vision:
                 return reply["answer"]
             tried = self.probe_results[-1] if self.probe_results else {}
             self._note(last, tried)
-            if tried.get("error") or not self.disabled_until:
-                last["error"] = tried.get("error") or "no answer from any request"
+            if self.disabled_why.startswith("the model thinks"):
+                last["error"] = self.disabled_why        # the probe has said it once already
+            else:
+                last["error"] = tried.get("error") or (
+                    "the answer ran too long, with no whole sentence" if tried.get("too_long")
+                    else "no answer from any request")
                 log.warning("vision failed: %s", last["error"])
-            else:                            # the probe has said it once already
-                last["error"] = f"the model thinks before every answer ({FIX_HINT})"
             return None
         except Exception as e:   # vision is best effort: never break take_photo
             if isinstance(e, requests.Timeout):

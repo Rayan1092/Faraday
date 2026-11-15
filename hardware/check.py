@@ -105,6 +105,7 @@ def vision(settings, photo=None) -> int:
     print()
     print(f"{'model':28} {'strategy':9} {'time':>6}  {'result':9} answer")
     picks = {}                                       # model -> (strategy, seconds)
+    seen = []                                        # every reply, for the verdict
     for m in models:
         try:                                         # load it first: no row's time includes loading
             Vision(v.base_url, m, 120.0, v.reasoning_effort, 1, use_cache=False)._ask(
@@ -125,6 +126,7 @@ def vision(settings, photo=None) -> int:
             shown = r["answer"] or f"(finish={r['finish']}, reasoning={r['reasoning_chars']} chars)"
             print(f"{m:28} {s:9} {r['seconds']:5.1f}s  {result:9} {shown}"[:240])
             rows.append(r)
+            seen.append(r)
         clean = [r for r in rows if r["answer"] and not r["thinks"]]
         answered = [r for r in rows if r["answer"]]
         if clean or answered:                        # the app's order; else the fastest that answered
@@ -132,7 +134,12 @@ def vision(settings, photo=None) -> int:
             picks[m] = (r["strategy"], r["seconds"])
     print()
     choice = pick_model(picks, v.model)
-    if choice is None:
+    long_only = bool(seen) and all(r.get("too_long") and not r.get("thinks") for r in seen)
+    if choice is None and long_only:
+        print("The model doesn't think, but every answer ran past the token cap with no whole "
+              "sentence. Try \"vision_max_tokens\": 160 under \"llm\", then run this again.")
+        code = 1
+    elif choice is None:
         print("NO strategy stops the thinking on this server. Photos will be described by the "
               f"object detector until it's fixed: {FIX_HINT}. Then run this again.")
         code = 1
