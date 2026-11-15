@@ -139,9 +139,12 @@ def _summary_ok(text: Optional[str]) -> bool:
 
 
 def _summary_final_ok(text: Optional[str]) -> bool:
-    """What Faraday says: Bonsai's wording if it matches the log, else code's summary."""
+    """What Faraday says (Bonsai's wording plus code's times, or code's summary): the
+    message is in it, the alarm time is the log's, and every time in it is a log time."""
     said, _ = summary.final_text(text, HAPPENED)
-    return summary.verified(said, HAPPENED) and any(w in said.lower() for w in ("message", "sam"))
+    times = set(re.findall(r"\b\d{1,2}:\d{2}\b", said))
+    return (any(w in said.lower() for w in ("message", "sam")) and HAPPENED.alarm_at in said
+            and times <= set(HAPPENED.times()))
 
 
 def cases() -> List[Case]:
