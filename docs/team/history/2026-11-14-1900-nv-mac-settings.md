@@ -10,7 +10,7 @@ Facts this is built on (owner, 2026-11-14):
 
 ```json
 {
-  "integration": {"fake_flipper": false, "lights_off_at_start": true},
+  "integration": {"lights_off_at_start": true},
 
   "flipper": {
     "serial_port": {"windows": "COM5", "mac": "/dev/cu.usbmodemflip_*"},

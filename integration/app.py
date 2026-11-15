@@ -19,8 +19,8 @@ import queue
 import threading
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
-from shared import (Action, ActionType, AlertLevel, Event, EventType, Mode, RecordingSavedData,
-                    Source, make_event)
+from shared import (Action, ActionType, AlertLevel, Event, EventType, Mode, PhotoDescribedData,
+                    RecordingSavedData, Source, make_event)
 
 from brain.pipeline import Pipeline
 
@@ -344,7 +344,12 @@ class App:
                         return
                     continue
                 if self.camera is None:
-                    self.out("  [camera] no camera configured; photo skipped")
+                    # camera.enabled false: answer at once, like a failed snapshot, so
+                    # "who's at the door?" and the alarm don't wait for a photo forever
+                    from hardware.camera import NO_CAMERA
+                    self.submit(make_event(EventType.PHOTO_DESCRIBED,
+                                           PhotoDescribedData(photo_path="", description=NO_CAMERA),
+                                           Source.CAMERA, caused_by=action.id))
                     continue
                 event = self.camera.take(action)
                 if event is not None:

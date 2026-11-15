@@ -71,7 +71,11 @@ class Intercom:
         self._finish(old)
         with self._lock:
             if self._stream is None:
-                self._open_locked(rate)
+                try:
+                    self._open_locked(rate)
+                except Exception as e:          # no speaker / wrong speaker_device
+                    log.error("intercom: speaker didn't open (%r); chunk dropped", e)
+                    return
             self._queue.append(samples)
             self._queued += samples.size
             limit = int(MAX_QUEUE_S * rate)
@@ -99,13 +103,22 @@ class Intercom:
 
     # ---- internals ---------------------------------------------------------------
     def _open_locked(self, rate: int) -> None:
+        stream = self.stream_factory(samplerate=rate, channels=1, dtype="int16",
+                                     device=self.device, callback=self._callback)
+        try:
+            stream.start()
+        except Exception:
+            try:
+                stream.close()
+            except Exception:
+                pass
+            raise
+        # only now: a stream that failed to open must not leave the door mic muted
         self._rate = rate
         self._started, self._ended = False, False
         self.gate.mute()                  # door mic off while the owner talks
         self.sessions += 1
-        self._stream = self.stream_factory(samplerate=rate, channels=1, dtype="int16",
-                                           device=self.device, callback=self._callback)
-        self._stream.start()
+        self._stream = stream
         if self._watch is None or not self._watch.is_alive():
             self._watch = threading.Thread(target=self._watchdog, name="faraday-intercom",
                                            daemon=True)
