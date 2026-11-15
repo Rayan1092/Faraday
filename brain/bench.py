@@ -366,6 +366,9 @@ def to_markdown(report: Dict[str, Any]) -> str:
              + (f", **everything forced to {meta['force']}**" if meta.get("force") else "") + ")",
              f"- Machine: {meta['machine']}",
              f"- Runs per case: {meta['runs']}",
+             *[f"- Thinking: `{t['model']}` used **{t['uses']}** (no_think `{t['no_think']}`, probe "
+               f"said {t['probe'] or '-'}; chat replies with thinking: {t['thinking_seen']})"
+               for t in meta.get("thinking", [])],
              f"- Command: `{meta['command']}`", "",
              "**Model right** = Bonsai itself returned the right action, with no code correction. "
              "**Final right** = what Faraday actually does after the code checks, fix-ups and fallback rules. "
@@ -414,6 +417,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--prompts", help="prompt profile: small or 9b (default: picked from the model id)")
     parser.add_argument("--force", choices=("fast", "smart"),
                         help="run every case on one model, to compare fast and smart times")
+    parser.add_argument("--no-think", choices=("auto", "raw", "chat"),
+                        help="what to do when the model thinks anyway (default: llm.no_think or auto)")
+    parser.add_argument("--reasoning-effort",
+                        help="override llm.reasoning_effort; \"off\" sends none at all (makes the 4B "
+                             "think like the Mac's MLX 9B)")
     parser.add_argument("--out", default="docs/bench", help="folder for the .md and .json results")
     parser.add_argument("--no-save", action="store_true")
     args = parser.parse_args(argv)
@@ -423,6 +431,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         settings["llm"]["profile"] = args.profile
     if args.model:
         settings["llm"]["profiles"][settings["llm"]["profile"]]["model"] = args.model
+    if args.no_think:
+        settings["llm"]["no_think"] = args.no_think
+        settings["llm"]["profiles"][settings["llm"]["profile"]].pop("no_think", None)
+    if args.reasoning_effort:
+        settings["llm"]["reasoning_effort"] = None if args.reasoning_effort == "off" else args.reasoning_effort
     cfg = llm_config(settings)
     brain = Brain.from_settings(settings, log=lambda _m: None)
     if args.prompts:
@@ -435,6 +448,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         assessor = ThreatAssessor(brain.client, cfg["model"], log=lambda _m: None)
     elif args.force == "fast":  # and the confrontation / summary normally on the smart one
         brain.client = brain.fast_client
+    for client in {id(c): c for c in (brain.client, brain.fast_client, assessor.client) if c}.values():
+        if getattr(client, "no_think", None) == "auto":
+            client.probe()     # decide chat or raw before any timing starts
     report = run_bench(brain, args.runs, only, assessor=assessor)
     report["meta"] = {
         "date": datetime.now().astimezone().isoformat(timespec="minutes"),
@@ -442,6 +458,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "force": args.force, "profile": cfg["profile"],
         "reasoning_effort": cfg.get("reasoning_effort"), "prompts": brain.prompt_profile,
         "machine": f"{platform.system()} {platform.release()} ({platform.machine()})",
+        "thinking": brain.thinking_report(assessor.client),
         "runs": args.runs, "command": "python -m brain.bench " + " ".join(argv or sys.argv[1:]),
     }
     md = to_markdown(report)
@@ -452,7 +469,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         out.mkdir(parents=True, exist_ok=True)
         model_slug = re.sub(r'[^a-z0-9]+', '-', cfg['model'].lower()).strip('-')
         stem = f"{datetime.now():%Y-%m-%d-%H%M}-{model_slug}-prompts-{brain.prompt_profile}" + (
-            f"-force-{args.force}" if args.force else "")
+            f"-force-{args.force}" if args.force else "") + (
+            f"-nothink-{args.no_think}" if args.no_think else "") + (
+            f"-effort-{args.reasoning_effort}" if args.reasoning_effort else "")
         (out / f"{stem}.md").write_text(md, encoding="utf-8")
         (out / f"{stem}.json").write_text(json.dumps(report, indent=1, ensure_ascii=False), encoding="utf-8")
         print(f"Saved {out / stem}.md and .json")

@@ -67,17 +67,35 @@ class Brain:
                       use_llm: bool = True, log: Callable[[str], None] = print) -> "Brain":
         settings = settings or load_settings()
         cfg = llm_config(settings)
-        client = BonsaiClient.from_config(cfg) if use_llm else None
+        client = BonsaiClient.from_config(cfg, log) if use_llm else None
         brain = cls(client, passphrase(settings), cfg["recent_log_lines"], log)
         brain.use_prompts(pick_profile(cfg["model"], settings.get("llm", {}).get("prompt_profile")))
         brain.smart_model = cfg["model"]
         fast = cfg.get("fast_model")
         if use_llm and fast and fast != cfg["model"]:
-            brain.fast_client = BonsaiClient.from_config({**cfg, "model": fast})
+            brain.fast_client = BonsaiClient.from_config({**cfg, "model": fast}, log)
             brain.fast_model = fast
         else:
             brain.fast_client, brain.fast_model = client, cfg["model"]
         return brain
+
+    def warm_up(self, *others: Any) -> None:
+        """Start each Bonsai client's thinking probe in the background (brain/bonsai.py)."""
+        seen = set()
+        for client in (self.client, self.fast_client) + others:
+            if client is not None and id(client) not in seen and hasattr(client, "warm_up"):
+                seen.add(id(client))
+                client.warm_up()
+
+    def thinking_report(self, *others: Any) -> List[Dict[str, Any]]:
+        """For the bench: per client, the model, chat or raw, and thinking seen."""
+        out, seen = [], set()
+        for client in (self.client, self.fast_client) + others:
+            if client is not None and id(client) not in seen and hasattr(client, "probe_result"):
+                seen.add(id(client))
+                out.append({"model": client.model, "no_think": client.no_think, "uses": client.mode,
+                            "probe": client.probe_result, "thinking_seen": client.thinking_seen})
+        return out
 
     # ---- right-sized models ------------------------------------------------
     # fast (Bonsai 2B on the Mac): quick owner commands at home, and the threat label

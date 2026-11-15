@@ -110,6 +110,8 @@ class Pipeline:
         instructions = callbacks.pop("instructions", None) or InstructionStore.from_settings(settings)
         for problem in instructions.skipped:
             say(f"[instructions] {problem}")
+        if use_llm:
+            brain.warm_up(getattr(assessor, "client", None))
         return cls(brain, modes, log or EventLog.from_settings(settings), rules=rules,
                    assessor=assessor, instructions=instructions, **callbacks)
 
