@@ -38,8 +38,10 @@ Facts this is built on (owner, 2026-11-14):
   "llm": {
     "profile": "mac",
     "profiles": {
-      "mac":       {"base_url": "http://127.0.0.1:1234", "model": "ternary-bonsai-2-9b-mlx"},
-      "nv_backup": {"base_url": "http://127.0.0.1:1234", "model": "ternary-bonsai-2-4b@q2_0"}
+      "mac":       {"base_url": "http://127.0.0.1:1234", "model": "ternary-bonsai-2-9b-mlx",
+                    "fast_model": "ternary-bonsai-2-2b-mlx"},
+      "nv_backup": {"base_url": "http://127.0.0.1:1234", "model": "ternary-bonsai-2-4b@q2_0",
+                    "fast_model": "ternary-bonsai-2-4b@q2_0"}
     },
     "max_tokens": 200,
     "temperature": 0.2,
@@ -92,10 +94,10 @@ Facts this is built on (owner, 2026-11-14):
 ## Mac session, in order
 1. `cd ~/Faraday && git pull`
 2. Paste the block above into `config/settings.json` and set the passphrase. If the file already exists, at least replace the `llm`, `stt` and `tts` sections.
-3. LM Studio: load **only** `ternary-bonsai-2-9b-mlx` (eject the 27B models; they're not allowed and use RAM). Start the server. Set Parallel above 1 if the alarm confrontation queues behind other calls (PLAN mode table note).
+3. LM Studio: load **only** `ternary-bonsai-2-9b-mlx` and `ternary-bonsai-2-2b-mlx` (Dell's #27: the 2B does the threat label and quick commands). Eject the 27B models; they're not allowed and use RAM. The 2B id comes from Dell's settings and isn't confirmed on the Mac yet; `start_mac.sh` says so if it's wrong. Start the server. Set Parallel above 1 if the alarm confrontation queues behind other calls (PLAN mode table note).
 4. `.build/release/argmax-cli serve` in its own terminal.
 5. Wi-Fi off.
-6. `integration/start_mac.sh`. It fails with a fix-it line if LM Studio or Argmax don't answer, if the 9B isn't downloaded, or if the loaded model isn't the 9B. It warns about Wi-Fi, a missing Flipper port and the example passphrase.
+6. `integration/start_mac.sh`. It fails with a fix-it line if LM Studio or Argmax don't answer, or if the 9B or the 2B isn't downloaded and loaded. Any other loaded model gets an eject warning. It warns about Wi-Fi, a missing Flipper port and the example passphrase.
 7. First run of each device: macOS asks for Terminal's camera and microphone access; allow both.
 
 ## Checks that still need the Mac
