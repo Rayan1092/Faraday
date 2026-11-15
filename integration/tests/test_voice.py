@@ -582,6 +582,21 @@ class Hooks(unittest.TestCase):
 class BuiltApp(unittest.TestCase):
     """integration/__main__.build_app wires Dell's dashboard hooks (PLAN Q26)."""
 
+    def test_product_start_command_has_no_demo_options(self):
+        """Owner 2026-11-15: the real product only. No fake radio, typed speech,
+        stand-in camera, printed speech or offline brain in the start command."""
+        import contextlib
+        import io
+        from integration import __main__ as main_module
+        for flag in ("--fake", "--standin-camera", "--print-speech", "--offline"):
+            with self.subTest(flag=flag):
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    main_module.main([flag])
+        keys = main_module.__doc__.split("Console keys", 1)[1]
+        for gone in ("t <text>", "d / m", "fake"):
+            self.assertNotIn(gone, keys)
+        self.assertNotIn("standin", Path(main_module.__file__).read_text(encoding="utf-8").lower())
+
     def test_listening_hook_drives_api_state_and_listen_hook_is_gone(self):
         import argparse
         import urllib.request
@@ -589,18 +604,22 @@ class BuiltApp(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp(prefix="faraday-built-"))
         s = json.loads((CONFIG_DIR / "settings.example.json").read_text(encoding="utf-8"))
         s["flipper"].update(burst_gap_s=0.3, led_refresh_s=0)
-        args = argparse.Namespace(fake=True, log=str(tmp / "events.jsonl"), standin_camera=True,
-                                  print_speech=True, offline=True, mode=Mode.HOME,
+        s["camera"]["enabled"] = False                                 # no webcam in this test
+        args = argparse.Namespace(log=str(tmp / "events.jsonl"), offline=True, mode=Mode.HOME,
                                   no_dashboard=False, port=0, no_mic=False, no_wake=True,
                                   no_controls=True, controls_port=None, fresh=False,
                                   no_detect=True)
-        app = build_app(args, s)
+        from hardware.speech import PrintTTS
+        mic = LiveMic()
+        # the product never passes parts; tests hand their stand-ins in here
+        app = build_app(args, s, parts={"flipper": FakeFlipper(s, charge_poll_s=0), "stream_factory": mic,
+                                         "speaker": lambda gate: PrintTTS(gate), "stt": FakeSTT(),
+                                         "chime": lambda: None})
         board = app.board
         self.assertIsNotNone(board.listening_hook)
         self.assertIsNone(board.listen_hook)                           # the Listen button is gone
         self.assertIs(board.control_hook.__func__, App.control)
-        mic = LiveMic()
-        app.voice.recorder.stream_factory = mic
+        self.assertIsNone(app.camera)                                  # camera off: no stand-in
         app.voice.recorder.audio_dir = tmp / "out"
 
         def listening():

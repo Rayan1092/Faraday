@@ -3,10 +3,14 @@
 **Owner: NV laptop.** This is the main app. It wires the hardware to Dell's pipeline.
 
 ```
-py -m integration                 # real Flipper (autodetect by USB id, then the settings port)
-py -m integration --fake          # fake Flipper, no hardware (or set integration.fake_flipper)
-py -m integration --fake --offline --no-browser --log tmp.jsonl   # quick try, no LM Studio
+integration/start_mac.sh          # the Mac: one command, checks everything, starts the product
+python3 -m integration            # the product itself (real Flipper, camera, mic, Argmax, Bonsai)
 ```
+
+The real product only (owner decision 2026-11-15): no fake radio, typed speech,
+stand-in camera, printed speech or offline option in the start command. The
+automated tests and the demo rehearsal (`integration/tests/test_rehearsal.py`)
+pass their stand-ins to `build_app(..., parts=...)` directly.
 
 | Flow | How |
 |---|---|
@@ -21,9 +25,7 @@ Nothing slow runs inside the pipeline callbacks: `on_action` can come from dashb
 
 **Console:**
 - `r`: open one listening window now (it ends when you stop talking)
-- `t <text>`: typed speech
 - `1` / `2` / `3`: Home (passphrase) / Away / Night
-- `d` / `m`: fake doorbell / wave (fake only)
 - `s`: status
 - `q`: quit
 
@@ -33,7 +35,7 @@ Nothing slow runs inside the pipeline callbacks: `on_action` can come from dashb
 
 ```
 integration/start_mac.sh            # checks LM Studio + Argmax answer, then python3 -m integration
-integration/start_mac.sh --offline  # extra args go to the app
+integration/start_mac.sh --no-fresh # keep the old log; other args go to the app
 ```
 
 The script creates `config/settings.json` from the example with `llm.profile: "mac"` if it's missing. It **fails** if LM Studio doesn't answer or lacks the model, or if `argmax-cli serve` doesn't answer. It **warns** about Wi-Fi on, a missing `argmax-cli`, a missing Flipper port, or the example passphrase.
