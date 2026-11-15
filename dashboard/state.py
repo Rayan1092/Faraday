@@ -147,6 +147,7 @@ def build_state(entries: Iterable[Entry], mode: str, alert: str,
 
 
 THREAT_NAMES = {"delivery": "Delivery", "visitor": "Visitor", "suspicious": "Suspicious",
+                "unknown": "Unknown",
                 "nobody": "Nobody there"}
 
 

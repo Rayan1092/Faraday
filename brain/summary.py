@@ -88,7 +88,7 @@ def collect(entries: Iterable[Entry]) -> Happened:
                 h.disarmed = True
         elif kind == EventType.THREAT_ASSESSED:
             cat = str(info.get("category", ""))
-            if cat and cat != "nobody":
+            if cat and cat not in ("nobody", "unknown"):
                 h.threats[cat] = h.threats.get(cat, 0) + 1
         elif kind == EventType.PHOTO_DESCRIBED:
             text = str(info.get("description", "")).strip()
