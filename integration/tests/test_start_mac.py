@@ -29,6 +29,24 @@ def find_bash():
 
 BASH = find_bash()
 
+# A stand-in for `argmax-cli serve`: answers HTTP on the given port after 1 s, then
+# quits by itself after 25 s (so a test never leaves it running).
+FAKE_SERVE = r'''
+import sys, threading, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+    def do_GET(self):
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+time.sleep(1.0)
+srv = HTTPServer(("127.0.0.1", int(sys.argv[1])), H)
+threading.Timer(25.0, srv.shutdown).start()
+srv.serve_forever()
+'''
+
 
 class Server:
     """Fake LM Studio: /v1/models lists every downloaded model (like the real one),
@@ -84,14 +102,17 @@ class StartMac(unittest.TestCase):
         self.argmax.close()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def run_script(self, settings=None, **env):
+    def run_script(self, settings=None, args=("--offline",), **env):
         path = self.tmp / "settings.json"
         if settings is not None:
             path.write_text(json.dumps(settings), encoding="utf-8")
         e = {**os.environ, "PYTHON": Path(sys.executable).as_posix(),
-             "FARADAY_SETTINGS": path.as_posix(), "FARADAY_DRY_RUN": "1", **env}
-        p = subprocess.run([BASH, SCRIPT.as_posix(), "--offline"], capture_output=True, text=True,
-                           env=e, timeout=60, cwd=ROOT)
+             "FARADAY_SETTINGS": path.as_posix(), "FARADAY_DRY_RUN": "1",
+             "FARADAY_DEVICE_CHECKS": "0",          # never probe this laptop's mic/camera
+             "FARADAY_USE_LMS": "0",                # never drive this laptop's real LM Studio
+             "FARADAY_WAIT_LM_S": "1", "FARADAY_WAIT_STT_S": "3", **env}
+        p = subprocess.run([BASH, SCRIPT.as_posix(), *args], capture_output=True, text=True,
+                           env=e, timeout=90, cwd=ROOT)
         return p.returncode, p.stdout + p.stderr
 
     def test_all_up_passes_and_would_start(self):
@@ -102,10 +123,11 @@ class StartMac(unittest.TestCase):
         self.assertNotIn("other models are loaded", out)
         self.assertIn("Argmax STT answering", out)
         self.assertIn("would start", out)
-        self.assertIn("-m integration --offline", out)
+        self.assertIn("-m integration --fresh --offline", out)        # --fresh by default
+        self.assertIn("READY", out)
         self.assertIn("passphrase is still the public example", out)
         self.assertIn("object detection model present", out)          # from git pull
-        self.assertRegex(out, r"OK\S*\s+OpenCV \d")                    # 4.7+ for detection
+        self.assertRegex(out, r"\[ OK \]\S*\s+OpenCV \d")              # 4.7+ for detection
 
     def test_lm_studio_down_fails(self):
         self.settings["llm"]["profiles"]["mac"]["base_url"] = "http://127.0.0.1:9"
@@ -177,6 +199,40 @@ class StartMac(unittest.TestCase):
         code, out = self.run_script(self.settings)
         self.assertEqual(code, 1, out)
         self.assertIn("argmax-cli serve", out)
+
+    def test_starts_argmax_serve_itself_and_waits_for_it(self):
+        """One command: if argmax-cli serve isn't running, start_mac.sh starts it
+        (stt.mac.serve_command) and waits until it answers."""
+        import socket
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        fake = self.tmp / "fake_serve.py"
+        fake.write_text(FAKE_SERVE, encoding="utf-8")
+        self.settings["stt"]["mac"]["url"] = f"http://127.0.0.1:{port}/v1/audio/transcriptions"
+        self.settings["stt"]["mac"]["serve_command"] = [Path(sys.executable).as_posix(), fake.as_posix(),
+                                                       str(port)]
+        code, out = self.run_script(self.settings, FARADAY_WAIT_STT_S="20")
+        self.assertEqual(code, 0, out)
+        self.assertIn("Argmax STT not running: starting it", out)
+        self.assertIn(f"Argmax STT started and answering at http://127.0.0.1:{port}", out)
+
+    def test_serve_that_dies_is_a_fail_with_its_log(self):
+        self.settings["stt"]["mac"]["url"] = "http://127.0.0.1:9/v1/audio/transcriptions"
+        self.settings["stt"]["mac"]["serve_command"] = [
+            Path(sys.executable).as_posix(), "-c", "print('model not found: large-v3'); raise SystemExit(1)"]
+        code, out = self.run_script(self.settings)
+        self.assertEqual(code, 1, out)
+        self.assertIn("did not come up", out)
+        self.assertIn("model not found: large-v3", out)              # the log's last lines
+        self.assertIn("NOT READY", out)
+        self.assertIn("Nothing started", out)
+
+    def test_no_fresh_keeps_the_old_log(self):
+        code, out = self.run_script(self.settings, args=("--no-fresh", "--offline"))
+        self.assertEqual(code, 0, out)
+        self.assertIn("would start:", out)
+        self.assertNotIn("--fresh", out.split("would start:")[1])
 
     def test_missing_settings_created_with_mac_profile(self):
         code, out = self.run_script(None, FARADAY_SKIP_CHECKS="1")
