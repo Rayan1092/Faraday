@@ -54,9 +54,11 @@ def build_app(args: argparse.Namespace, settings) -> App:
         camera = StandInCamera()
     else:
         from hardware.camera import CameraFeed, PhotoCamera
+        from hardware.detect import Detector
         from hardware.vision import Vision
-        feed = CameraFeed.from_settings(settings)       # one owner: photos + live stream
-        camera = PhotoCamera(feed, Vision.from_settings(settings))
+        detector = None if args.no_detect else Detector.from_settings(settings)
+        feed = CameraFeed.from_settings(settings, detector)   # one owner: photos + live stream
+        camera = PhotoCamera(feed, Vision.from_settings(settings), detector)
     from hardware.audio import MicGate
     from hardware.speech import PrintTTS, TextToSpeech
     gate = MicGate()                     # the speaker mutes the mic while talking
@@ -170,6 +172,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--no-controls", action="store_true", help="no camera stream / intercom server")
     ap.add_argument("--controls-port", type=int, help="controls port (default dashboard port + 1)")
     ap.add_argument("--print-speech", action="store_true", help="print speech instead of TTS")
+    ap.add_argument("--no-detect", action="store_true",
+                    help="no object detection (boxes on the stream, counts on photos)")
     ap.add_argument("--standin-camera", action="store_true",
                     help="no webcam: answer take_photo with a fixed description")
     ap.add_argument("--mode", choices=sorted(Mode.ALL), default=Mode.HOME)
@@ -199,6 +203,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"Controls (camera, intercom, lights): {controls.url}")
     if app.voice is not None:
         app.voice.start_wake()
+    vision = getattr(app.camera, "vision", None)
+    if vision is not None and not args.offline:
+        # LM Studio loads the vision part on the first image: do it now, not at the doorbell
+        import threading
+        threading.Thread(target=lambda: print(f"  [vision] warm-up {vision.warm_up()} s"),
+                         name="faraday-vision-warmup", daemon=True).start()
+    detector = getattr(app.camera, "detector", None)
+    if detector is not None:
+        print(f"Object detection: {detector.engine}"
+              + (f" + faces ({detector.faces.engine})" if detector.faces is not None else ""))
     print("Keys: r listen now, t <text>, 1/2/3 home/away/night, d/m fake radio, s status, q quit")
     try:
         console(app, fake)

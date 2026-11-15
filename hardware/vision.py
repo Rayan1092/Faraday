@@ -1,8 +1,25 @@
-"""Bonsai vision: one short sentence about a photo, via LM Studio image input.
+"""Bonsai vision: a short factual description of a photo, via LM Studio image input.
 
-Uses the same llm profile as the brain (base_url + model from settings). The
-image is shrunk to 512 px on the long side first: small prompt, little RAM.
-Checked on the NV laptop: ternary-bonsai-2-4b@q2_0 accepts images (~7 s).
+Uses the same llm profile as the brain (base_url + `model`, the 9B on the Mac;
+never the 2B). The image is shrunk to 512 px on the long side first (small
+prompt, little RAM) and sent as a base64 JPEG data URL.
+
+The description must be factual (owner 2026-11-14): how many people (or
+"Nobody is there."), what they hold, face visible or covered, what they're
+doing. When the object detector ran, its counts go into the prompt as a hint.
+
+Robust to a model that thinks before answering (the Mac's MLX 9B gave an
+empty answer with a 60-token cap -> "Photo saved."):
+- thinking is switched off every way LM Studio may honour (reasoning_effort
+  "none", chat_template_kwargs enable_thinking false); if the server rejects
+  the extra field, the request is retried without it;
+- enough tokens (vision_max_tokens, 768): a model that doesn't think stops
+  after ~40 tokens anyway; if the answer was still cut off while thinking, one
+  retry with 2048;
+- reasoning is stripped: <think>...</think>, a reply that only has the closing
+  </think>, and a separate reasoning_content field;
+- one clear timeout per request (vision_timeout_s, default 60 s), named in the
+  log and in `python -m hardware.check vision`.
 """
 from __future__ import annotations
 
@@ -17,14 +34,17 @@ import requests
 
 log = logging.getLogger("hardware.vision")
 
-PROMPT = ("You are a home security camera. Describe this photo in one short sentence: "
-          "who or what is there, what they carry, where. No guessing names.")
+PROMPT = ("You are a home security camera at the front door. Describe this photo in one or two "
+          "short factual sentences: how many people are there (if nobody, say exactly "
+          "\"Nobody is there.\"), what each person holds or carries, whether their face is "
+          "visible or covered (mask, hood, helmet, turned away), and what they are doing. "
+          "Mention a package or bag on the ground. Only say what you can see. No names, "
+          "no guesses about who they are. Answer directly.")
 MAX_SIDE = 512
-MAX_CHARS = 200
-# Room for a model that thinks before answering even with reasoning_effort "none"
-# (a 60-token cap gave an empty answer -> "Photo saved."). The answer itself is
-# one sentence, so a model that doesn't think stops long before this.
-DEFAULT_MAX_TOKENS = 300
+MAX_CHARS = 240
+DEFAULT_MAX_TOKENS = 768
+RETRY_MAX_TOKENS = 2048
+DEFAULT_TIMEOUT_S = 60.0
 
 
 def _llm(settings: Dict[str, Any]) -> Dict[str, Any]:
@@ -32,7 +52,7 @@ def _llm(settings: Dict[str, Any]) -> Dict[str, Any]:
     profile = llm.get("profiles", {}).get(llm.get("profile"), {})
     return {"base_url": profile.get("base_url", "http://127.0.0.1:1234"),
             "model": profile.get("model", ""),
-            "timeout_s": float(llm.get("vision_timeout_s", llm.get("timeout_s", 30))),
+            "timeout_s": float(llm.get("vision_timeout_s", DEFAULT_TIMEOUT_S)),
             "max_tokens": int(llm.get("vision_max_tokens", DEFAULT_MAX_TOKENS)),
             "reasoning_effort": llm.get("reasoning_effort", "none")}
 
@@ -43,6 +63,11 @@ def encode_image(path: Path, max_side: int = MAX_SIDE) -> str:
     img = cv2.imread(str(path))
     if img is None:
         raise ValueError(f"cannot read image {path}")
+    return encode_frame(img, max_side)
+
+
+def encode_frame(img: Any, max_side: int = MAX_SIDE) -> str:
+    import cv2
     h, w = img.shape[:2]
     scale = max_side / max(h, w)
     if scale < 1:
@@ -53,28 +78,44 @@ def encode_image(path: Path, max_side: int = MAX_SIDE) -> str:
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
-def one_sentence(text: str) -> Optional[str]:
-    """Clean model output down to one short sentence, or None if empty."""
-    text = re.sub(r"<think>.*?(</think>|$)", "", text or "", flags=re.S).strip().strip('"').strip()
+def strip_reasoning(text: str) -> str:
+    """The answer without any thinking: drops <think>...</think>, everything up
+    to a lone closing </think>, and an unfinished <think>... (nothing left)."""
+    text = text or ""
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[1]
+    text = re.sub(r"<think>.*", "", text, flags=re.S)      # unclosed: still thinking
+    return text
+
+
+def short_description(text: str, max_sentences: int = 2) -> Optional[str]:
+    """Clean model output down to at most two short sentences, or None if empty."""
+    text = re.sub(r"[*_#`]+", "", strip_reasoning(text))      # markdown
+    text = text.strip().strip('"').strip()
+    text = re.sub(r"^\s*(description|answer)\s*:\s*", "", text, flags=re.I)
     text = " ".join(text.split())
     if not text:
         return None
-    m = re.match(r"(.+?[.!?])(\s|$)", text)
-    sentence = m.group(1) if m else text
-    if len(sentence) > MAX_CHARS:
-        sentence = sentence[:MAX_CHARS].rsplit(" ", 1)[0].rstrip(",;:") + "."
-    return sentence
+    sentences = re.findall(r".+?(?:[.!?](?=\s|$)|$)", text)
+    out = " ".join(s.strip() for s in sentences[:max_sentences] if s.strip())
+    if len(out) > MAX_CHARS:
+        out = out[:MAX_CHARS].rsplit(" ", 1)[0].rstrip(",;:") + "."
+    return out or None
+
+
+one_sentence = short_description      # old name
 
 
 class Vision:
-    def __init__(self, base_url: str, model: str, timeout_s: float = 30,
+    def __init__(self, base_url: str, model: str, timeout_s: float = DEFAULT_TIMEOUT_S,
                  reasoning_effort: str = "none", max_tokens: int = DEFAULT_MAX_TOKENS):
         self.base_url = base_url.rstrip("/")
         self.url = self.base_url + "/v1/chat/completions"
         self.model, self.timeout_s, self.reasoning_effort = model, timeout_s, reasoning_effort
         self.max_tokens = max_tokens
+        self._extras_ok = True          # chat_template_kwargs accepted by the server
         # What happened on the last describe() (hardware.check vision prints it):
-        # elapsed_s, status, finish_reason, content, reasoning_chars, error
+        # elapsed_s, status, finish_reason, content, reasoning_chars, attempts, error
         self.last: Dict[str, Any] = {}
 
     @classmethod
@@ -82,41 +123,74 @@ class Vision:
         c = _llm(settings)
         return cls(c["base_url"], c["model"], c["timeout_s"], c["reasoning_effort"], c["max_tokens"])
 
-    def describe(self, path: Path) -> Optional[str]:
-        """One sentence, or None on any failure (caller keeps the photo). The
-        reason for a None is logged as a warning and kept in self.last."""
-        last: Dict[str, Any] = {"model": self.model, "url": self.url}
+    def _body(self, b64: str, prompt: str, max_tokens: int) -> Dict[str, Any]:
+        body: Dict[str, Any] = {
+            "model": self.model, "max_tokens": max_tokens, "temperature": 0.1,
+            "reasoning_effort": self.reasoning_effort,
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b64}},
+            ]}]}
+        if self._extras_ok:
+            body["chat_template_kwargs"] = {"enable_thinking": False}
+        return body
+
+    def _post(self, body: Dict[str, Any], timeout: float) -> requests.Response:
+        r = requests.post(self.url, json=body, timeout=timeout)
+        if r.status_code == 400 and "chat_template_kwargs" in body:
+            # an older server may refuse the extra field: once without it
+            log.info("vision: server refused chat_template_kwargs (%s); retrying without",
+                     r.text[:120])
+            self._extras_ok = False
+            body = {k: v for k, v in body.items() if k != "chat_template_kwargs"}
+            r = requests.post(self.url, json=body, timeout=timeout)
+        return r
+
+    def describe(self, path: Path, hint: Optional[str] = None) -> Optional[str]:
+        """A short factual description, or None on any failure (the caller keeps
+        the photo). `hint` is the object detector's line. The reason for a None
+        is logged as a warning and kept in self.last."""
+        last: Dict[str, Any] = {"model": self.model, "url": self.url, "attempts": 0}
         self.last = last
         t0 = time.monotonic()
         try:
             b64 = encode_image(Path(path))
             last["image_kb"] = round(len(b64) * 3 / 4 / 1024, 1)
-            body = {"model": self.model, "max_tokens": self.max_tokens, "temperature": 0.2,
-                    "reasoning_effort": self.reasoning_effort,
-                    "messages": [{"role": "user", "content": [
-                        {"type": "text", "text": PROMPT},
-                        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b64}},
-                    ]}]}
-            r = requests.post(self.url, json=body, timeout=self.timeout_s)
-            last["status"] = r.status_code
-            if r.status_code >= 400:
-                # LM Studio says why in the body (model not loaded, no image support, ...)
-                raise RuntimeError(f"HTTP {r.status_code}: {r.text[:300]}")
-            choice = r.json()["choices"][0]
-            msg = choice.get("message") or {}
-            content = msg.get("content") or ""
-            reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
-            last.update(finish_reason=choice.get("finish_reason"), content=content[:500],
-                        reasoning_chars=len(reasoning))
-            text = one_sentence(content)
-            if text is None:
-                hint = (" (it spent max_tokens thinking: raise llm.vision_max_tokens)"
-                        if reasoning or "<think>" in content or choice.get("finish_reason") == "length"
-                        else "")
-                last["error"] = (f"empty answer, finish_reason={choice.get('finish_reason')}, "
-                                 f"{len(reasoning)} chars of reasoning{hint}")
+            prompt = PROMPT + (f" Hint: {hint}" if hint else "")
+            budget = self.max_tokens
+            while True:
+                left = self.timeout_s - (time.monotonic() - t0)
+                if left <= 1:
+                    raise requests.Timeout()
+                last["attempts"] += 1
+                r = self._post(self._body(b64, prompt, budget), left)
+                last["status"] = r.status_code
+                if r.status_code >= 400:
+                    # LM Studio says why in the body (model not loaded, no image support, ...)
+                    raise RuntimeError(f"HTTP {r.status_code}: {r.text[:300]}")
+                choice = r.json()["choices"][0]
+                msg = choice.get("message") or {}
+                content = msg.get("content") or ""
+                reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
+                finish = choice.get("finish_reason")
+                thought = bool(reasoning) or "</think>" in content or "<think>" in content
+                last.update(finish_reason=finish, content=content[:500],
+                            reasoning_chars=len(reasoning) + (len(content) - len(strip_reasoning(content))),
+                            max_tokens=budget)
+                text = short_description(content)
+                if text is not None:
+                    return text
+                if finish == "length" and budget < RETRY_MAX_TOKENS:
+                    log.warning("vision: answer cut off after %d tokens%s; retrying with %d",
+                                budget, " of thinking" if thought else "", RETRY_MAX_TOKENS)
+                    budget = RETRY_MAX_TOKENS
+                    continue
+                hint_txt = (" (it spent max_tokens thinking: raise llm.vision_max_tokens)"
+                            if thought or finish == "length" else "")
+                last["error"] = (f"empty answer, finish_reason={finish}, "
+                                 f"{last['reasoning_chars']} chars of reasoning{hint_txt}")
                 log.warning("vision gave no description: %s", last["error"])
-            return text
+                return None
         except Exception as e:   # vision is best effort: never break take_photo
             if isinstance(e, requests.Timeout):
                 last["error"] = f"timed out after {self.timeout_s:.0f} s (llm.vision_timeout_s)"
@@ -126,3 +200,18 @@ class Vision:
             return None
         finally:
             last["elapsed_s"] = round(time.monotonic() - t0, 1)
+
+    def warm_up(self) -> Optional[float]:
+        """Send one tiny image so LM Studio loads the vision part before the first
+        doorbell (the first image request is the slow one). Seconds, or None."""
+        import numpy as np
+        t0 = time.monotonic()
+        try:
+            b64 = encode_frame(np.full((64, 64, 3), 128, dtype=np.uint8))
+            r = self._post(self._body(b64, "What colour is this image? One word.", 16),
+                           self.timeout_s)
+            r.raise_for_status()
+            return round(time.monotonic() - t0, 1)
+        except Exception as e:
+            log.warning("vision warm-up failed: %r", e)
+            return None

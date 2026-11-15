@@ -10,11 +10,17 @@ Controls page's live stream both read from the same capture. It opens on
 first use and closes again after `idle_s` with no viewer and no photo, so the
 camera light isn't on all day.
 
-If vision fails or times out the photo is kept and the description is
-"Photo saved." (source "camera"), so the dashboard still shows it. If the
-camera itself fails, the event still goes out with an empty photo_path and
-"Camera unavailable." so the pipeline's follow-up (greeting a visitor after a
-doorbell photo) still happens.
+Object detection (hardware/detect.py, YOLOX-tiny + YuNet faces, no LLM):
+the live stream gets labelled boxes (about 5 detections a second while
+someone watches), and every photo is analysed: people / faces / detections go
+on photo_described, and the counts are a hint in the vision prompt.
+
+If vision fails or times out, the description comes from the detector alone
+("One person is at the door. ...", "Nobody is there.", described_by
+"detector"). Without a detector the photo is kept with "Photo saved." (source
+"camera"). If the camera itself fails, the event still goes out with an empty
+photo_path and "Camera unavailable." so the pipeline's follow-up (greeting a
+visitor after a doorbell photo) still happens.
 """
 from __future__ import annotations
 
@@ -101,8 +107,14 @@ class CameraFeed:
     def __init__(self, index: int = 0, width: int = 1280, height: int = 720,
                  photos_dir: Path = REPO_ROOT / "captures" / "photos",
                  fps: float = 10.0, idle_s: float = 15.0, jpeg_quality: int = 75,
-                 capture_factory: Callable[[int, int, int], Any] = _open_capture):
+                 capture_factory: Callable[[int, int, int], Any] = _open_capture,
+                 detector: Any = None, detect_fps: float = 5.0):
         self.index, self.width, self.height = index, width, height
+        self.detector = detector               # hardware.detect.Detector: boxes on the stream
+        self.detect_fps = detect_fps
+        self._boxes: list = []
+        self._boxes_at = 0.0                   # frame time the boxes belong to
+        self._detect_at = 0.0
         self.photos_dir = photos_dir
         self.fps, self.idle_s, self.jpeg_quality = fps, idle_s, jpeg_quality
         self.capture_factory = capture_factory
@@ -121,12 +133,14 @@ class CameraFeed:
         self.failed = False                    # last open attempt failed
 
     @classmethod
-    def from_settings(cls, settings: Dict[str, Any]) -> "CameraFeed":
+    def from_settings(cls, settings: Dict[str, Any], detector: Any = None) -> "CameraFeed":
         cfg = settings.get("camera", {})
         captures = settings.get("paths", {}).get("captures", "captures")
+        det_cfg = cfg.get("detector", {}) or {}
         return cls(int(cfg.get("index", 0)), int(cfg.get("width", 1280)),
                    int(cfg.get("height", 720)), REPO_ROOT / captures / "photos",
-                   float(cfg.get("stream_fps", 10)), float(cfg.get("idle_s", 15)))
+                   float(cfg.get("stream_fps", 10)), float(cfg.get("idle_s", 15)),
+                   detector=detector, detect_fps=float(det_cfg.get("fps", 5)))
 
     # ---- lifecycle ----------------------------------------------------------------
     def _touch(self) -> None:
@@ -194,7 +208,14 @@ class CameraFeed:
                 if ok and frame is not None:
                     with self._lock:
                         self._frame, self._frame_at = frame, time.monotonic()
+                        frame_at, watched = self._frame_at, self._viewers > 0
                         self._new_frame.notify_all()
+                    if (self.detector is not None and watched
+                            and t0 - self._detect_at >= 1.0 / max(0.5, self.detect_fps)):
+                        self._detect_at = t0
+                        found = self.detector.detect(frame)
+                        with self._lock:
+                            self._boxes, self._boxes_at = found, frame_at
                 else:
                     log.warning("camera %s gave no frame; reopening", self.index)
                     self._release()
@@ -226,7 +247,11 @@ class CameraFeed:
             if self._jpeg is not None and self._jpeg_at == self._frame_at:
                 return self._jpeg
             frame, at = self._frame, self._frame_at
+            boxes = self._boxes if at - self._boxes_at <= 1.0 else []
         import cv2
+        if boxes:                               # live view only; saved photos stay clean
+            from hardware.detect import draw
+            frame = draw(frame, boxes)
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
         if not ok:
             return None
@@ -271,13 +296,28 @@ def relative(path: Path) -> str:
 class PhotoCamera:
     """take_photo -> snapshot -> Bonsai description -> photo_described event."""
 
-    def __init__(self, camera: Any, vision: Optional[Vision]):
+    def __init__(self, camera: Any, vision: Optional[Vision], detector: Any = None):
         self.camera = camera        # anything with snapshot() -> Optional[Path]
         self.vision = vision
+        self.detector = detector    # hardware.detect.Detector, or None
+        self.last_info: Optional[Dict[str, Any]] = None
 
     @classmethod
     def from_settings(cls, settings: Dict[str, Any]) -> "PhotoCamera":
-        return cls(Camera.from_settings(settings), Vision.from_settings(settings))
+        from hardware.detect import Detector
+        return cls(Camera.from_settings(settings), Vision.from_settings(settings),
+                   Detector.from_settings(settings))
+
+    def _analyse(self, path: Path) -> Optional[Dict[str, Any]]:
+        if self.detector is None:
+            return None
+        try:
+            import cv2
+            frame = cv2.imread(str(path))
+            return self.detector.analyse(frame) if frame is not None else None
+        except Exception as e:
+            log.warning("detection on %s failed: %r", path.name, e)
+            return None
 
     def take(self, action: Optional[Action] = None) -> Optional[Event]:
         t0 = time.monotonic()
@@ -291,10 +331,29 @@ class PhotoCamera:
             return make_event(EventType.PHOTO_DESCRIBED,
                               PhotoDescribedData(photo_path="", description=NO_CAMERA),
                               Source.CAMERA, caused_by=caused_by)
-        text = self.vision.describe(path) if self.vision is not None else None
-        log.info("photo %s in %.1fs: %s", path.name, time.monotonic() - t0, text or NO_VISION)
+        from hardware.detect import describe_from, hint
+        info = self._analyse(path)
+        self.last_info = info
+        text = None
+        if self.vision is not None:
+            text = (self.vision.describe(path, hint=hint(info)) if info is not None
+                    else self.vision.describe(path))
+        by = "bonsai" if text else None
+        if text is None and info is not None:
+            text, by = describe_from(info), "detector"     # vision failed: say what we know
+        log.info("photo %s in %.1fs (%s): %s", path.name, time.monotonic() - t0,
+                 by or "no description", text or NO_VISION)
+        extra: Dict[str, Any] = {}
+        if info is not None:
+            extra = {"people": int(info["people"]), "detections": info["detections"]}
+            if "faces" in info:
+                extra["faces"] = int(info["faces"])
         data = PhotoDescribedData(photo_path=relative(path), description=text or NO_VISION,
-                                  model=self.vision.model if text and self.vision else None)
+                                  model=self.vision.model if by == "bonsai" and self.vision else None,
+                                  described_by=by, **extra)
+        # Source "vision" whenever there is a real description (Bonsai or the
+        # detector); "camera" only for "Photo saved." (brain/look.py treats that
+        # as "I can't see the door right now").
         return make_event(EventType.PHOTO_DESCRIBED, data,
-                          Source.VISION if text else Source.CAMERA,
+                          Source.VISION if by else Source.CAMERA,
                           caused_by=action.id if action is not None else None)

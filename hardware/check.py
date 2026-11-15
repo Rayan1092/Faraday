@@ -24,7 +24,10 @@ def camera(settings) -> int:
     cam = PhotoCamera.from_settings(settings)
     ev = cam.take()
     print(f"{time.monotonic() - t0:.1f}s  source={ev.source}  photo={ev.data['photo_path'] or '(none)'}")
-    print(f"description: {ev.data['description']}")
+    print(f"description: {ev.data['description']}  (by {ev.data.get('described_by') or 'nobody'})")
+    if ev.data.get("detections") is not None:
+        print(f"detector: people={ev.data.get('people')} faces={ev.data.get('faces')} "
+              + ", ".join(f"{d['label']} x{d['count']} {d['confidence']:.2f}" for d in ev.data["detections"]))
     if ev.data["photo_path"] and cam.vision is not None and cam.vision.last.get("error"):
         print(f"vision ({cam.vision.model}) failed: {cam.vision.last['error']}")
         print("details: python -m hardware.check vision")
@@ -65,10 +68,26 @@ def vision(settings, photo=None) -> int:
             return 1
         path = photos[-1]
     print(f"photo: {path} (sent as JPEG, long side shrunk to 512 px, base64 data URL)")
-    text = v.describe(path)
+    warm = v.warm_up()
+    print(f"warm-up (tiny image, loads the vision part): {warm} s" if warm is not None
+          else "warm-up FAILED (see the warning above)")
+    hint_line = None
+    try:
+        import cv2
+        from hardware.detect import Detector, hint
+        det = Detector.from_settings(settings)
+        frame = cv2.imread(str(path))
+        if det is not None and frame is not None:
+            info = det.analyse(frame)
+            hint_line = hint(info)
+            print(f"detector ({det.engine}, {det.last_ms:.0f} ms): {hint_line}")
+    except Exception as e:
+        print(f"detector unavailable: {e!r}")
+    text = v.describe(path, hint=hint_line)
     last = v.last
     print(f"{last.get('elapsed_s')}s  HTTP {last.get('status', '-')}  image {last.get('image_kb', '?')} KB  "
-          f"finish_reason={last.get('finish_reason')}  reasoning={last.get('reasoning_chars', 0)} chars")
+          f"finish_reason={last.get('finish_reason')}  reasoning={last.get('reasoning_chars', 0)} chars  "
+          f"attempts={last.get('attempts')}  max_tokens={last.get('max_tokens')}")
     if "content" in last:
         print(f"raw answer: {last['content']!r}")
     print(f"description: {text}" if text else f"FAILED: {last.get('error')}")
