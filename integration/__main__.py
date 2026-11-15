@@ -247,9 +247,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     if vision is not None:
         # LM Studio loads the vision part on the first image: do it now, not at the doorbell
         def warm_vision() -> None:
+            from hardware.vision import FIX_HINT
             secs = vision.warm_up()
-            print(f"  [vision] warm-up {secs} s" if secs is not None
-                  else "  [vision] warm-up failed (is the model loaded in LM Studio? see the log)")
+            if secs is not None:
+                print(f"  [vision] ready in {secs} s; one description takes {vision.answer_s} s "
+                      f"({vision.model}, no-think: {vision.strategy})")
+            elif vision.disabled_why.startswith("the model thinks"):
+                print(f"  [vision] {vision.model} thinks before every answer: photos are described by the "
+                      f"object detector. Fix: {FIX_HINT}")
+            elif vision.disabled_until:
+                print(f"  [vision] {vision.model}: {vision.disabled_why}. Photos are described by the "
+                      "object detector meanwhile.")
+            else:
+                print("  [vision] warm-up failed (is the model loaded in LM Studio? see the log)")
         threading.Thread(target=warm_vision, name="faraday-vision-warmup", daemon=True).start()
     detector = getattr(app.camera, "detector", None)
     if detector is not None:
