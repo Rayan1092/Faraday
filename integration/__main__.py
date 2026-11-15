@@ -98,6 +98,8 @@ def build_app(args: argparse.Namespace, settings) -> App:
         if not args.print_speech:
             from hardware.intercom import Intercom
             intercom = Intercom(gate, settings.get("audio", {}).get("speaker_device"))
+            if app.voice is not None:
+                intercom.on_end = app.voice.on_intercom_end   # then hear the visitor's reply
         dash = settings.get("dashboard", {})
         cfg = settings.get("controls", {})
         dash_port = (app.board.httpd.server_address[1] if app.board is not None

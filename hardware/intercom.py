@@ -49,6 +49,7 @@ class Intercom:
         self._lock = threading.Lock()
         self._watch: Optional[threading.Thread] = None
         self.sessions = 0
+        self.on_end: Optional[Callable[[], None]] = None   # the owner finished talking
         self.played = 0                   # samples handed to the speaker
         self.dropped = 0                  # samples dropped to keep lag down
 
@@ -126,6 +127,8 @@ class Intercom:
         except Exception:
             log.exception("closing the intercom stream failed")
         self.gate.unmute()
+        if self.on_end is not None:       # e.g. listen for the visitor's reply
+            threading.Thread(target=self.on_end, name="faraday-intercom-end", daemon=True).start()
 
     def _callback(self, outdata, frames, time_info, status) -> None:
         out = np.zeros(frames, dtype=np.int16)
