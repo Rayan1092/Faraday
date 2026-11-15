@@ -42,6 +42,7 @@ class Decision:
     dropped: List[Tuple[Any, str]] = field(default_factory=list)
     error: Optional[str] = None
     fixups: List[str] = field(default_factory=list)  # what plain code added or corrected
+    role: Optional[str] = None  # "fast" or "smart": which Bonsai answered
 
 
 class Brain:
@@ -53,6 +54,10 @@ class Brain:
         self.recent_lines = recent_lines
         self.prompts: Dict[str, Any] = PROFILES["small"]
         self.prompt_profile = "small"
+        self.fast_client = client         # the small Bonsai (2B on the Mac); same as client if unset
+        self.fast_model: Optional[str] = None
+        self.smart_model: Optional[str] = None
+        self.force_role: Optional[str] = None  # the bench can force "fast" or "smart"
         self.log = log
 
     @classmethod
@@ -63,7 +68,27 @@ class Brain:
         client = BonsaiClient.from_config(cfg) if use_llm else None
         brain = cls(client, passphrase(settings), cfg["recent_log_lines"], log)
         brain.use_prompts(pick_profile(cfg["model"], settings.get("llm", {}).get("prompt_profile")))
+        brain.smart_model = cfg["model"]
+        fast = cfg.get("fast_model")
+        if use_llm and fast and fast != cfg["model"]:
+            brain.fast_client = BonsaiClient.from_config({**cfg, "model": fast})
+            brain.fast_model = fast
+        else:
+            brain.fast_client, brain.fast_model = client, cfg["model"]
         return brain
+
+    # ---- right-sized models ------------------------------------------------
+    # fast (Bonsai 2B on the Mac): quick owner commands at home, and the threat label
+    #   (brain/threat.py). smart (9B): anything said to a visitor, the confrontation,
+    #   the summary, and vision (NV's hardware/vision.py uses the same smart model).
+
+    def role_for(self, event: Event, mode: str) -> str:
+        """'fast' for quick owner commands at home, 'smart' for anything a visitor hears."""
+        if self.force_role:
+            return self.force_role
+        if event.type == EventType.SPEECH_HEARD and mode == Mode.HOME:
+            return "fast"
+        return "smart"
 
     def use_prompts(self, name: str) -> None:
         """Switch prompt profile ("small" for 2B/4B, "9b" for the Mac mini's 9B)."""
@@ -112,9 +137,13 @@ class Brain:
 
         if not allowed:
             return Decision([], "code")  # nothing to choose from, e.g. motion at home
-        if self.client is None:
+        role = self.role_for(event, mode)
+        client = self.fast_client if role == "fast" else self.client
+        if client is None:
             return self._fallback(event, mode, allowed, None, "no model configured", cause=cause, label=label)
-        messages = [{"role": "system", "content": self.prompts["system"]},
+        system = self.prompts["system"] if role == "smart" else PROFILES[
+            pick_profile(self.fast_model or "")]["system"]
+        messages = [{"role": "system", "content": system},
                     {"role": "user", "content": self.prompt(event, mode, recent)}]
         if before_model is not None:
             try:
@@ -123,7 +152,7 @@ class Brain:
                 self.log(f"[brain] before_model hook failed: {e!r}")
         started = time.perf_counter()
         try:
-            reply = self.client.chat(messages, tools_for(event.type, mode))
+            reply = client.chat(messages, tools_for(event.type, mode))
             elapsed = time.perf_counter() - started
             items = parse_reply(reply)
         except (BonsaiError, GarbageReply) as e:
@@ -171,7 +200,7 @@ class Brain:
             extra, _ = filter_actions([fb._speak(fb.OFFER_MESSAGE)], event, mode, allowed)
             actions = actions + extra
             fixups.append("added the message offer")
-        return Decision(actions, "bonsai", elapsed, dropped, fixups=fixups)
+        return Decision(actions, "bonsai", elapsed, dropped, fixups=fixups, role=role)
 
     # ---- free-text calls (no tools) ----------------------------------------
 
