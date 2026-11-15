@@ -223,4 +223,6 @@ __marimo__/
 config/settings.json
 captures/
 logs/
+cache/
+old_runs/
 .DS_Store

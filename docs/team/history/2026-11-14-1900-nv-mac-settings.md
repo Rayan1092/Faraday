@@ -70,7 +70,10 @@ Facts this is built on (owner, 2026-11-14):
     "mac": {
       "kind": "argmax",
       "command": ["/Users/captain/clueless/vendor/argmax-oss-swift/.build/release/argmax-cli",
-                  "tts", "--text", "{text}", "--speaker", "aiden", "--play"]
+                  "tts", "--text", "{text}", "--speaker", "aiden", "--play"],
+      "voice": {"seed": 7, "temperature": 0.6, "top_k": 50, "model": "0.6b", "instruction": null},
+      "cache": true,
+      "prerender": true
     },
     "windows": {"kind": "standin"}
   },

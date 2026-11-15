@@ -199,6 +199,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"Controls (camera, intercom, lights): {controls.url}")
     if app.voice is not None:
         app.voice.start_wake()
+    prerender = getattr(app.speaker, "prerender", None)
+    tts_cfg = settings.get("tts", {}).get("mac" if sys.platform == "darwin" else "windows", {}) or {}
+    if prerender is not None and getattr(app.speaker, "cache_dir", None) and tts_cfg.get("prerender", True):
+        # Faraday's fixed lines, rendered once with the fixed voice: instant and identical
+        import threading
+        from integration.fixed_lines import fixed_lines
+        lines = fixed_lines()
+
+        def warm_tts() -> None:
+            made = prerender(lines, wait=app.speech_busy, stop=app._stopping)
+            print(f"  [tts] {made} fixed line(s) rendered, {len(lines)} cached")
+        threading.Thread(target=warm_tts, name="faraday-tts-prerender", daemon=True).start()
     print("Keys: r listen now, t <text>, 1/2/3 home/away/night, d/m fake radio, s status, q quit")
     try:
         console(app, fake)
