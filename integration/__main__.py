@@ -35,7 +35,7 @@ from integration.app import App  # noqa: E402
 from integration.standins import StandInCamera  # noqa: E402
 
 
-def build_app(args: argparse.Namespace, settings) -> App:
+def build_app(args: argparse.Namespace, settings, known_outlets=None) -> App:
     fake = args.fake or bool(settings.get("integration", {}).get("fake_flipper", False))
     if fake:
         from hardware.flipper.fake import FakeFlipper
@@ -65,7 +65,10 @@ def build_app(args: argparse.Namespace, settings) -> App:
     speaker = PrintTTS(gate) if args.print_speech else TextToSpeech.from_settings(settings, gate)
     app = App(settings, flipper, camera=camera, speaker=speaker, use_llm=not args.offline,
               mode=args.mode, event_log=log, rules=rules, dashboard=not args.no_dashboard,
-              port=args.port)
+              port=args.port,
+              lights_off_at_start=bool(settings.get("integration", {}).get("lights_off_at_start", True)),
+              known_outlets=known_outlets)
+    app.video = feed                     # alarm recording (None with the stand-in camera)
     if not args.no_mic:
         from hardware.audio import Recorder
         from hardware.speech import SpeechToText
@@ -182,6 +185,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--log", help="log file (default: logs/events.jsonl)")
     ap.add_argument("--port", type=int, help="dashboard port (default from settings)")
     ap.add_argument("--no-dashboard", action="store_true")
+    ap.add_argument("--fresh", action="store_true",
+                    help="move logs/ and captures/ to old_runs/<time>/ first (empty log)")
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("-v", "--verbose", action="store_true", help="show driver details")
     args = ap.parse_args(argv)
@@ -189,7 +194,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
                         format="%(asctime)s %(name)s %(message)s", datefmt="%H:%M:%S")
     settings = load_settings()
-    app = build_app(args, settings)
+    known_outlets = None
+    if args.fresh:
+        from integration.fresh import archive_run, outlet_states_in
+        moved = archive_run(settings)
+        print(f"Fresh start: old logs and captures moved to {moved}" if moved
+              else "Fresh start: nothing to move")
+        if moved is not None:
+            logs_name = Path(settings.get("paths", {}).get("logs", "logs")).name
+            known_outlets = outlet_states_in(moved / logs_name / "events.jsonl")
+    app = build_app(args, settings, known_outlets)
     fake = type(app.flipper).__name__ == "FakeFlipper"
     print(f"Faraday. Settings: {'settings.json' if (CONFIG_DIR / 'settings.json').exists() else 'settings.example.json (public example passphrase!)'}")
     print(f"Flipper: {'FAKE' if fake else 'real (autodetect, then settings port)'}. "

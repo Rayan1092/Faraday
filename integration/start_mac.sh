@@ -145,6 +145,22 @@ EOF
     warn "TTS command '$TTS_BIN' not found: Faraday will print instead of speaking"
   fi
 
+  # Object detection (hardware/detect.py): the model comes with git pull; OpenCV must be
+  # 4.7+ (NMSBoxesBatched, FaceDetectorYN). Without it detection is just off.
+  if [ -f hardware/models/yolox_tiny.onnx ]; then
+    ok "object detection model present (hardware/models/yolox_tiny.onnx)"
+  else
+    warn "hardware/models/yolox_tiny.onnx missing: git pull with Wi-Fi on (detection will be off)"
+  fi
+  CV_VER="$("$PY" -c 'import cv2; print(cv2.__version__)' 2>/dev/null)"
+  if [ -z "$CV_VER" ]; then
+    fail "OpenCV not installed for $PY: pip3 install -r requirements.txt (Wi-Fi on)"
+  elif "$PY" -c 'import sys, cv2; v = tuple(int(x) for x in cv2.__version__.split(".")[:2]); sys.exit(0 if v >= (4, 7) else 1)' 2>/dev/null; then
+    ok "OpenCV $CV_VER"
+  else
+    warn "OpenCV $CV_VER is older than 4.7: object detection off. pip3 install -U opencv-python (Wi-Fi on)"
+  fi
+
   # shellcheck disable=SC2086
   if [ -n "$PORT_GLOB" ] && ls $PORT_GLOB >/dev/null 2>&1; then
     ok "Flipper port present: $(ls $PORT_GLOB | head -1)"

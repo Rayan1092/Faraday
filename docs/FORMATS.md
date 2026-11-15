@@ -28,7 +28,7 @@ Envelope:
 |---|---|---|
 | `kind` | `"event"` | |
 | `id` | string | `evt_xxxxxxxx` |
-| `type` | string | one of the seven types below |
+| `type` | string | one of the eight types below |
 | `timestamp` | string | ISO 8601, see above |
 | `source` | string | see above |
 | `caused_by` | string or null | |
@@ -211,6 +211,30 @@ Sent by `brain/` right after a `photo_described`. It says what the scene at the 
   "source": "brain",
   "caused_by": "evt_e6047a55",
   "data": {"category": "delivery", "reason": "Holding a box and rang the doorbell.", "via": "bonsai", "model": "ternary-bonsai-2-2b-mlx", "voices": 1}
+}
+```
+
+### recording_saved
+
+About 10 s of camera frames saved when the alert reaches `alarm` (`camera.alarm_record_s`). `integration/` writes it straight to the log after the recording ends; it doesn't go through the pipeline, so nothing decides anything on it. The dashboard shows it as "Recording saved" (PLAN Q33). `caused_by` is the `alert_changed` event.
+
+| data key | type | default | notes |
+|---|---|---|---|
+| `path` | string | required | the folder, `captures/alarm-<time>/`, with `frame-0001.jpg`, `frame-0002.jpg`, ... |
+| `frames` | int | required | frames saved (about 10 per second) |
+| `duration_s` | number | required | first to last frame |
+| `video_path` | string or null | `null` | `captures/alarm-<time>/clip.avi` (MJPG), if OpenCV could write it |
+| `reason` | string | `""` | `"alarm"` |
+
+```json
+{
+  "kind": "event",
+  "id": "evt_7a3c19d0",
+  "type": "recording_saved",
+  "timestamp": "2026-11-14T23:41:12.204-05:00",
+  "source": "camera",
+  "caused_by": "evt_2f8e6b14",
+  "data": {"path": "captures/alarm-20261114-234102/", "frames": 98, "duration_s": 9.9, "video_path": "captures/alarm-20261114-234102/clip.avi", "reason": "alarm"}
 }
 ```
 

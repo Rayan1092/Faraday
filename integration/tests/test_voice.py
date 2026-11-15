@@ -539,6 +539,29 @@ class Hooks(unittest.TestCase):
         self.assertTrue(wait_until(lambda: not self.app.speech_busy()))
         self.assertTrue(any("Two." in s for s in self.said))
 
+    def test_only_a_who_is_at_the_door_photo_counts_as_busy(self):
+        """Dell PR "doorbell flow" (PLAN Q32): the doorbell photo isn't talked about,
+        so it must not hold the visitor's window; the dashboard's look photo is."""
+        from shared import Action
+        release = threading.Event()
+
+        class SlowCamera:
+            def take(self, action):
+                release.wait(2.0)
+                return None
+        self.app.camera = SlowCamera()
+        self.app._on_action(Action("take_photo", "rules", {"reason": "doorbell"}))
+        time.sleep(0.2)
+        self.assertFalse(self.app.speech_busy())                     # doorbell photo: not busy
+        release.set()
+        self.assertTrue(wait_until(lambda: self.app._photos.unfinished_tasks == 0))
+        release.clear()
+        self.app._on_action(Action("take_photo", "dashboard", {"reason": "who's at the door"}))
+        time.sleep(0.2)
+        self.assertTrue(self.app.speech_busy())                      # its answer will be spoken
+        release.set()
+        self.assertTrue(wait_until(lambda: not self.app.speech_busy()))
+
     def test_speech_busy_while_a_line_is_queued_or_spoken(self):
         from shared import Action
         done = threading.Event()
