@@ -179,7 +179,8 @@ def _tidy(kind: str, args: Dict[str, Any]) -> Dict[str, Any]:
 # retest: Bonsai told someone "I will check the app settings for you".
 _COMMIT = re.compile(
     r"\b(?:i(?:'ll|\s+will|\s+can|\s+could|\s+shall|'d|\s+would|'m\s+going\s+to|\s+am\s+going\s+to)"
-    r"|let\s+me|allow\s+me\s+to|we(?:'ll|\s+will|\s+can))\s+", re.I)
+    r"|let\s+me|allow\s+me\s+to|we(?:'ll|\s+will|\s+can)|would\s+you\s+like\s+me\s+to|do\s+you\s+want\s+me\s+to"
+    r"|shall\s+i|should\s+i)\s+", re.I)
 _DOING = re.compile(
     r"\bi(?:'m|\s+am)\s+(?:now\s+|just\s+)?(?:checking|calling|contacting|texting|emailing|sending|opening|"
     r"unlocking|looking|searching|notifying|alerting|getting|fetching|fixing|connecting|transferring|paging|"
@@ -192,16 +193,18 @@ _DOING = re.compile(
 # What may follow "I'll / I can / let me": passing things on, never doing them (review:
 # the first verb alone let "I'll let you in" and "let me take a look" through).
 _ALLOWED = re.compile(
-    r"(?:(?:also|just|now|only|gladly|happily|certainly|definitely|personally|be\s+(?:happy|glad)\s+to)\s+)*"
+    r"(?:(?:also|just|now|only|gladly|happily|certainly|definitely|personally|be\s+(?:happy|glad|sure)\s+to)\s+)*"
     r"(?:not\b|never\b|let\s+(?!you\b)[\w']+(?:\s+[\w']+)?\s+know\b|tell\s+(?!you\b)[\w']+|"
     r"pass\s+(?:on|along|it|that|this|them|your\s+messages?|the\s+messages?|messages?)\b|"
-    r"take\s+(?:a|your|the)\s+(?:message|note|name|number)\b|save\s+(?:a|your|the|it|that)\b|"
-    r"note\s+(?:it|that|this|down|your)\b|record\s+(?:a|your|the)\s+message\b|"
-    r"make\s+sure\s+(?:the\s+owner|the\s+homeowner|they|he|she|[\w']+)\s+(?:gets?|hears?|knows?|sees?)\b|"
+    r"take\s+(?:(?:a|your|the|that|down(?:\s+(?:a|your|the))?)\s+)?(?:\w+\s+)?(?:messages?|note|name|number)\b|"
+    r"save\s+(?:a|your|the|it|that)\b|note\s+(?:it|that|this|down|your)\b|record\s+(?:a|your|the)\s+message\b|"
+    r"make\s+sure\s+(?:[\w']+\s+){1,2}(?:gets?|hears?|knows?|sees?|reach\w*)\b|"
     r"give\s+(?:the\s+owner|the\s+homeowner|them|him|her|[\w']+)\s+(?:your|the)\s+message\b|"
-    r"put\s+(?:it|that|this)\s+in\b|keep\s+(?:watch|it\s+in\s+mind)\b|"
+    r"put\s+(?:it|that|this)\s+in\b|keep\s+(?:watch|(?:it|that)\s+in\s+mind)\b|relay\b|"
+    r"share\s+(?:it|that|this|your)\b|say\b|help\s+(?:you\s+)?leave\s+a\s+message\b|"
     r"help\s+(?:you\s+)?with\s+(?:a\s+|the\s+|your\s+)?(?:deliver\w*|packages?|parcels?|messages?)\b|"
     r"know\b|hear\b|ask\s+(?:the\s+owner|the\s+homeowner|them|him|her)\b)", re.I)
+_BARE_HELP = re.compile(r"help\b", re.I)
 _SENTENCES = re.compile(r"[^.!?]+[.!?]*")
 
 
@@ -214,13 +217,15 @@ def claims_ability(text: str, skip: Optional[Any] = None) -> bool:
     text = str(text or "").replace("’", "'").replace("‘", "'")
     for sentence in _SENTENCES.findall(text):
         sentence = sentence.strip()
-        if not sentence or sentence.endswith("?") or (skip is not None and skip(sentence)):
+        if not sentence or (skip is not None and skip(sentence)):
             continue
         if _DOING.search(sentence):
             return True
+        question = sentence.endswith("?")
         for m in _COMMIT.finditer(sentence):
-            if not _ALLOWED.match(sentence, m.end()):
-                return True
+            if _ALLOWED.match(sentence, m.end()) or (question and _BARE_HELP.match(sentence, m.end())):
+                continue      # "Is there anything I can help you with?" offers nothing
+            return True
     return False
 
 

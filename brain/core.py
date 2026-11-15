@@ -203,7 +203,7 @@ class Brain:
         # "I will check the app settings for you"); the fallback answers instead.
         owners = ins or []          # the owner's own words, passed on, are never a promise (review)
         promises = [a for a in actions if a.type == ActionType.SPEAK and claims_ability(
-            a.args.get("text", ""), skip=lambda s: any(oi.mentions(s, i) for i in owners))]
+            a.args.get("text", ""), skip=lambda s: any(oi.key_words(i) and oi.mentions(s, i) for i in owners))]
         if promises:
             actions = [a for a in actions if a not in promises]
             dropped = dropped + [({"type": a.type, "args": a.args}, "promises something Faraday can't do")

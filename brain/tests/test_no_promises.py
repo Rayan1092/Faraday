@@ -41,6 +41,17 @@ class Promises(unittest.TestCase):
     def test_questions_and_the_owners_words(self):
         self.assertFalse(claims_ability("Hello! Is there anything I can help you with?"))
         self.assertFalse(claims_ability("I'd be happy to take a message."))
+        for good in ("I can only take messages right now.", "I can take messages for the owner.",
+                     "Hello! I can help you leave a message for the owner.", "I'll take that message for the owner.",
+                     "I can take down your message.", "I'll make sure your message gets to the owner.",
+                     "I'll be sure to let the owner know.", "I will relay your message.",
+                     "I'll share that with the owner.", "I'll keep that in mind.",
+                     "Would you like me to take a message?"):
+            self.assertFalse(claims_ability(good), good)
+        for offer in ("Would you like me to call the owner?", "Shall I check the app settings for you?",
+                      "Should I open the gate for you?", "I can check that for you, would that help?",
+                      "I'll check the app settings for you, okay?", "I've called the owner, is there anything else?"):
+            self.assertTrue(claims_ability(offer), offer)
         owner_said = lambda s: "back at five" in s
         self.assertFalse(claims_ability("We'll be back at five.", skip=owner_said))
         self.assertTrue(claims_ability("We'll be back at five.") and claims_ability(
