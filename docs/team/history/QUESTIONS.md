@@ -37,3 +37,23 @@ Each has the default I used, so work continued. Answer inline and I'll adjust.
     - `start_mac.sh` fails with the exact fix if LM Studio lists a different id. Put the real id in `config/settings.json` on the Mac.
 12. **start_mac.sh location.**
     - Default: `integration/start_mac.sh` (inside NV's folder) rather than the repo root. Move it?
+
+## Added 2026-11-15 (owner away; items 1-9 built on Windows)
+
+13. **Faraday's voice.**
+    - Default: `tts.mac.voice` = seed 7, temperature 0.6, top-k 50, model 0.6b.
+    - Run `python3 -m hardware.tts_audition` on the Mac and pick a take by ear, then paste the line `--pick N` prints.
+    - The 1.7B isn't used until its latency is known; the audition prints it.
+14. **Lights off at every start.**
+    - Default: on (`integration.lights_off_at_start`).
+    - Unknown: whether an *off* code toggles a lamp that's already off. If a lamp turns ON at start, set it to false.
+15. **Vision timeout.**
+    - Default: 20 s (`llm.vision_timeout_s`), inside Dell's 25 s "who's at the door" wait.
+    - If the 9B needs longer even with thinking off, raise both together.
+16. **Detection model in the repo.**
+    - Default: YOLOX-tiny (20 MB, Apache-2.0) and YuNet (0.2 MB, MIT) are committed in `hardware/models/`, so `git pull` brings them and nothing downloads at run time.
+    - Say if you'd rather keep binaries out of git; then there would be a download step instead.
+17. **Item 10 (owner voice check).**
+    - Not started: your brief says only after 1-9 pass on the Mac.
+18. **Owner follow-up rule.**
+    - Default: a question opens an *owner* window only if the speak action's `caused_by` is an owner speech_heard (Dell's brain sets it). This replaces the 30 s timer and answers Dell's PLAN Q31.

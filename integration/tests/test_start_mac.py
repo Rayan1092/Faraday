@@ -104,6 +104,8 @@ class StartMac(unittest.TestCase):
         self.assertIn("would start", out)
         self.assertIn("-m integration --offline", out)
         self.assertIn("passphrase is still the public example", out)
+        self.assertIn("object detection model present", out)          # from git pull
+        self.assertRegex(out, r"OK\S*\s+OpenCV \d")                    # 4.7+ for detection
 
     def test_lm_studio_down_fails(self):
         self.settings["llm"]["profiles"]["mac"]["base_url"] = "http://127.0.0.1:9"
