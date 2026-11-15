@@ -49,11 +49,14 @@ def build_app(args: argparse.Namespace, settings) -> App:
         from rules import RuleStore
         log = EventLog(args.log, settings["security"]["passphrase"])
         rules = RuleStore(Path(args.log).with_name(Path(args.log).stem + "-rules.json"))
+    feed = None
     if args.standin_camera or settings.get("camera", {}).get("enabled") is False:
         camera = StandInCamera()
     else:
-        from hardware.camera import PhotoCamera
-        camera = PhotoCamera.from_settings(settings)   # webcam + Bonsai vision
+        from hardware.camera import CameraFeed, PhotoCamera
+        from hardware.vision import Vision
+        feed = CameraFeed.from_settings(settings)       # one owner: photos + live stream
+        camera = PhotoCamera(feed, Vision.from_settings(settings))
     from hardware.audio import MicGate
     from hardware.speech import PrintTTS, TextToSpeech
     gate = MicGate()                     # the speaker mutes the mic while talking
@@ -78,6 +81,26 @@ def build_app(args: argparse.Namespace, settings) -> App:
             app.board.listen_hook = app.voice.listen_once
             app.board.talk_hook = app.voice.listen_once
         app.board.control_hook = app.control
+    if feed is not None:
+        app.extras.append(feed)
+    if not args.no_controls:
+        from integration.controls import ControlsServer
+        intercom = None
+        if not args.print_speech:
+            from hardware.intercom import Intercom
+            intercom = Intercom(gate, settings.get("audio", {}).get("speaker_device"))
+        dash = settings.get("dashboard", {})
+        cfg = settings.get("controls", {})
+        dash_port = (app.board.httpd.server_address[1] if app.board is not None
+                     else int(dash.get("port", 8080)))
+        port = args.controls_port if args.controls_port is not None else int(
+            cfg.get("port", dash_port + 1 if dash_port else 0))
+        app.controls = ControlsServer(
+            cfg.get("host", dash.get("host", "127.0.0.1")), port, feed=feed, intercom=intercom,
+            control=app.control,
+            listen=(lambda: app.voice.listen_once("controls")) if app.voice is not None else None,
+            outlet_state=app.outlet_states, dashboard_port=dash_port)
+        app.extras.append(app.controls)
     return app
 
 
@@ -136,6 +159,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--offline", action="store_true", help="skip Bonsai, rules-only brain")
     ap.add_argument("--no-mic", action="store_true", help="no microphone at all")
     ap.add_argument("--no-wake", action="store_true", help='mic only in windows, no "Hey Faraday"')
+    ap.add_argument("--no-controls", action="store_true", help="no camera stream / intercom server")
+    ap.add_argument("--controls-port", type=int, help="controls port (default dashboard port + 1)")
     ap.add_argument("--print-speech", action="store_true", help="print speech instead of TTS")
     ap.add_argument("--standin-camera", action="store_true",
                     help="no webcam: answer take_photo with a fixed description")
@@ -160,6 +185,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"Dashboard: {app.board.url}")
         if not args.no_browser:
             webbrowser.open(app.board.url)
+    controls = getattr(app, "controls", None)
+    if controls is not None:
+        controls.start()
+        print(f"Controls (camera, intercom, lights): {controls.url}")
     if app.voice is not None:
         app.voice.start_wake()
     print("Keys: r listen now, t <text>, 1/2/3 home/away/night, d/m fake radio, s status, q quit")
