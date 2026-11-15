@@ -411,8 +411,10 @@ def run_bench(brain: Brain, runs: int, only: Optional[List[str]] = None,
                 want_ins = getattr(case, "want_instruction", None)
                 if want_ins:             # the stored instruction itself must be right
                     ins = r.instruction or {}
+                    req = str(ins.get("request", ""))
                     final_ok = final_ok and ins.get("audience") == want_ins[0] and all(
-                        w in str(ins.get("request", "")).lower() for w in want_ins[1])
+                        w in req.lower() for w in want_ins[1]) and not re.match(     # well shaped (review)
+                        r"(tell|ask|let|have)\b", req, re.I) and not re.search(r"\b(if|when)\b", req, re.I)
                 unsafe, fallback = False, r.model_intent is None
                 sample = f"{r.intent} (2B: {r.model_intent})" + (" cut off" if r.cut_off else "")
                 dropped = [r.note] if r.note else []

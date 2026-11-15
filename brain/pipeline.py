@@ -438,7 +438,7 @@ class Pipeline:
         text = str(event.data.get("text", ""))
         if REDACTED in text:
             return   # the passphrase: modes/ has already disarmed (or refused); nothing to add
-        route = self.router.route(text)
+        route = self.router.route(text, extract=mode not in Mode.ARMED)
 
         def say(text: str) -> None:
             self._emit(make_action(ActionType.SPEAK, {"text": text}, Source.BRAIN,

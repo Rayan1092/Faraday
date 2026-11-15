@@ -90,7 +90,7 @@ _RULE_EVENT = re.compile(r"\b(motion|movement|moves?|door ?bell|rings?|knocks?)\
 _ON_OFF = re.compile(r"\b(on|off)\b", re.I)
 # A request that stops mid-sentence: "ask them to", "if a delivery comes,".
 _DANGLING = re.compile(r"(\b(to|the|a|an|and|or|but|if|when|whenever|that|them|at|for|with|of|"
-                       r"my|your|please|ask|tell|say|is|are|so|then)|,)\s*$", re.I)
+                       r"my|your|please|ask|tell|say|is|are|so|then|you|can|could|would|will)|,)\s*$", re.I)
 _NEGATION = re.compile(r"\b(don'?t|do not|not yet|never|no need|stop)\b", re.I)
 _QUESTION = re.compile(r"^\s*(is|are|was|were|did|do|does|have|has)\b|\?\s*$", re.I)
 _SUMMARY_STRONG = re.compile(r"\b(what did i miss|any (messages?|visitors?)|did (any|some)(one|body) "
@@ -179,7 +179,10 @@ def light_slots(text: str) -> tuple:
 def strong(text: str) -> Optional[str]:
     """The intent the words make plain, or None. Order matters: a rule or an
     instruction mentions lights and doors too."""
-    if oi.parse_instruction(text) is not None or oi.forget_request(text) is not None:
+    parsed = oi.parse_instruction(text)
+    if parsed is not None and oi.is_forbidden(parsed) and fb.parse_rule(text) is not None:
+        return ADD_RULE     # "when someone rings, ... turn on the porch light": a rule (review)
+    if parsed is not None or oi.forget_request(text) is not None:
         return ADD_INSTRUCTION
     if fb.parse_rule(text) is not None or (_RULE_TRIGGER.search(text) and _RULE_EVENT.search(text)):
         return ADD_RULE     # never arm or switch now what was said as a rule for later
@@ -214,10 +217,12 @@ class OwnerRouter:
                  log: Callable[[str], None] = print):
         self.client, self.model, self.log = client, model, log
 
-    def route(self, text: str) -> Route:
+    def route(self, text: str, extract: bool = True) -> Route:
+        """extract=False (while armed, where nothing is stored anyway): never ask the 2B
+        to pull out an instruction."""
         text = str(text or "").strip()
         clear = strong(text)
-        model_intent, args, elapsed, via = None, {}, None, "rules"
+        model_intent, args, elapsed, via, failed = None, {}, None, "rules", False
         if self.client is not None and text:
             started = time.perf_counter()
             try:
@@ -226,21 +231,24 @@ class OwnerRouter:
                 model_intent, args = parse(reply)
             except Exception as e:
                 self.log(f"[owner] Bonsai failed: {e}")
+                failed = True
             elapsed = time.perf_counter() - started
         intent, note = self._check(text, clear, model_intent)
         if model_intent is not None:
             via = "bonsai" if intent == model_intent else "code"
         r = Route(intent, via, model_intent, elapsed_s=elapsed, note=note)
         self._fill(r, text, args)
-        if (r.intent == UNCLEAR and not cut_off(text) and self.client is not None
-                and ((model_intent == ADD_INSTRUCTION or clear == ADD_INSTRUCTION)
-                     and (oi.names_audience(text) or _TELL.search(text))
-                     or (_WEAK[ADD_INSTRUCTION].search(text) and _TELL.search(text)))):
-            # The keywords couldn't read it, but it isn't cut off: the 2B pulls it out.
+        if (extract and not failed and r.intent == UNCLEAR and not cut_off(text) and self.client is not None
+                and (model_intent == ADD_INSTRUCTION or clear == ADD_INSTRUCTION)
+                and oi.names_audience(text)):
+            # The keywords couldn't read it, the 2B says it's an instruction, the owner
+            # named who it's for, and it isn't cut off: the 2B pulls it out, code checks it.
+            started = time.perf_counter()
             ins = self.extract_instruction(text)
+            r.elapsed_s = (r.elapsed_s or 0.0) + (time.perf_counter() - started)
             if ins is not None:
                 r.intent, r.instruction, r.cut_off = ADD_INSTRUCTION, ins, False
-                r.note = "the 2B wrote the instruction, code checked it"
+                r.via, r.note = "bonsai", "the 2B wrote the instruction, code checked it"
         self.log(f"[owner] {text!r} -> {r.intent}" + (f" (2B said {model_intent})" if model_intent
                                                       and model_intent != r.intent else "")
                  + (f", {elapsed:.2f}s" if elapsed is not None else "") + (f": {r.note}" if r.note else ""))
