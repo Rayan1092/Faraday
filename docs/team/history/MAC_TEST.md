@@ -36,13 +36,13 @@ Every other new setting already has the right default in the code. The full file
 
 ## With Wi-Fi OFF
 
-6. Open LM Studio. You don't need to start `argmax-cli serve` yourself any more: the launcher in step 8 does it, and it also loads the 9B and the 2B if the `lms` command is installed. If not, load only the 9B and the 2B by hand. Eject anything else.
+6. Open LM Studio, then bring everything up without starting Faraday: **`FARADAY_DRY_RUN=1 integration/start_mac.sh`**. It starts `argmax-cli serve` (it keeps running), loads the 9B and the 2B if the `lms` command is installed, and checks everything. If `lms` isn't installed, load only the 9B and the 2B by hand. Eject anything else.
 7. `python3 -m hardware.check camera`, then `python3 -m hardware.check vision`.
    - **Expect:** the warm-up time, the detector's line, and a factual description. With nobody in view, it says "Nobody is there."
    - **If it says FAILED:** send me the output.
 8. Look at the lamps first, then run **`integration/start_mac.sh`** (one command; it starts with `--fresh` by default, `--no-fresh` keeps the old log).
    - **Startup output:** big `[ OK ]` / `[WARN]` / `[FAIL]` lines, then **READY** (it starts Faraday) or **NOT READY** (nothing started, with the list to fix). Expect OK for LM Studio and both models, Argmax STT ("started and answering" the first time), the object detection model, OpenCV, mic, speaker and camera.
-   - If `argmax-cli serve` needs different flags on this Mac, put the exact command in `config/settings.json` under `"stt"` → `"mac"` as `"serve_command": [...]`. Its log is `cache/argmax-serve.log`.
+   - The launcher starts plain `argmax-cli serve`. If it needs different flags on this Mac, put the exact command in `config/settings.json` under `"stt"` → `"mac"` as `"serve_command": [...]`, stop the old one (`pkill -f "argmax-cli serve"`), and run the launcher again. Its log is `cache/argmax-serve.log`.
    - **Lamps:** lamps that were off must stay off. If one turns ON, set `"lights_off_at_start": false` under `"integration"`.
 9. Open the Controls page at `http://127.0.0.1:8081/` and walk into view. You should see a labelled "person" box.
 10. Arm **Away** (console key `2`), keep away from the motion sensor, then ring the doorbell. (In Home the doorbell only says "Someone is at the door." and takes no photo; the greeting, the photo and the visitor window are Away.)

@@ -3,7 +3,7 @@
 #
 #   integration/start_mac.sh                  # get everything up, check it all, start with --fresh
 #   integration/start_mac.sh --no-fresh       # keep the old log and captures
-#   integration/start_mac.sh --offline        # other args go to the app
+#   integration/start_mac.sh --no-browser     # other args go to the app (real options only)
 #
 # What it does, in order (every step prints one [ OK ] / [WARN] / [FAIL] line):
 #   1. config/settings.json (created from the example with llm.profile "mac" if missing)
@@ -11,9 +11,10 @@
 #   3. LM Studio: waits for its server (starts it with `lms server start` if the lms
 #      CLI is installed), then the 9B and 2B must be downloaded AND loaded (loads them
 #      with `lms load` if lms is installed). Anything else loaded: eject warning.
-#   4. Argmax STT: if `argmax-cli serve` isn't answering, starts it itself
-#      (stt.mac.serve_command, default: argmax-cli serve --model <stt.mac.model>),
-#      log in cache/argmax-serve.log, and waits until it answers.
+#   4. Argmax STT: if `argmax-cli serve` isn't answering (and isn't already
+#      starting), starts it itself in its own session (Ctrl-C on the app doesn't
+#      stop it): stt.mac.serve_command, default plain `argmax-cli serve`; log in
+#      cache/argmax-serve.log; waits until it answers (stops waiting if it dies).
 #   5. TTS binary, object detection model, OpenCV 4.7+, mic, speaker, camera,
 #      Flipper port, passphrase, owner voice enrollment.
 #   6. A READY / NOT READY banner, then: python3 -m integration --fresh <args>
@@ -21,6 +22,7 @@
 # Env: PYTHON (default python3), FARADAY_SETTINGS (default config/settings.json),
 #      FARADAY_SKIP_CHECKS=1, FARADAY_DRY_RUN=1 (check only, don't start),
 #      FARADAY_DEVICE_CHECKS=0 (no mic/speaker/camera probe), FARADAY_USE_LMS=0 (don't use lms),
+#      FARADAY_START_STT=0 (never start argmax-cli serve; the tests set these three),
 #      FARADAY_WAIT_LM_S (30), FARADAY_WAIT_STT_S (120).
 set -u
 cd "$(dirname "$0")/.." || exit 1
@@ -33,7 +35,8 @@ N_OK=0; N_WARN=0; N_FAIL=0
 FAIL_LINES=""
 ok()   { printf '  \033[1;32m[ OK ]\033[0m %s\n' "$1"; N_OK=$((N_OK + 1)); }
 warn() { printf '  \033[1;33m[WARN]\033[0m %s\n' "$1"; N_WARN=$((N_WARN + 1)); }
-fail() { printf '  \033[1;31m[FAIL]\033[0m %s\n' "$1"; N_FAIL=$((N_FAIL + 1)); FAIL_LINES="$FAIL_LINES\n    - $1"; }
+fail() { printf '  \033[1;31m[FAIL]\033[0m %s\n' "$1"; N_FAIL=$((N_FAIL + 1)); FAIL_LINES="$FAIL_LINES
+    - $1"; }
 note() { printf '         %s\n' "$1"; }
 
 FRESH="--fresh"
@@ -74,13 +77,13 @@ ex = json.load(open("config/settings.example.json", encoding="utf-8"))
 argmax_bin = (tts.get("command") or [""])[0]
 stt_url = stt.get("url", "") if stt.get("kind", "argmax") != "standin" else ""
 serve = stt.get("serve_command")
+if isinstance(serve, str):
+    serve = shlex.split(serve)
 if not serve and argmax_bin and stt_url:
-    serve = [argmax_bin, "serve"]
+    serve = [argmax_bin, "serve"]                  # the known-working plain command
     port = urlparse(stt_url).port
     if port and port != 50060:
         serve += ["--port", str(port)]
-    if stt.get("model"):
-        serve += ["--model", stt["model"]]
 check = s.get("audio", {}).get("voice_check", {}) or {}
 vals = {
     "PROFILE": llm["profile"],
@@ -94,6 +97,9 @@ vals = {
     "EXAMPLE_PASS": "1" if s["security"]["passphrase"] == ex["security"]["passphrase"] else "0",
     "ENROLLMENT": check.get("enrollment") or "cache/owner_voice.wav",
     "CAMERA_INDEX": str((s.get("camera", {}) or {}).get("index", 0)),
+    "MIC_DEVICE": "" if s.get("audio", {}).get("mic_device") is None else str(s["audio"]["mic_device"]),
+    "SPEAKER_DEVICE": "" if s.get("audio", {}).get("speaker_device") is None else str(s["audio"]["speaker_device"]),
+    "DIARIZE": "1" if (stt.get("diarize") or {}).get("command") else "0",
 }
 for k, v in vals.items():
     print(f"{k}={shlex.quote(str(v))}")
@@ -107,13 +113,27 @@ if [ "${FARADAY_USE_LMS:-1}" != "0" ]; then          # tests set 0: never touch 
   [ -z "$LMS" ] && [ -x "$HOME/.lmstudio/bin/lms" ] && LMS="$HOME/.lmstudio/bin/lms"
 fi
 
-wait_http() {   # wait_http URL SECONDS LABEL -> 0 when it answers (any HTTP status)
-  local url="$1" secs="$2" label="$3" t=0 code
-  while [ "$t" -lt "$secs" ]; do
-    code="$(curl -s -m 3 -o /dev/null -w '%{http_code}' "$url" 2>/dev/null)"
+IS_MAC=0; [ "$(uname -s 2>/dev/null)" = "Darwin" ] && IS_MAC=1
+
+with_timeout() {  # with_timeout SECONDS cmd ...  (macOS has no `timeout`; perl does alarm)
+  local secs="$1"; shift
+  perl -e 'alarm shift; exec @ARGV' "$secs" "$@"
+}
+
+WATCH_PID=""     # set while waiting for a serve we started (checked on the Mac only)
+wait_http() {    # wait_http URL SECONDS LABEL -> 0 answers, 1 timed out, 2 the process died
+  local url="$1" secs="$2" label="$3" code end next
+  end=$((SECONDS + secs)); next=$((SECONDS + 10))
+  while [ "$SECONDS" -lt "$end" ]; do
+    code="$(curl -s -m 2 -o /dev/null -w '%{http_code}' "$url" 2>/dev/null)"
     if [ -n "$code" ] && [ "$code" != "000" ]; then return 0; fi
-    if [ $((t % 10)) -eq 0 ] && [ "$t" -gt 0 ]; then note "... waiting for $label (${t} s)"; fi
-    sleep 1; t=$((t + 1))
+    if [ -n "$WATCH_PID" ] && [ "$IS_MAC" = "1" ] && ! kill -0 "$WATCH_PID" 2>/dev/null; then
+      return 2
+    fi
+    if [ "$SECONDS" -ge "$next" ]; then
+      note "... waiting for $label ($((SECONDS + secs - end)) s)"; next=$((SECONDS + 10))
+    fi
+    sleep 1
   done
   return 1
 }
@@ -140,7 +160,7 @@ if [ "${FARADAY_SKIP_CHECKS:-0}" != "1" ]; then
   if ! curl -s -m 3 "$LLM_URL/v1/models" >/dev/null 2>&1; then
     if [ -n "$LMS" ]; then
       note "LM Studio server not up: starting it ($LMS server start)"
-      "$LMS" server start >/dev/null 2>&1 || true
+      with_timeout 30 "$LMS" server start </dev/null >/dev/null 2>&1 || true
     fi
     wait_http "$LLM_URL/v1/models" "$WAIT_LM" "LM Studio" || true
   fi
@@ -149,9 +169,11 @@ if [ "${FARADAY_SKIP_CHECKS:-0}" != "1" ]; then
   if [ -n "$MODELS" ] && [ -n "$LMS" ] && [ -n "$V0" ]; then
     for m in "$LLM_MODEL" "$FAST_MODEL"; do
       [ -z "$m" ] && continue
-      if ! printf '%s' "$V0" | "$PY" -c 'import json,sys; m=sys.argv[1]; d=json.load(sys.stdin).get("data",[]); sys.exit(0 if any(x.get("id")==m and str(x.get("state","")).lower()=="loaded" for x in d) else 1)' "$m" 2>/dev/null; then
-        note "loading $m with lms ..."
-        "$LMS" load "$m" --yes </dev/null >/dev/null 2>&1 || "$LMS" load "$m" </dev/null >/dev/null 2>&1 || true
+      # only a downloaded model (lms load never downloads), and only if it isn't loaded
+      if printf '%s' "$MODELS" | "$PY" -c 'import json,sys; m=sys.argv[1]; d=json.load(sys.stdin).get("data",[]); sys.exit(0 if any(x.get("id")==m for x in d) else 1)' "$m" 2>/dev/null \
+         && ! printf '%s' "$V0" | "$PY" -c 'import json,sys; m=sys.argv[1]; d=json.load(sys.stdin).get("data",[]); sys.exit(0 if any(x.get("id")==m and str(x.get("state","")).lower()=="loaded" for x in d) else 1)' "$m" 2>/dev/null; then
+        note "loading $m with lms (up to 2 min) ..."
+        with_timeout 120 "$LMS" load "$m" --yes </dev/null >/dev/null 2>&1 || true
       fi
     done
     V0="$(curl -s -f -m 5 "$LLM_URL/api/v0/models" 2>/dev/null)"
@@ -209,15 +231,31 @@ EOF
     CODE="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$STT_BASE/" 2>/dev/null)"
     if [ -n "$CODE" ] && [ "$CODE" != "000" ]; then
       ok "Argmax STT answering at $STT_BASE (HTTP $CODE)"
-    elif [ -n "$SERVE_CMD" ]; then
+    elif [ -n "$SERVE_CMD" ] && [ "${FARADAY_START_STT:-1}" != "0" ]; then
       mkdir -p cache
-      note "Argmax STT not running: starting it ($SERVE_CMD)"
-      eval "nohup $SERVE_CMD" >cache/argmax-serve.log 2>&1 &
-      SERVE_PID=$!
-      if wait_http "$STT_BASE/" "$WAIT_STT" "argmax-cli serve"; then
-        ok "Argmax STT started and answering at $STT_BASE (pid $SERVE_PID; log cache/argmax-serve.log)"
+      RUNNING=""
+      [ "$IS_MAC" = "1" ] && RUNNING="$(pgrep -f "argmax-cli serve" 2>/dev/null | head -1)"
+      if [ -n "$RUNNING" ]; then
+        note "argmax-cli serve is already starting (pid $RUNNING): waiting for it, not starting another"
+        SERVE_PID="$RUNNING"
       else
-        fail "Argmax STT did not come up at $STT_BASE within ${WAIT_STT} s. Start it: argmax-cli serve (log: cache/argmax-serve.log)"
+        note "Argmax STT not running: starting it ($SERVE_CMD)"
+        # its own session: Ctrl-C on the app doesn't stop it; the pid is argmax-cli's own
+        SERVE_PID="$("$PY" -c 'import shlex, subprocess, sys
+p = subprocess.Popen(shlex.split(sys.argv[1]), stdin=subprocess.DEVNULL, stdout=open(sys.argv[2], "ab"),
+                     stderr=subprocess.STDOUT, start_new_session=True)
+print(p.pid)' "$SERVE_CMD" cache/argmax-serve.log 2>>cache/argmax-serve.log)"
+      fi
+      WATCH_PID="$SERVE_PID"
+      wait_http "$STT_BASE/" "$WAIT_STT" "argmax-cli serve"; RC=$?
+      WATCH_PID=""
+      if [ "$RC" = "0" ]; then
+        ok "Argmax STT started and answering at $STT_BASE (pid $SERVE_PID; log cache/argmax-serve.log)"
+      elif [ "$RC" = "2" ]; then
+        fail "argmax-cli serve stopped right away (log: cache/argmax-serve.log). Check the command, or set stt.mac.serve_command"
+        tail -n 5 cache/argmax-serve.log 2>/dev/null | while IFS= read -r line; do note "log: $line"; done
+      else
+        fail "Argmax STT did not come up at $STT_BASE within ${WAIT_STT} s (pid ${SERVE_PID:-?} may still be loading: wait a moment and run start_mac.sh again; it won't start a second copy). Log: cache/argmax-serve.log"
         tail -n 5 cache/argmax-serve.log 2>/dev/null | while IFS= read -r line; do note "log: $line"; done
       fi
     else
@@ -251,20 +289,27 @@ EOF
   fi
 
   if [ "${FARADAY_DEVICE_CHECKS:-1}" != "0" ]; then
-    DEVICES="$("$PY" - "$CAMERA_INDEX" <<'EOF' 2>/dev/null
+    DEVICES="$("$PY" -u - "$CAMERA_INDEX" "$MIC_DEVICE" "$SPEAKER_DEVICE" <<'EOF' 2>/dev/null
 import sys
+def dev(v):
+    return None if v == "" else (int(v) if v.lstrip("-").isdigit() else v)
 try:
     import sounddevice as sd
-    i = sd.query_devices(kind="input"); o = sd.query_devices(kind="output")
+    mic, spk = dev(sys.argv[2]), dev(sys.argv[3])
+    i = sd.query_devices(mic, kind="input") if mic is not None else sd.query_devices(kind="input")
+    o = sd.query_devices(spk, kind="output") if spk is not None else sd.query_devices(kind="output")
     print(f"OK|mic: {i['name']}")
     print(f"OK|speaker: {o['name']}")
 except Exception as e:
-    print(f"FAIL|no default mic/speaker ({e}). Plug them in; python3 -m hardware.check devices")
+    print(f"FAIL|no mic/speaker ({e}). Plug them in; python3 -m hardware.check devices")
 try:
     import cv2
     idx = int(sys.argv[1])
     cap = cv2.VideoCapture(idx, cv2.CAP_AVFOUNDATION) if sys.platform == "darwin" else cv2.VideoCapture(idx)
-    ok, frame = cap.read() if cap.isOpened() else (False, None)
+    ok, frame = False, None
+    if cap.isOpened():
+        for _ in range(5):                     # dark frames while exposure settles
+            ok, frame = cap.read()
     cap.release()
     if ok and frame is not None:
         print(f"OK|camera {idx}: {frame.shape[1]}x{frame.shape[0]}")
@@ -281,6 +326,7 @@ EOF
         FAIL) fail "$msg" ;;
       esac
     done <<< "$DEVICES"
+    [ -z "$DEVICES" ] && warn "the mic/speaker/camera check gave no answer ($PY could not run it)"
   fi
 
   # shellcheck disable=SC2086
@@ -291,8 +337,10 @@ EOF
   fi
 
   [ "$EXAMPLE_PASS" = "1" ] && warn "passphrase is still the public example one"
-  if [ -f "$ENROLLMENT" ]; then
+  if [ -f "$ENROLLMENT" ] && [ "$DIARIZE" = "1" ]; then
     ok "owner voice enrolled ($ENROLLMENT): voice check on (display only)"
+  elif [ -f "$ENROLLMENT" ]; then
+    note "owner voice enrolled, but stt.mac.diarize has no command: voice check off"
   else
     note "owner voice not enrolled: voice check off (python3 -m hardware.owner_voice enroll)"
   fi
@@ -301,7 +349,7 @@ EOF
   echo "  ------------------------------------------------------------"
   if [ "$N_FAIL" != "0" ]; then
     printf '  \033[1;31m  NOT READY: %s FAIL\033[0m, %s warn, %s ok. Nothing started.\n' "$N_FAIL" "$N_WARN" "$N_OK"
-    printf "  Fix:%b\n" "$FAIL_LINES"
+    printf '  Fix:%s\n' "$FAIL_LINES"
     echo "  (FARADAY_SKIP_CHECKS=1 starts anyway.)"
     echo "  ============================================================"
     exit 1
