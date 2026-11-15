@@ -190,10 +190,16 @@ def agrees(category: str, reason: str) -> bool:
     with a person in the reason, contradicts itself (owner, Mac retest)."""
     text = reason or ""
     if category in (C.VISITOR, C.DELIVERY, C.SUSPICIOUS):
-        return not NOBODY.search(text)
+        return not _NO_ONE.search(text)
     if category == C.NOBODY:
         return bool(NOBODY.search(text)) or not PERSON.search(text)
     return True
+
+
+# Narrower than NOBODY (review): "empty-handed", "nobody is home" and "nothing visible in
+# his hands" don't say the porch is empty.
+_NO_ONE = re.compile(r"\b(?:no one|nobody|no person|no people|no visible person|nothing (?:is )?(?:there|visible))\b"
+                     r"(?!\s+(?:is\s+|was\s+)?(?:home|else|answer\w*|in\b|inside))", re.I)
 
 
 _BOXY = re.compile(r"\b(package|parcel|box|boxes|carton|envelope)\b", re.I)
@@ -372,7 +378,7 @@ def check(category: str, reason: str, ctx: Context) -> Tuple[str, str, str]:
     if not agrees(category, clean):
         # Owner, Mac retest: "visitor" with the reason "doorbell while away, no one visible".
         note = f"code wrote the reason: the 2B's contradicted {category} ({clean[:60]})"
-        clean = reason_for(ctx, category)
+        clean = rule_reason if rule_cat == category else reason_for(ctx, category)   # keeps "mask"
     if len(clean) > REASON_MAX:
         clean = clean[:REASON_MAX - 3].rsplit(" ", 1)[0] + "..."
     return category, clean, note

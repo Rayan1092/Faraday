@@ -201,7 +201,9 @@ class Brain:
         actions, dropped = filter_actions(items, event, mode, allowed)
         # A line that promises what Faraday can't do is never said (owner, Mac retest:
         # "I will check the app settings for you"); the fallback answers instead.
-        promises = [a for a in actions if a.type == ActionType.SPEAK and claims_ability(a.args.get("text", ""))]
+        owners = ins or []          # the owner's own words, passed on, are never a promise (review)
+        promises = [a for a in actions if a.type == ActionType.SPEAK and claims_ability(
+            a.args.get("text", ""), skip=lambda s: any(oi.mentions(s, i) for i in owners))]
         if promises:
             actions = [a for a in actions if a not in promises]
             dropped = dropped + [({"type": a.type, "args": a.args}, "promises something Faraday can't do")

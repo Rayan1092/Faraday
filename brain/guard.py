@@ -178,33 +178,49 @@ def _tidy(kind: str, args: Dict[str, Any]) -> Dict[str, Any]:
 # Faraday can only talk, take a message and pass on the owner's words. Owner, Mac
 # retest: Bonsai told someone "I will check the app settings for you".
 _COMMIT = re.compile(
-    r"\b(?:i(?:'ll|\s+will|\s+can|\s+could|\s+shall|'m\s+going\s+to|\s+am\s+going\s+to)|let\s+me"
-    r"|we(?:'ll|\s+will|\s+can))\s+(?:(?:also|just|now|only|gladly|happily|certainly|definitely|"
-    r"personally|quickly|right\s+away|go\s+ahead\s+and|try\s+to|be\s+(?:happy|glad|sure)\s+to|"
-    r"make\s+sure\s+to)\s+)*([a-z']+)(?:\s+([a-z']+))?", re.I)
-_DOING = re.compile(r"\bi'?m\s+(?:now\s+)?(?:checking|calling|contacting|texting|emailing|sending|opening|"
-                    r"unlocking|looking|searching|notifying|alerting|getting|fetching|fixing|connecting|"
-                    r"transferring|paging|ringing|phoning|messaging)\b", re.I)
-# What may follow "I'll / I can / let me": passing things on, never doing them.
-_CAN_DO = {"let", "tell", "pass", "take", "save", "put", "note", "make", "give", "record", "relay", "share",
-           "keep", "ask", "say", "repeat", "know", "hear", "not", "never", "help"}
-_HELP_WITH = re.compile(r"\b(deliver\w*|messages?|packages?|parcels?)\b", re.I)
+    r"\b(?:i(?:'ll|\s+will|\s+can|\s+could|\s+shall|'d|\s+would|'m\s+going\s+to|\s+am\s+going\s+to)"
+    r"|let\s+me|allow\s+me\s+to|we(?:'ll|\s+will|\s+can))\s+", re.I)
+_DOING = re.compile(
+    r"\bi(?:'m|\s+am)\s+(?:now\s+|just\s+)?(?:checking|calling|contacting|texting|emailing|sending|opening|"
+    r"unlocking|looking|searching|notifying|alerting|getting|fetching|fixing|connecting|transferring|paging|"
+    r"ringing|phoning|messaging)\b"
+    r"|\bi(?:'ve|\s+have)\s+(?:just\s+|already\s+)?(?:called|contacted|texted|messaged|sent|paged|alerted|"
+    r"phoned|emailed|opened|unlocked|checked|fixed)\b"
+    r"|\b(?:wait|moment|hold on|one sec\w*)\b[^.!?]*\bwhile i\b"
+    r"|(?:^|[.!?,]\s*)(?:checking (?:now|that|on it|for you|with)|calling|contacting|looking into|sending|"
+    r"opening)\b", re.I)
+# What may follow "I'll / I can / let me": passing things on, never doing them (review:
+# the first verb alone let "I'll let you in" and "let me take a look" through).
+_ALLOWED = re.compile(
+    r"(?:(?:also|just|now|only|gladly|happily|certainly|definitely|personally|be\s+(?:happy|glad)\s+to)\s+)*"
+    r"(?:not\b|never\b|let\s+(?!you\b)[\w']+(?:\s+[\w']+)?\s+know\b|tell\s+(?!you\b)[\w']+|"
+    r"pass\s+(?:on|along|it|that|this|them|your\s+messages?|the\s+messages?|messages?)\b|"
+    r"take\s+(?:a|your|the)\s+(?:message|note|name|number)\b|save\s+(?:a|your|the|it|that)\b|"
+    r"note\s+(?:it|that|this|down|your)\b|record\s+(?:a|your|the)\s+message\b|"
+    r"make\s+sure\s+(?:the\s+owner|the\s+homeowner|they|he|she|[\w']+)\s+(?:gets?|hears?|knows?|sees?)\b|"
+    r"give\s+(?:the\s+owner|the\s+homeowner|them|him|her|[\w']+)\s+(?:your|the)\s+message\b|"
+    r"put\s+(?:it|that|this)\s+in\b|keep\s+(?:watch|it\s+in\s+mind)\b|"
+    r"help\s+(?:you\s+)?with\s+(?:a\s+|the\s+|your\s+)?(?:deliver\w*|packages?|parcels?|messages?)\b|"
+    r"know\b|hear\b|ask\s+(?:the\s+owner|the\s+homeowner|them|him|her)\b)", re.I)
+_SENTENCES = re.compile(r"[^.!?]+[.!?]*")
 
 
-def claims_ability(text: str) -> bool:
+def claims_ability(text: str, skip: Optional[Any] = None) -> bool:
     """Does this line promise something Faraday can't do ("I'll check the settings",
-    "let me call the owner", "I'm opening the gate")? Taking a message, letting the owner
-    know and helping with a delivery are fine."""
-    text = str(text or "").replace("’", "'")
-    if _DOING.search(text):
-        return True
-    for m in _COMMIT.finditer(text):
-        verb, after = m.group(1).lower(), (m.group(2) or "").lower()
-        if verb == "help":
-            if not _HELP_WITH.search(text[m.start():]):
-                return True
-        elif verb not in _CAN_DO or (verb == "take" and after == "care"):
+    "let me call the owner", "I'm opening the gate", "I've called the police")? Taking a
+    message, letting the owner know and helping with a delivery are fine. A question
+    ("Is there anything I can help you with?") offers nothing. `skip(sentence)`: True for a
+    sentence that passes on the owner's own words ("We'll be back at five.")."""
+    text = str(text or "").replace("’", "'").replace("‘", "'")
+    for sentence in _SENTENCES.findall(text):
+        sentence = sentence.strip()
+        if not sentence or sentence.endswith("?") or (skip is not None and skip(sentence)):
+            continue
+        if _DOING.search(sentence):
             return True
+        for m in _COMMIT.finditer(sentence):
+            if not _ALLOWED.match(sentence, m.end()):
+                return True
     return False
 
 

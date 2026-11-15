@@ -104,11 +104,15 @@ class Switches(unittest.TestCase):
 
 
 class Page(unittest.TestCase):
-    def test_tiles_are_buttons_that_post_to_control(self):
+    def test_main_dashboard_only_shows_the_lights(self):
+        """Owner 2026-11-15: no light switches on the main dashboard, only a read-only
+        on/off status; switching is on the Controls page."""
         js = (STATIC_DIR / "dashboard.js").read_text(encoding="utf-8")
-        self.assertIn('post("/api/control", { outlet, on })', js)
-        self.assertIn("aria-pressed", js)
-        self.assertIn("control_available", js)
+        self.assertNotIn("/api/control", js)
+        self.assertNotIn("aria-pressed", js)
+        self.assertIn('light.on ? "On" : "Off"', js)
+        controls = (STATIC_DIR / "controls.js").read_text(encoding="utf-8")
+        self.assertIn('post("/api/control", { outlet, on })', controls)
 
 
 class SimHook(unittest.TestCase):

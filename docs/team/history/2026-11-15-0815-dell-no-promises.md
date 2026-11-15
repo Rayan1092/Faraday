@@ -16,6 +16,11 @@ From the owner's third Mac retest (07:40 log):
   a person label whose reason says no one is there, and "nobody" with a person in the
   reason. Code then writes the reason from the facts (`reason_for`).
 - Tests: `brain/tests/test_no_promises.py`.
+- **Dashboard (owner, 08:00):** the main dashboard has no light switches anymore, only a
+  read-only on/off status for each lamp (`renderLights` in `dashboard/static/dashboard.js`).
+  Switching lights is on the Controls page only. `POST /api/control` stays, because
+  controls.js uses it. The video script now switches the porch light off on the Controls
+  page.
 
 Not in this PR: instruction phrasing and cancel-and-replace (retest items 1 and 2). The
 owner asked for one general standing-task tool (remember / update_task / remove_task /
