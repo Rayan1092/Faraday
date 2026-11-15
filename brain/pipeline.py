@@ -21,8 +21,8 @@ For each incoming event, in this order:
 Photos the owner asks for (owner_snapshot: the dashboard Snapshot button) get their
 threat label like any photo, but nobody at the door is greeted for them.
 "Who's at the door?" (Home or Night) is answered by plain code: "Checking the camera.", a
-fresh photo, then its description and threat label spoken (brain/look.py), or
-"I can't see the door right now." if the camera or vision fails or is too slow.
+fresh photo, then facts only: the people count and the threat label (brain/look.py), or
+"I can't see the door right now." if the camera fails or is too slow.
 
 Actions and events are passed to on_action / on_event as soon as they exist,
 so integration/ can run hardware without waiting for Bonsai. One lock keeps
@@ -40,7 +40,7 @@ from shared import (Action, ActionType, AlertLevel, ChangedBy, Event, EventType,
 from log import EventLog
 from modes import ModeState
 from rules import InstructionStore, RuleStore, baseline_actions, lights_off_on_disarm, merge
-from rules.baseline import DOORBELL_GREETING, warning_actions
+from rules.baseline import DOORBELL_GREETING, WARNING_LINE, warning_actions
 from modes import MotionOutcome
 from rules import instructions as owner_instructions
 
@@ -279,6 +279,13 @@ class Pipeline:
         follow_ups += self.modes.on_event(event)
         for e in follow_ups:
             self._process(e, result, depth + 1)
+        if event.type == EventType.THREAT_ASSESSED and any(
+                e.type == EventType.ALERT_CHANGED and e.data.get("level") == AlertLevel.WARNING
+                for e in follow_ups):
+            # A suspicious label raised the warning (a mask, trying the handle): the fixed
+            # warning line, as when nobody rang. Nothing about the person (owner, Mac test).
+            self._emit(make_action(ActionType.SPEAK, {"text": WARNING_LINE}, Source.RULES,
+                                   caused_by=event.id), result, [])
 
         mode, alert = self.modes.mode, self.modes.alert
         done: List[Action] = []

@@ -327,7 +327,8 @@ class PipelineEffects(unittest.TestCase):
         self.assertEqual(p.modes.alert, AlertLevel.WARNING)
         self.assertIn("alert_changed", [e.type for e in result.events])
         said = [a.args.get("text") for a in result.actions if a.type == ActionType.SPEAK]
-        self.assertEqual(said, [])                                     # owner, Mac test: no description spoken
+        # The fixed warning line, as when nobody rang; nothing about the person (owner, Mac test).
+        self.assertEqual(said, ["Please be aware this property is monitored and you are on camera."])
 
     def test_nobody_says_nothing(self):
         p = self.pipeline(Mode.AWAY)

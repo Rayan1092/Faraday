@@ -14,6 +14,12 @@ Owner's list from the second Mac test, items 7 to 11. The Mac test ran main from
 
 **Item 11.** `FIXED_LINES` has the new lines. NV: re-render, and apply `docs/team/patches/nv-test-rehearsal-facts-only.patch` (PLAN Q41).
 
+**Review fixes:**
+- **Suspicious label:** a suspicious label that raises the warning (a mask, trying the handle) now speaks the fixed warning line, as when nobody rang. Before, that warning was silent once the early confrontation went.
+- **System prompts:** both now say "Never describe the person, their clothes or what they carry."
+- **Two more description paths:** the summary's facts ("The camera saw: …") and photo descriptions in the visitor prompt's history. Both are fixed in Dell PR "delivery + summary" (#69).
+- **Optional, not done:** the "who's at the door?" answers aren't pre-rendered, so the first one waits for Argmax TTS.
+
 **Tests:**
 - **Alarm:** says only the fixed line (Away and Night), and Bonsai is never asked about the photo.
 - **Suspicious label:** says nothing about the person.
