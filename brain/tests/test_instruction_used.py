@@ -26,7 +26,8 @@ SAVED_ONLY = tool_calls(("save_message", {"text": "Package for Sam", "sender": "
 
 
 def said(actions):
-    return [a.args["text"] for a in actions if a.type == ActionType.SPEAK]
+    return [a.args["text"] for a in actions
+            if a.type == ActionType.SPEAK and a.args["text"] != "One moment, please."]
 
 
 class DeliveryInstruction(unittest.TestCase):
@@ -66,9 +67,10 @@ class DeliveryInstruction(unittest.TestCase):
         self.p.handle(bell)
         take = next(e for e in self.p.log.recent(20) if e.get("type") == ActionType.TAKE_PHOTO)
         self.client.reply = tool_calls(("speak", {"text": "Thank you."}))
-        self.p.handle(events.photo_described(take["id"], "A courier holding a cardboard box at the door."))
+        photo = self.p.handle(events.photo_described(take["id"], "A courier holding a cardboard box at the door."))
         r = self.visitor("Where should I put it?")
-        self.assertTrue(any("side door" in line.lower() for line in said(r.actions)), said(r.actions))
+        both = said(photo.actions) + said(r.actions)
+        self.assertEqual(sum("side door" in line.lower() for line in both), 1, both)   # once per visit
 
     def test_a_different_spot_from_bonsai_is_replaced(self):
         self.make(reply=tool_calls(("speak", {"text": "Please leave the package by the front door."})))
@@ -81,6 +83,35 @@ class DeliveryInstruction(unittest.TestCase):
         self.make(reply=tool_calls(("speak", {"text": "Please leave it by the side door. Thank you."})))
         r = self.visitor("I have a package.")
         self.assertEqual(sum("side door" in line.lower() for line in said(r.actions)), 1)
+
+    def test_review_old_label_is_another_visit(self):
+        from datetime import datetime, timedelta
+        from brain.core import latest_label
+        old = (datetime.now() - timedelta(minutes=10)).isoformat(timespec="seconds")
+        now = datetime.now().isoformat(timespec="seconds")
+        entry = {"kind": "event", "type": "threat_assessed", "timestamp": old, "data": {"category": "delivery"}}
+        self.assertEqual(latest_label([entry]), "delivery")
+        self.assertEqual(latest_label([entry], now, 180), "")
+
+    def test_review_ordinary_words_are_not_a_delivery(self):
+        self.make(reply=tool_calls(("save_message", {"text": "dog is out"}),
+                                   ("speak", {"text": "I'll put it in Sam's messages."})))
+        r = self.visitor("Are any grown-ups home? Tell them their dog is out.")
+        self.assertEqual(said(r.actions), ["I'll put it in Sam's messages."])
+
+    def test_review_message_confirmation_kept(self):
+        self.make(reply=tool_calls(("save_message", {"text": "Package for Sam", "sender": "visitor"})))
+        r = self.visitor("I have a package for Sam.")
+        lines = said(r.actions)
+        self.assertEqual(len(lines), 2, lines)          # the confirmation, then the owner's words
+        self.assertIn("side door", lines[1].lower())
+
+    def test_review_said_once_per_visit(self):
+        self.make()
+        self.visitor("I have a package for Sam.")
+        self.client.reply = tool_calls(("speak", {"text": "Thank you, goodbye."}))
+        r = self.visitor("Okay, thanks, I'll leave the package then. Bye.")
+        self.assertFalse(any("side door" in line.lower() for line in said(r.actions)), said(r.actions))
 
     def test_not_for_a_plain_visitor_or_without_an_instruction(self):
         self.make(reply=tool_calls(("speak", {"text": "Hello, how can I help?"})))

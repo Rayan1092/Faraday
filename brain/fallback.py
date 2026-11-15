@@ -66,8 +66,9 @@ def arm_intent(text: str) -> Optional[str]:
     return Mode.AWAY if leaving else Mode.NIGHT
 
 
-_DELIVERY = re.compile(r"\b(packages?|parcels?|deliver\w*|courier|boxe?s?|amazon|fedex|ups|dhl|usps|"
-                       r"post(man|woman)?|mail(man)?|signature|sign for)\b", re.I)
+_DELIVERY = re.compile(r"\b(packages?|parcels?|deliver\w*|courier|a box|this box|the box|amazon|fedex|"
+                       r"dhl|usps|postman|postwoman|mailman|the mail|your mail|sign for)\b"
+                       r"|(?<![\w-])ups(?![\w-])", re.I)
 
 
 def mentions_delivery(text: str) -> bool:

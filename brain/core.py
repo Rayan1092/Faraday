@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from shared import Action, ActionType, ChangedBy, Event, EventType, Mode, SpeechChannel, ThreatCategory
@@ -213,9 +214,6 @@ class Brain:
         if not had_message and any(a.type == ActionType.SAVE_MESSAGE for a in actions):
             # Count it even when the number of actions didn't change (speech swapped out).
             fixups.append("saved the message Bonsai promised")
-        actions, passed = self._pass_on_delivery(actions, event, mode, allowed, ins, recent)
-        if passed:
-            fixups.append("corrected: passed on the owner's delivery instruction")
         actions, fixed = self._match_arm_words(actions, event, mode, allowed)
         if fixed:
             dropped = dropped + [fixed]
@@ -224,6 +222,9 @@ class Brain:
         actions = self._confirm_mode(actions, event, mode, allowed)
         if len(actions) != before:
             fixups.append("added a spoken confirmation")
+        actions, passed = self._pass_on_delivery(actions, event, mode, allowed, ins, recent)
+        if passed:
+            fixups.append("corrected: passed on the owner's delivery instruction")
         delivery_ins = next((i for i in ins if i["audience"] == oi.DELIVERY), None)
         if label == ThreatCategory.DELIVERY and delivery_ins is not None:
             # The owner said where deliveries go: that line, never a different spot.
@@ -269,7 +270,7 @@ class Brain:
             return self.instructions.relevant(label)
         if event.type == EventType.SPEECH_HEARD and (mode in Mode.ARMED or event.data.get("channel")
                                                      == SpeechChannel.VISITOR):
-            label = latest_label(recent)
+            label = latest_label(recent, event.timestamp, VISIT_S)
             if fb.mentions_delivery(str(event.data.get("text", ""))):
                 label = ThreatCategory.DELIVERY
             return self.instructions.relevant(label)
@@ -286,13 +287,18 @@ class Brain:
         if delivery_ins is None:
             return actions, False
         text = str(event.data.get("text", ""))
-        if not (fb.mentions_delivery(text) or latest_label(recent) == ThreatCategory.DELIVERY):
+        recent = list(recent)
+        if not (fb.mentions_delivery(text)
+                or latest_label(recent, event.timestamp, VISIT_S) == ThreatCategory.DELIVERY):
             return actions, False
         if any(a.type == ActionType.SPEAK and oi.mentions(a.args["text"], delivery_ins) for a in actions):
             return actions, False
-        # Drop a conflicting drop-off spot, then say the owner's words.
+        if any(oi.mentions(line, delivery_ins) for line in _said_since(recent, event.timestamp, VISIT_S)):
+            return actions, False     # already said in this visit: once is enough
+        # Drop a conflicting drop-off spot (never the message confirmation), then the owner's words.
         actions = [a for a in actions if not (a.type == ActionType.SPEAK
-                                              and fb.mentions_dropoff(a.args["text"]))]
+                                              and fb.mentions_dropoff(a.args["text"])
+                                              and "message" not in a.args["text"].lower())]
         extra, _ = filter_actions([fb._speak(oi.spoken_line(delivery_ins))], event, mode, allowed)
         return actions + extra, bool(extra)
 
@@ -365,8 +371,8 @@ class Brain:
             # never "I'll pass that along" when nothing was saved (owner speech, say)
             actions = [a for a in actions if not (a.type == ActionType.SPEAK
                                                   and a.args["text"] == fb.MESSAGE_SAVED)]
-        actions, _ = self._pass_on_delivery(actions, event, mode, allowed, ins, recent)
         actions = self._confirm_mode(actions, event, mode, allowed)
+        actions, _ = self._pass_on_delivery(actions, event, mode, allowed, ins, recent)
         self.log(f"[brain] using rule-based fallback ({error})")
         return Decision(actions, "fallback", elapsed, (model_dropped or []) + dropped, error)
 
@@ -502,15 +508,41 @@ def photo_cause(event: Event, recent: Iterable[Any]) -> str:
     return ""
 
 
-def latest_label(recent: Iterable[Any]) -> str:
-    """The most recent threat_assessed category in the log (for a visitor talking)."""
+VISIT_S = 180   # one visit at the door: a label or a line older than this is another visit
+
+
+def _age_s(stamp: Any, now: Any) -> Optional[float]:
+    try:
+        return (datetime.fromisoformat(str(now)) - datetime.fromisoformat(str(stamp))).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
+def latest_label(recent: Iterable[Any], now: Any = None, within_s: Optional[float] = None) -> str:
+    """The most recent threat_assessed category in the log (for a visitor talking).
+    With now/within_s, only a label from this visit counts."""
     label = ""
     for entry in recent:
         if hasattr(entry, "to_dict"):
             entry = entry.to_dict()
         if isinstance(entry, dict) and entry.get("type") == EventType.THREAT_ASSESSED:
+            age = _age_s(entry.get("timestamp"), now) if now is not None else None
+            if within_s is not None and age is not None and age > within_s:
+                continue
             label = str((entry.get("data") or {}).get("category", ""))
     return label
+
+
+def _said_since(recent: Iterable[Any], now: Any, within_s: float) -> List[str]:
+    """What Faraday said in the last within_s seconds."""
+    out = []
+    for entry in recent:
+        if (isinstance(entry, dict) and entry.get("kind") == "action"
+                and entry.get("type") == ActionType.SPEAK):
+            age = _age_s(entry.get("timestamp"), now)
+            if age is None or age <= within_s:
+                out.append(str((entry.get("args") or {}).get("text", "")))
+    return out
 
 
 def threat_label(event: Event, recent: Iterable[Any]) -> str:
