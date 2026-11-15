@@ -274,6 +274,40 @@ class Prerender(Base):
         self.assertEqual(tts.prerender(["A line.", "Another line."], stop=stop), 0)
 
 
+class WarmUp(Base):
+    """Owner 2026-11-15: most lines are written live by Bonsai and spoken with
+    --play, so the voice is loaded once at startup."""
+
+    def test_runs_the_cli_once_silently_and_keeps_nothing(self):
+        tts = self.tts()
+        secs = tts.warm_up()
+        self.assertIsNotNone(secs)
+        (args,) = self.calls()
+        self.assertNotIn("--play", args)                          # nothing is heard
+        self.assertEqual(args[args.index("--text") + 1], ArgmaxTTS.WARM_TEXT)
+        self.assertIsNone(tts.cached(ArgmaxTTS.WARM_TEXT))        # and nothing is cached
+        self.assertEqual(self.played, [])
+
+    def test_waits_while_faraday_talks_and_stop_ends_it(self):
+        tts = self.tts()
+        busy, stop, result = threading.Event(), threading.Event(), []
+        busy.set()
+        t = threading.Thread(target=lambda: result.append(tts.warm_up(wait=busy.is_set, stop=stop)))
+        t.start()
+        time.sleep(0.4)
+        self.assertEqual(self.calls(), [])                        # waiting for Faraday
+        stop.set()
+        t.join(5)
+        self.assertEqual(result, [None])
+        self.assertEqual(self.calls(), [])
+
+    def test_a_failing_cli_gives_none(self):
+        tts = ArgmaxTTS([sys.executable, "-c", "import sys; sys.exit(3)", "{text}"],
+                        cache_dir=self.dir / "cache")
+        with self.assertLogs("hardware.speech", "WARNING"):
+            self.assertIsNone(tts.warm_up())
+
+
 class Audition(Base):
     def test_takes_are_found_although_the_cli_drops_dotted_names(self):
         """Review of #44: "take01-0.6b-s7-t0.3" was saved as "...-t0.wav" and every take
