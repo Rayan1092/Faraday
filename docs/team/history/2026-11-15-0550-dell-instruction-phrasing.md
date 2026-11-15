@@ -19,3 +19,13 @@ Owner's list from the second Mac test, item 5: "If a delivery comes, I want you 
 **4B on this laptop, 3 runs, all 20 owner cases:** 60/60 final (100%), 54/60 by the model alone, 0 unsafe, 3.0 s average. All 7 phrasings are right in the end. The bench also caught a router bug: when the words clearly said add_instruction and the 2B agreed, a second weak-keyword check still rejected it (it missed plurals like "couriers"). Now an agreement with the plain words is accepted. The weak words also cover plurals, Amazon/FedEx/UPS and drivers.
 
 **Tests:** `brain/tests/test_instruction_phrasing.py`: the Mac sentence, lead-ins, still cut off and still refused, the 2B's answer checked, invented or bad answers refused, the owner's words decide the audience, the router asking the 2B, never from a random sentence, a real cut-off asked again.
+
+**Review fixes** (a fresh reviewer found these, each confirmed with a fake 2B):
+- **Questions never become instructions.** "Can you tell a delivery came?" used to store "came" and overwrite the real delivery instruction. After a lead-in ("can you tell…"), the request must start with "to" or "that". Requests starting with is/are/came/what/who/how and the like are refused.
+- **The 2B's request is reshaped or refused.** A leading "tell/ask/let/have <who> (know) (to/that)" is stripped, so "let him know I'm at the gym" becomes "The owner is at the gym." What's left must be a request starting with a verb, or the owner's own news ("I'm…"). It's refused if it repeats the if/when part or says "let me know". Every content word must come from what the owner said, so "come on in" or "the front door" can't be slipped in.
+- **Audience words are whole words.** "ups" no longer matches "upstairs", "friend" no longer matches "girlfriend".
+- **Safety list:** now refuses "let … inside/into", "come (on) in", "inside", "indoors", "open up/it/the …", and "key(s)".
+- **Rules stay rules.** "When someone rings the doorbell, can you tell them to wait and turn on the porch light?" is a rule again, not a refused instruction.
+- **When extraction runs:** only when the 2B or the plain words say "instruction" and an audience is named; never after a failed routing call (no second 30 s wait), and never while armed. Its time is counted in the route's time, and a stored instruction from the 2B counts as the 2B's.
+- **Cut-offs:** "…can you" or "…could you" at the end counts as cut off.
+- **Bench:** the stored request must be well shaped (no leading tell/ask/let/have, no if/when).

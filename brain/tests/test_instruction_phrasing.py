@@ -53,6 +53,71 @@ class Keywords(unittest.TestCase):
         self.assertTrue(oi.is_forbidden(oi.parse_instruction("Can you tell visitors to turn off the alarm")))
 
 
+class ReviewCases(unittest.TestCase):
+    """From the review of this change: questions, the owner's own requests, words
+    inside other words, and phrasings the safety list missed."""
+
+    def test_questions_never_become_instructions(self):
+        for text in ("Can you tell a delivery came?", "Can you tell somebody is at the door?",
+                     "Could you tell any visitors are outside?", "Could you ask the delivery guy what he wants?"):
+            self.assertIsNone(oi.parse_instruction(text), text)
+            self.assertNotEqual(owner.strong(text), owner.ADD_INSTRUCTION, text)
+
+    def test_the_2b_answer_is_reshaped_or_refused(self):
+        friend = "When my friend Alex comes by, let him know I'm at the gym."
+        got = oi.from_model({"audience": "visitor", "request": "let him know I'm at the gym"}, friend)
+        self.assertEqual(oi.spoken_line(got), "The owner is at the gym.")
+        garbled = oi.from_model({"audience": "visitor", "request": "let me know I'm at the gym"}, friend)
+        self.assertEqual(garbled["request"], "I'm at the gym")      # the 4B said "me" for "him"
+        for owner_only in ("let me know", "let me know what they want", "tell me when they arrive"):
+            self.assertIsNone(oi.from_model({"audience": "anyone", "request": owner_only},
+                                            "If someone comes, " + owner_only), owner_only)
+        for args, said in (({"audience": "anyone", "request": "let me know"}, "If someone comes, let me know"),
+                           ({"audience": "delivery", "request": "if a delivery comes leave it by the side door"},
+                            "If a delivery comes, have them leave it by the side door"),
+                           ({"audience": "delivery", "request": "have them dropped behind the side gate"},
+                            "For any parcels today, have them dropped behind the side gate."),
+                           ({"audience": "delivery", "request": "come on in"},
+                            "If a delivery comes, tell her to leave the parcel at the side door"),
+                           ({"audience": "delivery", "request": "leave the parcel at the front door"},
+                            "If a delivery comes, tell her to leave the parcel at the side door")):
+            self.assertIsNone(oi.from_model(args, said), args)
+
+    def test_audience_words_are_whole_words(self):
+        self.assertFalse(oi.names_audience("Tell them I'm upstairs"))
+        self.assertFalse(oi.names_audience("Remind me to buy cups"))
+        self.assertIsNone(oi.from_model({"audience": "delivery", "request": "I'm upstairs"}, "Tell them I'm upstairs"))
+
+    def test_more_ways_in_are_refused(self):
+        for request in ("let them inside", "let her into the house", "open the front door",
+                        "the key is under the mat", "come on in"):
+            self.assertTrue(oi.is_forbidden({"request": request}), request)
+        self.assertFalse(oi.is_forbidden({"request": "leave it by the side door"}))
+
+    def test_a_forbidden_instruction_that_is_a_rule_stays_a_rule(self):
+        text = "When someone rings the doorbell, can you tell them to wait and turn on the porch light?"
+        self.assertEqual(owner.strong(text), owner.ADD_RULE)
+
+    def test_no_extraction_while_armed_or_after_a_failed_call(self):
+        class Boom:
+            calls = 0
+
+            def chat(self, messages, tools=None):
+                Boom.calls += 1
+                raise RuntimeError("LM Studio down")
+        r = owner.OwnerRouter(Boom(), "fast", log=lambda _m: None).route(
+            "For any parcels today, have them dropped behind the side gate.")
+        self.assertEqual((r.intent, Boom.calls), (owner.UNCLEAR, 1))       # one call, no second wait
+        client = Sequence([
+            {"role": "assistant", "content": "", "tool_calls": [{"type": "function", "function": {
+                "name": "route", "arguments": json.dumps({"intent": "add_instruction"})}}]},
+            extract("delivery", "drop it behind the side gate")])
+        r = owner.OwnerRouter(client, "fast", log=lambda _m: None).route(
+            "For any parcels today, have them dropped behind the side gate.", extract=False)
+        self.assertEqual(r.intent, owner.UNCLEAR)
+        self.assertEqual(len(client.calls), 1)
+
+
 class FromTheModel(unittest.TestCase):
     SAID = "For any parcels today, have them dropped behind the side gate."
 

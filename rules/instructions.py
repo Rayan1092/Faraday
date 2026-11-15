@@ -123,9 +123,8 @@ _NOT_A_REQUEST = re.compile(r"^(?:is|are|was|were|came|comes|has|have|had|what|w
                             r"if|how|why|when|where|did|does)\b", re.I)
 # The 2B echoing the asking part: "tell him to ...", "let him know ...", "have them ...".
 _ASKING = re.compile(r"^(?:(?:i\s+want\s+you\s+to|can\s+you|could\s+you|please)\s+)?"
-                     r"(?:tell|ask|let|have|get)\s+(?:them|him|her|the\s+\w+|visitors?|everyone|anyone|"
-                     r"couriers?|drivers?)\s+(?:know\s+)?(?:to\s+|that\s+)?", re.I)
-_TO_OWNER = re.compile(r"^(?:let|tell|ask|remind|show|send)\s+me\b", re.I)
+                     r"(?:tell|ask|let|have|get)\s+(?:them|him|her|me|the\s+\w+|visitors?|everyone|anyone|"
+                     r"couriers?|drivers?)\s*(?:know\s*)?(?:to\s+|that\s+)?", re.I)
 
 
 def from_model(args: Any, said: str) -> Optional[Dict[str, str]]:
@@ -139,8 +138,9 @@ def from_model(args: Any, said: str) -> Optional[Dict[str, str]]:
         return None
     audience = str(args.get("audience", "")).strip().lower()
     req = " ".join(str(args.get("request", "")).split()).strip().rstrip(".!,?")
-    if _TO_OWNER.match(req):
-        return None                               # "let me know": meant for the owner, not a visitor
+    # "let him know I'm at the gym" -> "I'm at the gym". A bare "let me know" (meant for
+    # the owner) leaves nothing, and "let me know what they want" leaves a question:
+    # both are refused below.
     req = _ASKING.sub("", req)
     req = re.sub(r"^(?:please\s+|to\s+|that\s+)+", "", req, flags=re.I)
     if (audience not in AUDIENCES or not 2 < len(req) <= MAX_REQUEST or _CUT.search(req)
