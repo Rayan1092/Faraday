@@ -7,7 +7,10 @@ from pathlib import Path
 from shared import (ActionType, AlertLevel, EventType, Mode, Source,
                     validate_action, validate_event)
 
-from brain.pipeline import FILLER, Pipeline
+from brain.pipeline import Pipeline
+from rules.baseline import DOORBELL_GREETING
+
+FILLER = "One moment, please."  # gone (owner, Mac test): checked that it never comes back
 from log import EventLog
 from modes import ModeState
 from sim import events
@@ -83,10 +86,10 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(p.modes.alert, AlertLevel.WARNING)
 
     def test_brain_repeats_are_not_duplicated(self):
-        p, _, _ = self.pipeline(tool_calls(("speak", {"text": FILLER}),
+        p, _, _ = self.pipeline(tool_calls(("speak", {"text": "Thank you."}), ("speak", {"text": "Thank you."}),
                                            ("save_message", {"text": "Package for Sam."})), Mode.AWAY)
         texts = [a.args.get("text") for a in p.handle(events.speech("Package for Sam.")).actions]
-        self.assertEqual(texts.count(FILLER), 1)
+        self.assertEqual(texts.count("Thank you."), 1)
 
     def test_baseline_survives_a_dead_or_crashing_brain(self):
         for reply in (RuntimeError("down"), {"content": "garbage"}):
@@ -105,28 +108,28 @@ class PipelineTests(unittest.TestCase):
         alerts = [e.data["level"] for e in result.events if e.type == EventType.ALERT_CHANGED]
         self.assertEqual(alerts, ["alarm"])
 
-    # ---- "One moment" filler -------------------------------------------------
+    # ---- doorbell: one fixed greeting at the ring, then only replies -------------
 
-    def test_visitor_speech_gets_filler_before_the_model(self):
+    def test_visitor_speech_has_no_filler(self):
         p, rec, client = self.pipeline(tool_calls(("save_message", {"text": "Package for Sam."})),
                                        Mode.AWAY)
         result = p.handle(events.speech("Package for Sam."))
-        self.assertEqual(result.actions[0].args, {"text": FILLER})
-        self.assertIn(("action", "speak"), [(k, t) for k, t, _ in client.calls[0]["emitted_before"]])
-        self.assertEqual(result.actions[1].type, ActionType.SAVE_MESSAGE)
+        self.assertEqual(result.actions[0].type, ActionType.SAVE_MESSAGE)
         # The model forgot to answer; plain code thanks the visitor.
-        self.assertEqual(result.actions[2].args, {"text": "Thank you. I saved your message."})
+        self.assertEqual(result.actions[1].type, ActionType.SPEAK)
+        self.assertNotIn(FILLER, [a.args.get("text") for a in result.actions])
 
-    def test_doorbell_photo_gets_filler_but_motion_photo_does_not(self):
-        p, _, _ = self.pipeline(tool_calls(("speak", {"text": "Hello!"})), Mode.AWAY)
-        bell_photo = next(a for a in p.handle(events.doorbell()).actions if a.type == ActionType.TAKE_PHOTO)
-        texts = [a.args.get("text") for a in p.handle(events.photo_described(bell_photo.id)).actions]
-        # The sim's visitor carries a box, so the threat label says delivery: drop-off
-        # instructions instead of the message offer.
-        self.assertEqual(texts, [FILLER, "Hello!", "Please leave the package by the front door. Thank you!"])
-        visitor = events.photo_described(bell_photo.id, "A woman in a red coat waving at the camera.")
-        texts = [a.args.get("text") for a in p.handle(visitor).actions]
-        self.assertEqual(texts, [FILLER, "Hello!", "Would you like to leave a message?"])
+    def test_doorbell_greets_at_once_and_the_photo_gets_no_second_greeting(self):
+        p, _, client = self.pipeline(tool_calls(("speak", {"text": "Hello!"})), Mode.AWAY)
+        ring = p.handle(events.doorbell()).actions
+        self.assertEqual([a.args.get("text") for a in ring if a.type == ActionType.SPEAK], [DOORBELL_GREETING])
+        self.assertEqual(ring[0].type, ActionType.SPEAK)                   # before the photo
+        bell_photo = next(a for a in ring if a.type == ActionType.TAKE_PHOTO)
+        for description in (events.FAKE_DESCRIPTION, "A woman in a red coat waving at the camera."):
+            result = p.handle(events.photo_described(bell_photo.id, description))
+            self.assertEqual([a for a in result.actions if a.type == ActionType.SPEAK], [])
+            self.assertIn(EventType.THREAT_ASSESSED, [e.type for e in result.events])
+        self.assertEqual(client.calls, [])                                 # Bonsai only replies to speech
         motion = p.handle(events.motion()).actions
         self.assertIn("You're on camera. The owner has been alerted.",
                       [a.args.get("text") for a in motion])  # spoken by the baseline, at once
@@ -142,9 +145,11 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(p.handle(events.photo_described(photo.id)).actions, [])
         self.assertEqual(len(client.calls), calls)  # answered in code, no greeting
 
-    def test_no_filler_when_no_model_call(self):
+    def test_no_filler_anywhere(self):
         cases = [(Mode.HOME, events.speech("Turn on the porch light"), True),   # owner at home
                  (Mode.AWAY, events.speech("Package for Sam."), False),        # offline
+                 (Mode.AWAY, events.speech("Package for Sam."), True),
+                 (Mode.AWAY, events.doorbell(), True),
                  (Mode.AWAY, events.speech("Faraday, disarm"), True)]          # answered in code
         for mode, event, use_client in cases:
             p, _, _ = self.pipeline(tool_calls(("speak", {"text": "ok"})), mode, use_client)

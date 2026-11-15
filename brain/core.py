@@ -124,7 +124,7 @@ class Brain:
     def decide(self, event: Any, mode: str, recent: Iterable[Any] = (),
                before_model: Optional[Callable[[Event, str], None]] = None) -> Decision:
         """before_model(event, mode) runs just before a Bonsai call, and only if one
-        will really be made. The pipeline uses it to say "One moment" right away."""
+        will really be made. (The "One moment" filler that used it is gone: owner, Mac test.)"""
         if isinstance(event, dict):
             event = Event.from_dict(event)
         if mode not in Mode.ALL:
@@ -154,14 +154,11 @@ class Brain:
                     {"type": ActionType.SUMMARIZE_LOG, "args": {"minutes": 1440}}])
         if event.type == EventType.MODE_CHANGED:
             return self._code(event, mode, allowed, _mode_reply(event))
-        if event.type == EventType.PHOTO_DESCRIBED and label in (ThreatCategory.SUSPICIOUS,
-                                                                  ThreatCategory.NOBODY):
-            # Nobody there: nothing to say. Suspicious: the confrontation line speaks.
-            return Decision([], "code")
-        if event.type == EventType.PHOTO_DESCRIBED and (cause == EventType.MOTION
-                                                         or mode == Mode.NIGHT):
-            # Motion lines come from the baseline (and the alarm confrontation from
-            # confront()); a night doorbell stays quiet. Nothing for the model to add.
+        if event.type == EventType.PHOTO_DESCRIBED:
+            # A photo is never answered by the model (owner, Mac test): the doorbell
+            # greeting is fixed and spoken by code at the ring, motion lines come from
+            # the baseline, the alarm line from confront(). Bonsai only replies to
+            # what a visitor says.
             return Decision([], "code")
 
         if not allowed:
@@ -293,7 +290,8 @@ class Brain:
             return actions, False
         if any(a.type == ActionType.SPEAK and oi.mentions(a.args["text"], delivery_ins) for a in actions):
             return actions, False
-        if any(oi.mentions(line, delivery_ins) for line in _said_since(recent, event.timestamp, VISIT_S)):
+        spoken = oi.spoken_line(delivery_ins).lower()   # the line to visitors, not the owner's confirmation
+        if any(spoken in line.lower() for line in _said_since(recent, event.timestamp, VISIT_S)):
             return actions, False     # already said in this visit: once is enough
         # Drop a conflicting drop-off spot (never the message confirmation), then the owner's words.
         actions = [a for a in actions if not (a.type == ActionType.SPEAK

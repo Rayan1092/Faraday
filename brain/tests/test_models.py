@@ -71,7 +71,7 @@ class Routing(unittest.TestCase):
         b, smart, fast = self.brain()
         for event, mode in ((events.speech("Package for Sam."), Mode.AWAY),
                             (events.speech("Hello?"), Mode.NIGHT),
-                            (events.photo_described(None), Mode.AWAY)):
+                            (events.speech("Hello, is anyone home?", "visitor"), Mode.HOME)):
             d = b.decide(event, mode)
             self.assertEqual(d.role, "smart", (event.type, mode))
         self.assertEqual(len(fast.calls), 0)

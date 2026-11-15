@@ -9,8 +9,9 @@ For each incoming event, in this order:
 5. rules/baseline.py actions are emitted right away (lights, photos, fixed
    warning lines), escalating with the alert level.
 6. Stored user rules (add_rule) fire, minus anything the baseline already did.
-7. If Bonsai is about to be asked about a visitor, a short "One moment" is
-   emitted first so there's no silence.
+7. Doorbell while away: the fixed greeting (step 5) is followed by the owner's
+   words for visitors, if any. The doorbell photo gets its threat label but no
+   reply: Bonsai only answers what a visitor says. Nobody answers: nothing more.
 8. The brain's actions are added on top, minus anything already done.
 9. Software actions run: set_mode goes back through modes/ (which refuses unsafe
    changes), add_rule is stored, summarize_log is spoken.
@@ -47,7 +48,6 @@ from .core import Brain
 from .settings import load_settings, passphrase
 from modes.passphrase import REDACTED
 
-FILLER = "One moment, please."
 SNAPSHOT_REASON = "Snapshot from the dashboard"
 INSTRUCTION_REFUSED = ("I can only pass on words to visitors. "
                        "Lights, modes and the alarm stay with you.")
@@ -223,18 +223,16 @@ class Pipeline:
                     and cause[2] == AlertLevel.ALARM):
                 self._confront_later(event)  # the threat label below won't repeat it
 
-        said_filler = []
-
-        def filler(ev: Event, md: str) -> None:
-            if not said_filler and self._is_visitor_conversation(ev, md):
-                said_filler.append(True)
-                self._emit(make_action(ActionType.SPEAK, {"text": FILLER}, Source.BRAIN,
-                                       caused_by=ev.id), result, done)
+        if event.type == EventType.DOORBELL and mode == Mode.AWAY and self.instructions is not None:
+            # Right after the fixed greeting: the owner's words for visitors ("tell them
+            # I'm in the back garden"). Delivery words wait until the visitor says why.
+            words = [owner_instructions.spoken_line(i) for i in self.instructions.relevant("visitor")]
+            if words:
+                self._emit(make_action(ActionType.SPEAK, {"text": " ".join(words)[:240]}, Source.BRAIN,
+                                       caused_by=event.id), result, done)
 
         if event.type == EventType.PHOTO_DESCRIBED:
             # The threat label comes first, so it can shape what Faraday says next.
-            if getattr(self.assessor, "client", None) is not None:
-                filler(event, mode)  # a Bonsai call is coming: no silence for a visitor
             threat = self._assess(event, mode)
             self._process(threat, result, depth + 1)
             mode = self.modes.mode
@@ -259,17 +257,16 @@ class Pipeline:
               and look.is_look_request(str(event.data.get("text", "")))):
             self._look(event, result, done)   # typed at Night (dashboard box, sim): as before
         else:
-            self._decide(event, mode, result, done, filler)
+            self._decide(event, mode, result, done)
         self._software_actions(result, done, depth)
 
-    def _decide(self, event: Event, mode: str, result: Result, done: List[Action],
-                filler: Optional[Callable[[Event, str], None]] = None) -> None:
+    def _decide(self, event: Event, mode: str, result: Result, done: List[Action]) -> None:
         """Bonsai (or the fallback rules) for everything that isn't an owner request."""
         # A wide window so caused_by chains (photo -> take_photo -> doorbell) can be
         # traced; the prompt itself only shows the last brain.recent_lines entries.
         recent = [e for e in self.log.recent(TRACE_WINDOW) if e.get("id") != event.id]
         try:
-            decision = self.brain.decide(event, mode, recent, before_model=filler)
+            decision = self.brain.decide(event, mode, recent)
         except Exception as e:  # the baseline already ran; never stall on a brain bug
             self.say(f"[pipeline] brain failed on {event.type}: {e!r}")
             return
@@ -474,16 +471,6 @@ class Pipeline:
         thread = threading.Thread(target=run, name="faraday-confront", daemon=True)
         self._background.append(thread)
         thread.start()
-
-    def _is_visitor_conversation(self, event: Event, mode: str) -> bool:
-        """Speech while armed (owner is out or asleep), or the camera looking at
-        someone who rang the doorbell."""
-        if event.type == EventType.SPEECH_HEARD:
-            return mode in Mode.ARMED
-        if event.type == EventType.PHOTO_DESCRIBED:
-            cause = self._photo_cause.get(event.caused_by or "")
-            return bool(cause) and cause[0] == EventType.DOORBELL
-        return False
 
 
 def snapshot_action(reason: str = SNAPSHOT_REASON, caused_by: Optional[str] = None) -> Action:

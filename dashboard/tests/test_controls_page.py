@@ -113,11 +113,11 @@ class OwnerSnapshot(unittest.TestCase):
             self.assertEqual(client.calls, [])
             self.assertEqual([a.type for a in result.actions], [])
             self.assertIn(EventType.THREAT_ASSESSED, [e.type for e in result.events])
-            # a normal doorbell photo still gets the visitor reply
+            # a doorbell photo isn't answered either: the greeting was spoken at the ring
             p.handle(events.doorbell())
             take = [a for a in emitted if a.type == ActionType.TAKE_PHOTO][-1]
             p.handle(events.photo_described(take.id, "A person at the door."))
-            self.assertTrue(client.calls)
+            self.assertEqual(client.calls, [])
 
 
 # ---- opt-in: the real page, a fake mic, integration's controls server -------------------

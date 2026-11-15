@@ -47,12 +47,7 @@ def fallback(event: Event, mode: str, photo_cause: str = "", label: str = "",
     delivery_line / also_say: the owner's instructions as spoken lines (rules/instructions.py).
     """
     if event.type == EventType.PHOTO_DESCRIBED:
-        if photo_cause == EventType.MOTION or mode == Mode.NIGHT or label in ("suspicious", "nobody"):
-            return []  # motion lines are spoken by the baseline; night stays quiet
-        if label == "delivery":
-            return [_speak("Hello! " + (delivery_line or DELIVERY_LINE))]
-        greeting = GREETING_ARMED if mode in Mode.ARMED else GREETING_HOME
-        return [_speak(" ".join([greeting, *also_say])[:240])]
+        return []  # photos are never answered: the doorbell greeting is spoken at the ring
     if event.type == EventType.SPEECH_HEARD:
         return _speech(str(event.data.get("text", "")), mode)
     return []

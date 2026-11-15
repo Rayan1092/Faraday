@@ -146,7 +146,8 @@ def _summary_ok(text: Optional[str]) -> bool:
 
 
 def cases() -> List[Case]:
-    photo, photo_recent = _doorbell_photo()
+    # The doorbell greeting and photo replies are plain code now (owner, Mac test): no
+    # Bonsai case for them. The owner's words for visitors follow the greeting (tests).
     return [
         Case("heading_out", 'Owner at home: "Faraday, I\'m heading out."', Mode.HOME,
              _decide(events.speech("Faraday, I'm heading out."), Mode.HOME),
@@ -158,8 +159,6 @@ def cases() -> List[Case]:
              _decide(events.speech("Turn on the porch light."), Mode.HOME),
              _has(ActionType.OUTLET_ON, outlet="porch_light"),
              _has(ActionType.OUTLET_ON, outlet="porch_light")),
-        Case("doorbell_greeting", "Away: photo after a doorbell (greet, offer a message)", Mode.AWAY,
-             _decide(photo, Mode.AWAY, photo_recent), _speaks, _offers_message),
         Case("visitor_message", 'Away, visitor: "Package for Sam, I left it by the side door."',
              Mode.AWAY,
              _decide(events.speech("Package for Sam, I left it by the side door."), Mode.AWAY),
@@ -219,14 +218,6 @@ def cases() -> List[Case]:
                      Mode.AWAY, "motion", 0, "nobody"),
         Case("summary", "Owner: summary of the log (free text)", Mode.HOME,
              _free_text(lambda b: b.summarize(FACTS)), _summary_ok, _summary_ok),
-        Case("i_delivery", 'Instruction, away delivery: owner said "ask them to leave it by the side door"',
-             Mode.AWAY, _with_instruction("If a delivery comes, ask them to leave it by the side door.",
-                                          BOX_TEXT, "delivery"),
-             _says("side door"), _says("side door")),
-        Case("i_visitor", 'Instruction, away doorbell: owner said "tell them I\'m in the back garden"',
-             Mode.AWAY, _with_instruction("If someone comes, tell them I'm in the back garden.",
-                                          "A woman in a red coat waving at the camera.", "visitor"),
-             _says("garden"), _says("garden")),
         Case("i_speech_delivery", 'Instruction, away visitor: "Hi, I have a package for Sam." '
              '(owner: "ask them to leave it by the side door")', Mode.AWAY,
              _speech_with_instruction("If a delivery comes, ask them to leave it by the side door.",

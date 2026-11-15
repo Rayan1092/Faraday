@@ -121,7 +121,7 @@ def steps() -> List[Step]:
         Step(1, "Owner leaves", ["Speech -> Bonsai -> set_mode away", "LED blue, \"Away mode on\""],
              leaving),
         Step(2, "Doorbell", ["Photo -> description -> Bonsai greets, offers a message"], doorbell, 6.0),
-        Step(3, "Visitor leaves a message", ["\"One moment, please\" -> save_message -> dashboard"],
+        Step(3, "Visitor leaves a message", ["fixed greeting at the ring -> visitor speaks -> save_message -> dashboard"],
              message),
         Step(4, "Night, motion", ["Porch light on, photo, warning (yellow)"], night),
         Step(5, "Rule by voice, motion again", ["add_rule -> both lights -> ALARM (red)",

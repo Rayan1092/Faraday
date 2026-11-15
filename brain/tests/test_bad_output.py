@@ -39,6 +39,10 @@ class FakeLMStudio(BaseHTTPRequestHandler):
         pass
 
 
+def visitor_speech():
+    return events.speech("Hello, is anyone home?", "visitor")
+
+
 def wrap(message) -> bytes:
     return json.dumps({"choices": [{"message": message}]}).encode()
 
@@ -64,12 +68,13 @@ class GarbageFallsBack(unittest.TestCase):
         socket.timeout("timed out"),
     ]
 
-    def test_visitor_always_gets_a_greeting(self):
+    def test_visitor_always_gets_a_reply(self):
+        # A visitor talking is what the model answers now (photos never are: owner, Mac test).
         for reply in self.GARBAGE:
-            for mode in (Mode.HOME, Mode.AWAY):  # night stays quiet
-                decision = make_brain(reply).decide(events.photo_described(None), mode)
+            for mode in Mode.ALL:
+                decision = make_brain(reply).decide(visitor_speech(), mode)
                 self.assertEqual(decision.via, "fallback", reply)
-                self.assertEqual([a.type for a in decision.actions], [ActionType.SPEAK], reply)
+                self.assertIn(ActionType.SPEAK, [a.type for a in decision.actions], reply)
 
     def test_fallback_actions_are_valid(self):
         for reply in self.GARBAGE:
@@ -83,9 +88,9 @@ class GarbageFallsBack(unittest.TestCase):
         for content in ('{"actions": [{"type": "speak", "args": {"text": "Hello."}}]}',
                         'Calling: <tool_call>{"name": "speak", "arguments": {"text": "Hi."}}</tool_call>',
                         '[TOOL_REQUEST]{"name": "speak", "arguments": {"text": "Hey."}}[END_TOOL_REQUEST]'):
-            decision = make_brain({"content": content}).decide(events.photo_described(None), Mode.AWAY)
+            decision = make_brain({"content": content}).decide(visitor_speech(), Mode.AWAY)
             self.assertEqual(decision.via, "bonsai", content)
-            self.assertEqual(decision.actions[0].type, ActionType.SPEAK)
+            self.assertIn(ActionType.SPEAK, [a.type for a in decision.actions])
 
     def test_partly_bad_reply_keeps_the_good_parts(self):
         reply = tool_calls(("save_message", {"text": "Package for Sam."}), ("disarm", {}),
@@ -122,7 +127,6 @@ class RealClientAgainstFakeServer(unittest.TestCase):
         cls.server.shutdown()
         cls.server.server_close()
 
-    visitor = events.photo_described(None)
 
     def setUp(self):
         FakeLMStudio.body, FakeLMStudio.status, FakeLMStudio.delay = b"{}", 200, 0.0
@@ -134,37 +138,37 @@ class RealClientAgainstFakeServer(unittest.TestCase):
     def test_tool_calls_round_trip(self):
         FakeLMStudio.body = wrap(tool_calls(("take_photo", {"reason": "not offered"}),
                                             ("speak", {"text": "Hello there."})))
-        decision = self.brain().decide(self.visitor, Mode.AWAY)
+        decision = self.brain().decide(visitor_speech(), Mode.AWAY)
         self.assertEqual(decision.via, "bonsai")
         self.assertEqual([a.type for a in decision.actions], [ActionType.SPEAK])
         self.assertIsNotNone(decision.elapsed_s)
         sent = FakeLMStudio.last_request
         self.assertEqual(sent["model"], "test-model")
-        self.assertEqual({t["function"]["name"] for t in sent["tools"]}, {"speak"})
+        self.assertEqual({t["function"]["name"] for t in sent["tools"]}, {"speak", "save_message"})
         self.assertEqual(sent["reasoning_effort"], "none")
 
     def test_non_json_body(self):
         FakeLMStudio.body = b"<html>502 Bad Gateway</html>"
-        self.assertEqual(self.brain().decide(self.visitor, Mode.AWAY).via, "fallback")
+        self.assertEqual(self.brain().decide(visitor_speech(), Mode.AWAY).via, "fallback")
 
     def test_http_error(self):
         FakeLMStudio.status, FakeLMStudio.body = 500, b'{"error": "model not loaded"}'
-        decision = self.brain().decide(self.visitor, Mode.AWAY)
+        decision = self.brain().decide(visitor_speech(), Mode.AWAY)
         self.assertEqual(decision.via, "fallback")
         self.assertIn("500", decision.error)
 
     def test_no_choices(self):
         FakeLMStudio.body = b'{"choices": []}'
-        self.assertEqual(self.brain().decide(self.visitor, Mode.AWAY).via, "fallback")
+        self.assertEqual(self.brain().decide(visitor_speech(), Mode.AWAY).via, "fallback")
 
     def test_timeout(self):
         FakeLMStudio.delay = 1.5
         FakeLMStudio.body = wrap(tool_calls(("speak", {"text": "Too late."})))
         started = time.perf_counter()
-        decision = self.brain(timeout=0.3).decide(self.visitor, Mode.AWAY)
+        decision = self.brain(timeout=0.3).decide(visitor_speech(), Mode.AWAY)
         self.assertLess(time.perf_counter() - started, 1.4)
         self.assertEqual(decision.via, "fallback")
-        self.assertEqual(decision.actions[0].type, ActionType.SPEAK)
+        self.assertIn(ActionType.SPEAK, [a.type for a in decision.actions])
 
     def test_nothing_listening(self):
         probe = socket.socket()
@@ -172,7 +176,7 @@ class RealClientAgainstFakeServer(unittest.TestCase):
         port = probe.getsockname()[1]
         probe.close()
         client = BonsaiClient(f"http://127.0.0.1:{port}", "m", timeout_s=2)
-        decision = Brain(client, PASSPHRASE, log=lambda _m: None).decide(events.photo_described(None), Mode.HOME)
+        decision = Brain(client, PASSPHRASE, log=lambda _m: None).decide(visitor_speech(), Mode.HOME)
         self.assertEqual(decision.via, "fallback")
 
 
