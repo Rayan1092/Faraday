@@ -4,7 +4,7 @@ import unittest
 from shared import AlertLevel, ActionType, EventType, Mode, Source, make_action, validate_action
 
 from rules import baseline_actions, merge
-from rules.baseline import ALARM_LINE, ANNOUNCE_DOORBELL, WARNING_LINE
+from rules.baseline import DOORBELL_GREETING, ALARM_LINE, ANNOUNCE_DOORBELL, WARNING_LINE
 from sim import events
 
 N, W, A = AlertLevel.NORMAL, AlertLevel.WARNING, AlertLevel.ALARM
@@ -36,7 +36,7 @@ class ModeTable(unittest.TestCase):
             self.check(events.motion, Mode.HOME, alert, [])                     # nothing
 
     def test_away(self):
-        self.check(events.doorbell, Mode.AWAY, N, [PHOTO])  # AI answers after the photo
+        self.check(events.doorbell, Mode.AWAY, N, [("speak", DOORBELL_GREETING), PHOTO])  # greeting at once
         self.check(events.motion, Mode.AWAY, W, [PORCH, PHOTO, ("speak", WARNING_LINE)])
         self.check(events.motion, Mode.AWAY, A, [PORCH, LAMP, PHOTO, ("speak", ALARM_LINE)])
 

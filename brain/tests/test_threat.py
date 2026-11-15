@@ -143,7 +143,8 @@ class PipelineEffects(unittest.TestCase):
         result = self.doorbell_photo(p, BOX)
         labels = [e for e in result.events if e.type == EventType.THREAT_ASSESSED]
         self.assertEqual(labels[0].data["category"], C.DELIVERY)
-        self.assertIn("Please leave the package", " ".join(a.args.get("text", "") for a in result.actions))
+        # the photo is never answered: drop-off words come when the visitor speaks
+        self.assertEqual([a for a in result.actions if a.type == ActionType.SPEAK], [])
         self.assertIn("threat_assessed", p.log.path.read_text(encoding="utf-8"))
 
     def test_bonsai_label_is_used(self):
@@ -151,7 +152,7 @@ class PipelineEffects(unittest.TestCase):
         result = self.doorbell_photo(p, COAT)
         label = next(e for e in result.events if e.type == EventType.THREAT_ASSESSED)
         self.assertEqual((label.data["category"], label.data["via"]), (C.VISITOR, "bonsai"))
-        self.assertIn("leave a message", " ".join(a.args.get("text", "") for a in result.actions))
+        self.assertEqual([a for a in result.actions if a.type == ActionType.SPEAK], [])   # no second greeting
 
     def test_suspicious_escalates_and_confronts_early(self):
         p = self.pipeline(Mode.AWAY, brain_reply={"role": "assistant", "content": "Step away from the door."})

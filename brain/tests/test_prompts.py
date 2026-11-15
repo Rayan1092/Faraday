@@ -35,7 +35,7 @@ class Profiles(unittest.TestCase):
         client = FakeClient(tool_calls(("speak", {"text": "Hi."})))
         brain = Brain(client, "secret words", log=lambda _m: None)
         brain.use_prompts("9b")
-        brain.decide(events.photo_described(None), "away")
+        brain.decide(events.speech("Hello, is anyone home?", "visitor"), "away")
         self.assertEqual(client.calls[0]["messages"][0]["content"], PROFILES["9b"]["system"])
 
     def test_every_profile_has_every_prompt_and_stays_short(self):

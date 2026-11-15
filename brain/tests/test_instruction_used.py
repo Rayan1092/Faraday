@@ -113,6 +113,14 @@ class DeliveryInstruction(unittest.TestCase):
         r = self.visitor("Okay, thanks, I'll leave the package then. Bye.")
         self.assertFalse(any("side door" in line.lower() for line in said(r.actions)), said(r.actions))
 
+    def test_owner_confirmation_is_not_the_visitor_line(self):
+        """The owner's "Okay, when a delivery comes I'll ask them..." is not saying it to a visitor."""
+        self.make(instruction=None, mode=Mode.HOME)
+        self.p.handle(events.speech(SIDE_DOOR, "owner"))
+        self.p.owner_set_mode(Mode.AWAY)
+        r = self.visitor("I have a package for Sam.")
+        self.assertTrue(any("side door" in line.lower() for line in said(r.actions)), said(r.actions))
+
     def test_not_for_a_plain_visitor_or_without_an_instruction(self):
         self.make(reply=tool_calls(("speak", {"text": "Hello, how can I help?"})))
         r = self.visitor("Hi, is Sam home? I'm a friend from work.")

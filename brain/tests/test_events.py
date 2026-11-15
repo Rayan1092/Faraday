@@ -94,35 +94,27 @@ class EveryEventGivesValidActions(unittest.TestCase):
                                 caused_by=origin.id)
             return events.photo_described(photo.id), [origin.to_dict(), photo.to_dict()]
 
-        # Doorbell photo: greeting plus an offer to take a message (Home has no photo
-        # in the mode table, but if one arrives it's greeted the same way).
-        for mode in (Mode.HOME, Mode.AWAY):
-            event, recent = chain(events.doorbell(), "x")
-            text = make_brain().decide(event, mode, recent).actions[0].args["text"]
-            self.assertIn("leave a message", text, mode)
-        # Motion photos (warning lines come from the baseline) and anything at
-        # night (quiet): nothing, and Bonsai is never asked.
+        # No photo is ever answered (owner, Mac test): the doorbell greeting is spoken
+        # by code at the ring, motion lines come from the baseline. Bonsai is never asked.
         for origin, mode in ((events.motion, Mode.AWAY), (events.motion, Mode.NIGHT),
-                             (events.motion, Mode.HOME), (events.doorbell, Mode.NIGHT)):
+                             (events.motion, Mode.HOME), (events.doorbell, Mode.NIGHT),
+                             (events.doorbell, Mode.AWAY), (events.doorbell, Mode.HOME)):
             brain = make_brain(tool_calls(("speak", {"text": "Hello visitor!"})))
             event, recent = chain(origin(), "x")
             decision = brain.decide(event, mode, recent)
             self.assertEqual((decision.via, decision.actions), ("code", []), (origin, mode))
             self.assertEqual(brain.client.calls, [])
 
-    def test_doorbell_reply_always_offers_a_message(self):
+    def test_doorbell_photo_gets_no_second_greeting(self):
         bell = events.doorbell()
         photo = make_action(ActionType.TAKE_PHOTO, {"reason": "doorbell"}, Source.RULES,
                             caused_by=bell.id)
         recent = [bell.to_dict(), photo.to_dict()]
-        brain = make_brain(tool_calls(("speak", {"text": "Hello, can I help you?"})))
-        texts = [a.args["text"] for a in brain.decide(events.photo_described(photo.id),
-                                                       Mode.AWAY, recent).actions]
-        self.assertEqual(texts, ["Hello, can I help you?", "Would you like to leave a message?"])
-        brain = make_brain(tool_calls(("speak", {"text": "Hi! Want to leave a message?"})))
-        texts = [a.args["text"] for a in brain.decide(events.photo_described(photo.id),
-                                                       Mode.AWAY, recent).actions]
-        self.assertEqual(texts, ["Hi! Want to leave a message?"])
+        for reply in (tool_calls(("speak", {"text": "Hello, can I help you?"})), RuntimeError("down")):
+            brain = make_brain(reply)
+            d = brain.decide(events.photo_described(photo.id), Mode.AWAY, recent)
+            self.assertEqual(d.actions, [])
+            self.assertEqual(brain.client.calls, [])
 
     def test_promised_message_is_saved_in_code(self):
         brain = make_brain(tool_calls(("speak", {"text": "I'll take that message for you."})))

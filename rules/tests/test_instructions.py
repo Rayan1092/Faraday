@@ -168,10 +168,12 @@ class ThroughThePipeline(unittest.TestCase):
             p, emitted = pipeline(tmp)
             p.handle(events.speech(SIDE_DOOR))
             p.owner_set_mode(Mode.AWAY)
-            r = delivery_photo(p, emitted)
-            self.assertEqual(said(r), ["Hello! Please leave it by the side door."])
-            # words only: the instruction adds no lights, modes, alerts or messages
-            self.assertEqual({a.type for a in r.actions}, {ActionType.SPEAK})
+            photo = delivery_photo(p, emitted)
+            self.assertEqual(said(photo), [])          # the photo itself is never answered
+            r = p.handle(events.speech("Hi, I have a package for Sam.", "visitor"))
+            self.assertIn("Please leave it by the side door.", said(r))
+            # words only: the instruction adds no lights, modes or alerts
+            self.assertLessEqual({a.type for a in r.actions}, {ActionType.SPEAK, ActionType.SAVE_MESSAGE})
 
     def test_bonsai_front_door_line_is_replaced_by_the_owners_spot(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -179,7 +181,8 @@ class ThroughThePipeline(unittest.TestCase):
             p, emitted = pipeline(tmp, client)
             p.instructions.add(oi.parse_instruction(SIDE_DOOR))
             p.owner_set_mode(Mode.AWAY)
-            r = delivery_photo(p, emitted)
+            delivery_photo(p, emitted)
+            r = p.handle(events.speech("Hi, I have a package for Sam.", "visitor"))
             self.assertNotIn("Hi! Please leave the package by the front door.", said(r))
             self.assertIn("Please leave it by the side door.", said(r))
             prompt = client.calls[-1]["messages"][1]["content"]
@@ -191,10 +194,11 @@ class ThroughThePipeline(unittest.TestCase):
             p, emitted = pipeline(tmp, client)
             p.instructions.add(oi.parse_instruction("If someone comes, tell them I'm in the back garden."))
             p.owner_set_mode(Mode.AWAY)
-            p.handle(events.doorbell())
-            take = [a for a in emitted if a.type == ActionType.TAKE_PHOTO][-1]
-            r = p.handle(events.photo_described(take.id, "A woman in a red coat waving at the camera."))
+            r = p.handle(events.doorbell())       # right after the fixed greeting, from code
             self.assertIn("The owner is in the back garden.", said(r))
+            take = [a for a in emitted if a.type == ActionType.TAKE_PHOTO][-1]
+            photo = p.handle(events.photo_described(take.id, "A woman in a red coat waving at the camera."))
+            self.assertEqual(said(photo), [])
 
     def test_visitor_talking_while_armed_gets_them_in_the_prompt(self):
         with tempfile.TemporaryDirectory() as tmp:

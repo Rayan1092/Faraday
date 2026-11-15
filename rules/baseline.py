@@ -14,6 +14,10 @@ from shared import (Action, ActionType, AlertLevel, ChangedBy, Event, EventType,
                     Source, make_action)
 
 ANNOUNCE_DOORBELL = "Someone is at the door."
+# Away: spoken by code the moment the doorbell rings, then the visitor's listening
+# window opens. No second greeting from Bonsai; Bonsai only replies to what they say.
+DOORBELL_GREETING = ("Hello. No one can come to the door right now. "
+                     "I can take a message or help with a delivery.")
 WARNING_LINE = "You're on camera. The owner has been alerted."
 ALARM_LINE = "Alarm. You are being recorded. Leave now."
 
@@ -28,7 +32,7 @@ Step = Tuple[str, dict]
 # Doorbell: (mode) -> steps. The alert level doesn't matter for the doorbell.
 DOORBELL: Dict[str, List[Step]] = {
     Mode.HOME: [(_SAY, {"text": ANNOUNCE_DOORBELL})],
-    Mode.AWAY: [(_PHOTO, {"reason": "doorbell while away"})],
+    Mode.AWAY: [(_SAY, {"text": DOORBELL_GREETING}), (_PHOTO, {"reason": "doorbell while away"})],
     Mode.NIGHT: [_PORCH, (_PHOTO, {"reason": "doorbell at night"})],  # quiet: no speech
 }
 
