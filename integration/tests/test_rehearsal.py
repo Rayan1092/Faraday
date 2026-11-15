@@ -305,8 +305,11 @@ class Rehearsal(unittest.TestCase):
         self.speak(540, 1.6)
         self.step("passphrase disarms", lambda: modes.mode == Mode.HOME and modes.alert == "normal")
         disarm = [e for e in self.events("speech_heard") if "[passphrase]" in e["data"]["text"]][-1]
-        self.assertEqual(disarm["data"]["channel"], "owner", "the owner's wake request, even in a visitor window")
-        self.assertTrue(any("(in a visitor window)" in s for s in self.out), "heard in the visitor window")
+        # Away, within the visit after a ring (owner 2026-11-15): every word is the visitor's,
+        # "Hey Faraday ..." too (nobody is home); modes/ checks the passphrase on any channel
+        self.assertEqual(disarm["data"]["channel"], "visitor", "Away, within the visit: the visitor's words")
+        self.assertTrue(any("[visit] the wake phrase during a visit in Away" in s for s in self.out),
+                        "heard in the visitor window, within the visit")
         self.step("lights off after disarm", lambda: not fl.device.outlet_lit[1] and not fl.device.outlet_lit[2])
         self.step("LED off", lambda: fl.device.rgb == [0, 0, 0])
         self.assertFalse(any(self.passphrase in json.dumps(e) for e in self.log()),

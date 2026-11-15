@@ -4,6 +4,17 @@ Everything since the last Mac session (vision, object detection, hands-free wind
 
 `argmax-cli` below means `/Users/captain/clueless/vendor/argmax-oss-swift/.build/release/argmax-cli`.
 
+## Retest 3 (5 minutes, 2026-11-15 morning): speaker, outlet 2, visitor, intercom, owner answers
+
+`git pull` with Wi-Fi on, then Wi-Fi off. Settings: keep `"speaker_device": "onn Rugged Speaker"` (or `null`: Faraday then follows the system output, like argmax) and `"lights_off_at_start": false` until step 1 says "works".
+
+1. **Outlets** (Faraday stopped, Flipper plugged in, no app open on it): `python3 -m hardware.check outlets`. The table shows each outlet's on/off signal and "different signals (good)" or "SAME SIGNAL". Then the guided test on the living room lamp: Enter before each send, then y/n for "is the lamp on?". It ends with a verdict: works, toggles, swapped or deaf, plus the exact Flipper steps (re-record or swap) if needed.
+2. **Vision check cleans up:** `python3 -m hardware.check vision` ends with "Unloaded ternary-bonsai-2-4b-mlx", and start_mac.sh no longer warns "other models are loaded".
+3. **Start:** `integration/start_mac.sh`. Expect `[ OK ] speaker: onn Rugged Speaker (audio.speaker_device "onn Rugged Speaker")` with no speaker WARN (a WARN means the system output is another device: set it to the onn in System Settings > Sound > Output). In the app: `[tts] argmax voice warm in X s`.
+4. **Visitor after the window closed:** "Hey Faraday, I'm heading out." Ring. After the greeting wait about 10 s (`[mic] nobody spoke`), then **without** "Hey Faraday" say "I have a package, where should I leave it?". Expect `[visit] speech within the visit: the visitor's` and the leave-it-by-the-door reply, from the onn speaker.
+5. **Intercom:** disarm. Controls page: hold Talk, speak, release, then say nothing for 3 s: `[mic] nobody spoke`, no reply. Again, and answer within 3 s: Faraday hears it as the visitor.
+6. **Owner answers without the wake phrase:** an instruction it can't finish ("Hey Faraday, if a delivery comes, I wanted to tell him to put the delivery box next to the side door.") gets "Please say it again." Say it again **without** "Hey Faraday": `[mic] listening (question, owner)` and it's accepted.
+
 ## Retest first: everything from the night of 2026-11-15, in this order
 
 All of this was built and tested on Windows with fakes and the Bonsai 2 4B; only the Mac can confirm it. NV and Dell items are in one list. The older full list is further down, for reference.
