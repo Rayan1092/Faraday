@@ -21,8 +21,9 @@ class EventType:
     MODE_CHANGED = "mode_changed"
     ALERT_CHANGED = "alert_changed"
     THREAT_ASSESSED = "threat_assessed"
+    RECORDING_SAVED = "recording_saved"
     ALL = frozenset({DOORBELL, MOTION, SPEECH_HEARD, PHOTO_DESCRIBED, MODE_CHANGED,
-                     ALERT_CHANGED, THREAT_ASSESSED})
+                     ALERT_CHANGED, THREAT_ASSESSED, RECORDING_SAVED})
 
 
 # ---- per-type data ---------------------------------------------------------
@@ -134,6 +135,17 @@ class ThreatAssessedData:
     voices: Optional[int] = None        # voice count from diarization, if known
 
 
+@dataclass
+class RecordingSavedData:
+    """About 10 s of camera frames saved when the alarm went off (PLAN Q32).
+    Written straight to the log by integration/ (not run through the brain)."""
+    path: str                           # "captures/alarm-20261115-013000/", repo-relative folder
+    frames: int                         # JPEG frames saved (frame-0001.jpg, ...)
+    duration_s: float                   # first to last frame
+    video_path: Optional[str] = None    # "captures/alarm-.../clip.avi" (MJPG) if it could be written
+    reason: str = ""                    # "alarm"
+
+
 EVENT_DATA = {
     EventType.DOORBELL: DoorbellData,
     EventType.MOTION: MotionData,
@@ -142,6 +154,7 @@ EVENT_DATA = {
     EventType.MODE_CHANGED: ModeChangedData,
     EventType.ALERT_CHANGED: AlertChangedData,
     EventType.THREAT_ASSESSED: ThreatAssessedData,
+    EventType.RECORDING_SAVED: RecordingSavedData,
 }
 
 
@@ -285,6 +298,14 @@ def validate_event(d: Dict[str, Any]) -> List[str]:
             errors.append("data.voices must be a whole number or null")
     if d["type"] == EventType.PHOTO_DESCRIBED:
         errors += _photo_errors(data)
+    if d["type"] == EventType.RECORDING_SAVED:
+        if not str(data["path"]).strip():
+            errors.append("data.path is empty")
+        if not _whole(data["frames"]) or data["frames"] < 0:
+            errors.append("data.frames must be a whole number >= 0")
+        dur = data["duration_s"]
+        if isinstance(dur, bool) or not isinstance(dur, (int, float)) or dur < 0:
+            errors.append("data.duration_s must be a number >= 0")
     if d["type"] == EventType.SPEECH_HEARD and not str(data["text"]).strip():
         errors.append("data.text is empty")
     if d["type"] == EventType.SPEECH_HEARD and data.get("voices") is not None:

@@ -65,7 +65,9 @@ def build_app(args: argparse.Namespace, settings) -> App:
     speaker = PrintTTS(gate) if args.print_speech else TextToSpeech.from_settings(settings, gate)
     app = App(settings, flipper, camera=camera, speaker=speaker, use_llm=not args.offline,
               mode=args.mode, event_log=log, rules=rules, dashboard=not args.no_dashboard,
-              port=args.port)
+              port=args.port,
+              lights_off_at_start=bool(settings.get("integration", {}).get("lights_off_at_start", True)))
+    app.video = feed                     # alarm recording (None with the stand-in camera)
     if not args.no_mic:
         from hardware.audio import Recorder
         from hardware.speech import SpeechToText
@@ -182,6 +184,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--log", help="log file (default: logs/events.jsonl)")
     ap.add_argument("--port", type=int, help="dashboard port (default from settings)")
     ap.add_argument("--no-dashboard", action="store_true")
+    ap.add_argument("--fresh", action="store_true",
+                    help="move logs/ and captures/ to old_runs/<time>/ first (empty log)")
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("-v", "--verbose", action="store_true", help="show driver details")
     args = ap.parse_args(argv)
@@ -189,6 +193,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
                         format="%(asctime)s %(name)s %(message)s", datefmt="%H:%M:%S")
     settings = load_settings()
+    if args.fresh:
+        from integration.fresh import archive_run
+        moved = archive_run(settings)
+        print(f"Fresh start: old logs and captures moved to {moved}" if moved
+              else "Fresh start: nothing to move")
     app = build_app(args, settings)
     fake = type(app.flipper).__name__ == "FakeFlipper"
     print(f"Faraday. Settings: {'settings.json' if (CONFIG_DIR / 'settings.json').exists() else 'settings.example.json (public example passphrase!)'}")

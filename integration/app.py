@@ -19,7 +19,8 @@ import queue
 import threading
 from typing import Any, Callable, Dict, List, Optional
 
-from shared import Action, ActionType, Event, EventType, Mode, Source
+from shared import (Action, ActionType, AlertLevel, Event, EventType, Mode, RecordingSavedData,
+                    Source, make_event)
 
 from brain.pipeline import Pipeline
 
@@ -43,7 +44,7 @@ class App:
                  use_llm: bool = True, mode: str = Mode.HOME,
                  event_log: Any = None, rules: Any = None,
                  dashboard: bool = True, port: Optional[int] = None,
-                 out: Callable[[str], None] = print):
+                 out: Callable[[str], None] = print, lights_off_at_start: bool = False):
         self.settings = settings
         self.out = out
         self.flipper = flipper
@@ -57,6 +58,10 @@ class App:
         self._outlet_state: Dict[str, str] = {}   # outlet -> last command sent OK (on/off)
         self._sent_lock = threading.Lock()
         self._speaking = False                     # a line is being spoken right now
+        self.lights_off_at_start = lights_off_at_start
+        self.video: Any = None                     # hardware.camera.CameraFeed: alarm recording
+        self.alarm_record_s = float(settings.get("camera", {}).get("alarm_record_s", 10))
+        self._recording = threading.Lock()         # one alarm recording at a time
         self.voice: Any = None                     # integration.voice.Voice, set by __main__
         self.extras: List[Any] = []                # things with stop(): controls server, camera feed
         self.flipper.on_event = self.submit
@@ -79,6 +84,8 @@ class App:
             t.start()
             self._threads.append(t)
         self.flipper.start()
+        if self.lights_off_at_start:
+            self._all_lights_off()
         if self.board is not None:
             self.board.start()
         self.pipeline.start()          # mode_changed (startup) -> LED shows the mode
@@ -114,6 +121,54 @@ class App:
         return (self._speaking or self.events.unfinished_tasks > 0
                 or self._speech.unfinished_tasks > 0 or self._photos.unfinished_tasks > 0)
 
+    def _all_lights_off(self) -> None:
+        """Every start: send off to every outlet, so the real lamps match the
+        dashboard (owner 2026-11-14). Logged as `system` actions, so the Lights
+        panel shows them off; the skip-repeat state starts as "off"."""
+        for outlet in list(self.flipper.outlets):
+            action = Action(ActionType.OUTLET_OFF, Source.SYSTEM, {"outlet": outlet})
+            self.pipeline.log.write(action)
+            with self._sent_lock:
+                self._outlet_state[outlet] = ActionType.OUTLET_OFF
+            try:
+                fut = self.flipper.execute(action)
+                fut.add_done_callback(lambda f, a=action: self._check_send(f, a))
+            except ValueError as e:
+                self.out(f"  [flipper] refused {action.type}: {e}")
+        self.out(f"  [startup] all lights off ({', '.join(self.flipper.outlets)})")
+
+    def _record_alarm(self, alert: Event) -> None:
+        """About 10 s of frames when the alarm goes off, then a recording_saved
+        event in the log (the dashboard shows "Recording saved")."""
+        if self.video is None or not self._recording.acquire(blocking=False):
+            return                      # no camera, or already recording
+
+        def run() -> None:
+            try:
+                from datetime import datetime
+                from hardware.camera import relative
+                from hardware.settings import REPO_ROOT
+                captures = self.settings.get("paths", {}).get("captures", "captures")
+                out_dir = REPO_ROOT / captures / f"alarm-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                self.out(f"  [camera] alarm: recording {self.alarm_record_s:.0f} s")
+                info = self.video.record(self.alarm_record_s, out_dir)
+                if not info["frames"]:
+                    self.out("  [camera] alarm recording FAILED: no frames (camera unavailable?)")
+                    return
+                data = RecordingSavedData(
+                    path=relative(info["path"]).rstrip("/") + "/", frames=int(info["frames"]),
+                    duration_s=float(info["duration_s"]),
+                    video_path=relative(info["video_path"]) if info.get("video_path") else None,
+                    reason="alarm")
+                event = make_event(EventType.RECORDING_SAVED, data, Source.CAMERA, caused_by=alert.id)
+                self.pipeline.log.write(event)      # shown by the dashboard; nothing to decide
+                self.out(f"  [camera] Recording saved: {data.path} ({data.frames} frames)")
+            except Exception:
+                log.exception("alarm recording failed")
+            finally:
+                self._recording.release()
+        threading.Thread(target=run, name="faraday-alarm-recording", daemon=True).start()
+
     def outlet_states(self) -> Dict[str, str]:
         """Last command sent OK per outlet (for the Controls page)."""
         with self._sent_lock:
@@ -147,6 +202,8 @@ class App:
         self.out(f"EVENT  {event.type:<15} {_brief(event.data)}  [{event.source}]")
         if event.type == EventType.DOORBELL and self.voice is not None:
             self.voice.on_doorbell()           # listen for the visitor after the greeting
+        if event.type == EventType.ALERT_CHANGED and event.data.get("level") == AlertLevel.ALARM:
+            self._record_alarm(event)
         if event.type in (EventType.MODE_CHANGED, EventType.ALERT_CHANGED):
             fut = self.flipper.apply_event(event)
             if fut is not None:

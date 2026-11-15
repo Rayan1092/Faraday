@@ -269,6 +269,50 @@ class CameraFeed:
             at = self._frame_at
         return self.jpeg(timeout=0.1), at
 
+    def record(self, seconds: float, out_dir: Path) -> Dict[str, Any]:
+        """Save every new frame for `seconds` (alarm recording): JPEGs
+        frame-0001.jpg ... in out_dir, plus clip.avi (MJPG) when OpenCV can write
+        it. Blocks, so run it on its own thread. Keeps the camera open meanwhile.
+        Returns {"path", "frames", "duration_s", "video_path"}."""
+        import cv2
+        out_dir.mkdir(parents=True, exist_ok=True)
+        frames, writer, first, last = 0, None, None, None
+        video = out_dir / "clip.avi"
+        end = time.monotonic() + seconds
+        with self.viewer():
+            after = 0.0
+            while time.monotonic() < end:
+                frame = self._wait_frame(after=after, timeout=2.0)
+                if frame is None:
+                    if self.failed:
+                        break
+                    continue
+                with self._lock:
+                    after = self._frame_at
+                frames += 1
+                first = first if first is not None else after
+                last = after
+                cv2.imwrite(str(out_dir / f"frame-{frames:04d}.jpg"), frame,
+                            [cv2.IMWRITE_JPEG_QUALITY, 85])
+                if writer is None and frames == 1:
+                    try:
+                        h, w = frame.shape[:2]
+                        writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"MJPG"),
+                                                 float(self.fps), (w, h))
+                        if not writer.isOpened():
+                            writer = None
+                    except Exception as e:
+                        log.warning("no alarm video (%r); frames only", e)
+                        writer = None
+                if writer is not None:
+                    writer.write(frame)
+        if writer is not None:
+            writer.release()
+        has_video = video.exists() and video.stat().st_size > 0
+        return {"path": out_dir, "frames": frames,
+                "duration_s": round((last - first) if frames > 1 else 0.0, 2),
+                "video_path": video if has_video else None}
+
     def snapshot(self) -> Optional[Path]:
         """Same interface as Camera.snapshot(), but through the shared feed."""
         frame = self._wait_frame(after=time.monotonic(), timeout=6.0)
