@@ -183,6 +183,7 @@ class SayAs(Base):
         for text, want in (("Please say the passphrase.", "Please say the pass phrase."),
                            ("Passphrase accepted.", "Pass phrase accepted."),
                            ("Two pass-phrases", "Two pass phrases"),
+                           ("PASSPHRASES", "Pass phrases"),
                            ("Night mode is on. Good night.", "Night mode is on. Good night.")):
             self.assertEqual(spoken(text), want)
 
@@ -216,6 +217,13 @@ class RenderCommand(Base):
         self.assertEqual(len(list((self.dir / "cache").glob("*.wav"))), 2)
         self.assertEqual(len(self.calls()), 2)
         self.assertIn("2 of 2 are cached", out.getvalue())
+        (self.dir / "cache" / "old-line.wav").write_bytes(b"RIFF" + b"0" * 100)   # a stale take
+        with mock.patch("hardware.settings.load_settings", return_value=settings), \
+                mock.patch.object(fl, "fixed_lines", return_value=lines), contextlib.redirect_stdout(out):
+            self.assertEqual(fl.main(["--render", "--fresh"]), 0)
+        self.assertFalse((self.dir / "cache" / "old-line.wav").exists())
+        self.assertEqual(len(list((self.dir / "cache").glob("*.wav"))), 2)      # both again
+        self.assertEqual(len(self.calls()), 4)
 
 
 class Prerender(Base):

@@ -41,7 +41,7 @@ def spoken(text: str) -> str:
     """The line as it should be pronounced (SAY_AS); same text otherwise."""
     for pattern, words in SAY_AS:
         def fix(m: "re.Match[str]", words: str = words) -> str:
-            out = words + m.group(1)
+            out = words + m.group(1).lower()
             return out[:1].upper() + out[1:] if m.group(0)[:1].isupper() else out
         text = pattern.sub(fix, text)
     return text

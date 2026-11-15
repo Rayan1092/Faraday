@@ -11,9 +11,13 @@ sentence, and literal `_speak("...")` calls. If Dell adds
 Lines the scan misses are still cached after their first use.
 
     python3 -m integration.fixed_lines            list them
-    python3 -m integration.fixed_lines --render   render the ones not cached yet, now
+    python3 -m integration.fixed_lines --render   render the ones not cached yet, now (run it
+                                                  before starting Faraday: one argmax-cli at a time)
                                                   (after Dell changes lines; the app also
                                                   does it in the background at every start)
+    python3 -m integration.fixed_lines --render --fresh
+                                                  delete every cached take first, then render
+                                                  all of them again (old lines, old voice)
 """
 from __future__ import annotations
 
@@ -77,6 +81,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="python3 -m integration.fixed_lines")
     ap.add_argument("--render", action="store_true",
                     help="render the lines not in the TTS cache yet, now (Mac: argmax-cli)")
+    ap.add_argument("--fresh", action="store_true",
+                    help="with --render: delete every cached take first")
     a = ap.parse_args(argv)
     lines = fixed_lines()
     if not a.render:
@@ -89,13 +95,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not getattr(tts, "can_cache", False):
         print("This machine's TTS keeps no cache (it needs tts kind argmax with cache on).")
         return 1
+    if a.fresh:
+        old = list(Path(tts.cache_dir).glob("*.wav"))
+        for wav in old:
+            try:
+                wav.unlink()
+            except OSError:
+                pass
+        print(f"Deleted {len(old)} old take(s) from {tts.cache_dir}.")
     missing = [line for line in lines if tts.cached(line) is None]
     print(f"{len(lines)} fixed lines, {len(missing)} not rendered yet. Rendering ...")
     t0 = time.monotonic()
     made = tts.prerender(missing)
-    print(f"Rendered {made} in {time.monotonic() - t0:.0f} s. "
-          f"{len(lines) - len(missing) + made} of {len(lines)} are cached.")
-    return 0 if made == len(missing) else 1
+    cached = sum(tts.cached(line) is not None for line in lines)   # counted, not assumed
+    print(f"Rendered {made} in {time.monotonic() - t0:.0f} s. {cached} of {len(lines)} are cached.")
+    return 0 if cached == len(lines) else 1
 
 
 if __name__ == "__main__":
