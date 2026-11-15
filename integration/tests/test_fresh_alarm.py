@@ -186,6 +186,25 @@ class NotForTests(Base):
         self.assertEqual(self.fl.device.tx, [])
 
 
+class CameraOff(Base):
+    """Review of #56: camera.enabled false gives no camera at all (no stand-in). A
+    take_photo is still answered at once, so nothing waits for a photo forever."""
+
+    def test_take_photo_answered_with_camera_unavailable(self):
+        from shared import Action
+        self.app.camera = None
+        self.app.start()
+        self.app._on_action(Action("take_photo", "dashboard", {"reason": "who's at the door"}, id="act_look0001"))
+        self.assertTrue(wait_until(lambda: self.events("photo_described")))
+        ev = self.events("photo_described")[-1]
+        self.assertEqual((ev["data"]["photo_path"], ev["data"]["description"], ev["source"], ev["caused_by"]),
+                         ("", "Camera unavailable.", "camera", "act_look0001"))
+        self.assertTrue(wait_until(lambda: not self.app.speech_busy()))
+
+    def events(self, typ):
+        return [e for e in self.app.pipeline.log.recent(200) if e["type"] == typ]
+
+
 class FakeVideo:
     """Stands in for CameraFeed.record(): writes a few frames."""
 

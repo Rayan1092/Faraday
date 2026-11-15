@@ -182,6 +182,7 @@ def _chips(info: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 THREAT_NAMES = {"delivery": "Delivery", "visitor": "Visitor", "suspicious": "Suspicious",
+                "unknown": "Unknown",
                 "nobody": "Nobody there"}
 
 

@@ -53,6 +53,22 @@ Fix (`brain/bonsai.py`): a 16-token probe at startup tells whether a model think
 
 File: `2026-11-14-2252-ternary-bonsai-2-4b-q2-0-prompts-small-effort-off.md`. Before the fix, the same setting gave empty replies on every Bonsai call (each one fell back). On the Mac, the bench header's "Thinking:" line says which way each model went.
 
+## Honest threat label, 2026-11-15
+
+Owner's list, item 6. The label now reads NV's detector (people, faces, objects) and `described_by`. Zero people is always nobody, and failed vision is "unknown", both decided by code with no model call. The reason must name what was seen. Text cases are built the way NV's camera reports them (detector summary plus the 9B's factual description). 4B q2_0, 3 runs each:
+
+| Case | Model | Final | Avg |
+|---|---|---|---|
+| Empty doorway (0 people) | — (code) | 3/3 nobody | 0 s |
+| Person with a box who rang | 3/3 | 3/3 delivery | 3.2 s |
+| Plain visitor who rang | 3/3 | 3/3 visitor | 3.3 s |
+| Hood up, face covered, no ring (night) | 3/3 | 3/3 suspicious | 3.5 s |
+| Vision failed (detector text only) | — (code) | 3/3 unknown | 0 s |
+
+"Model right" also needs the 2B's own reason to be grounded: it must share words with the description or the detector, or state true context (rang / didn't ring). Code didn't have to rewrite any. Cases decided by code by design are shown as "—" and not counted for the model. The old threat cases still pass (`t_delivery`, `t_visitor`, `t_masked`, `t_prowler`, `t_nobody`). All 10 together: 24/24 model, 30/30 final, 3.2 s. File: `2026-11-15-0221-ternary-bonsai-2-4b-q2-0-prompts-small.md`.
+
+**Real photos: [TBD on the Mac].** Take the four photos with the real camera, name them `nobody-motion-1.jpg`, `delivery-doorbell-1.jpg`, `visitor-doorbell-1.jpg` and `suspicious-motion-1.jpg` in `captures/bench/`, then run `python3 -m brain.bench_photos captures/bench`.
+
 ## Fast vs smart model (sustainability line)
 
 The small Bonsai (2B) handles quick owner commands and the threat label, and the 9B handles visitor conversation, the confrontation, the summary and vision (`fast_model` / `model` in settings). The table's **Model** column says which one answered each case. To measure the difference, run on the Mac mini:

@@ -1,18 +1,18 @@
-"""Start Faraday: py -m integration   (python3 -m integration on the Mac)
+"""Start Faraday: python3 -m integration   (the Mac: integration/start_mac.sh)
 
-Starts the Flipper driver (or the fake one: --fake, or integration.fake_flipper
-in settings), the event queue, Dell's pipeline (modes, log, rules, brain) and
-the dashboard.
+The real product only (owner decision 2026-11-15): the Flipper, Dell's pipeline
+(modes, log, rules, Bonsai), the camera with vision and object detection, the
+mic with the wake phrase and listening windows, Argmax speech, the dashboard
+and the controls page. There are no fake or stand-in options here; the tests
+and the demo rehearsal pass their stand-ins to build_app() directly.
 
 Hands-free: the mic opens by itself after a doorbell and after every question
-Faraday asks, and the wake phrase "Hey Faraday" is listened for while idle (Mac;
-Windows has no STT). It is always muted while Faraday speaks.
+Faraday asks, and the wake phrase "Hey Faraday" is listened for while idle. It is
+always muted while Faraday speaks.
 
 Console keys (then Enter):
   r          open one listening window now (ends when you stop talking)
-  t <text>   typed speech (same as the dashboard text box)
   2 / 3      arm Away / Night        1   Home (asks for the passphrase)
-  d / m      fake doorbell / fake motion wave (fake Flipper only)
   s          status                  q   quit
 """
 from __future__ import annotations
@@ -21,25 +21,35 @@ import argparse
 import getpass
 import logging
 import sys
+import threading
 import webbrowser
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from shared import Event, EventType, Mode, Source, SpeechHeardData, make_event  # noqa: E402
+from shared import Mode  # noqa: E402
 
-from hardware.settings import CONFIG_DIR, load_settings  # noqa: E402
+from hardware.settings import CONFIG_DIR, for_os, load_settings  # noqa: E402
 from integration.app import App  # noqa: E402
-from integration.standins import StandInCamera  # noqa: E402
 
 
-def build_app(args: argparse.Namespace, settings, known_outlets=None) -> App:
-    fake = args.fake or bool(settings.get("integration", {}).get("fake_flipper", False))
-    if fake:
-        from hardware.flipper.fake import FakeFlipper
-        flipper = FakeFlipper(settings)
+PARTS = frozenset({"flipper", "capture_factory", "speaker", "stream_factory", "stt", "chime"})
+
+
+def build_app(args: argparse.Namespace, settings, known_outlets=None,
+              parts: Optional[Dict[str, Any]] = None) -> App:
+    """The whole app, wired as on the Mac. `parts` is for the automated tests and
+    the demo rehearsal only: it swaps a hardware piece for a stand-in without
+    changing any wiring ("flipper", "capture_factory", "speaker" (gate -> TTS),
+    "stream_factory" (mic), "stt", "chime"). The product never passes it."""
+    parts = parts or {}
+    unknown = set(parts) - PARTS
+    if unknown:
+        raise ValueError(f"build_app: unknown parts {sorted(unknown)} (known: {sorted(PARTS)})")
+    if "flipper" in parts:
+        flipper = parts["flipper"]
     else:
         from hardware.flipper import Flipper
         flipper = Flipper(settings)
@@ -49,48 +59,52 @@ def build_app(args: argparse.Namespace, settings, known_outlets=None) -> App:
         from rules import RuleStore
         log = EventLog(args.log, settings["security"]["passphrase"])
         rules = RuleStore(Path(args.log).with_name(Path(args.log).stem + "-rules.json"))
-    feed = None
-    if args.standin_camera or settings.get("camera", {}).get("enabled") is False:
-        camera = StandInCamera()
-    else:
+    feed, camera = None, None
+    if settings.get("camera", {}).get("enabled") is not False:
         from hardware.camera import CameraFeed, PhotoCamera
         from hardware.detect import Detector
         from hardware.vision import Vision
         detector = None if args.no_detect else Detector.from_settings(settings)
         feed = CameraFeed.from_settings(settings, detector)   # one owner: photos + live stream
+        if "capture_factory" in parts:
+            feed.capture_factory = parts["capture_factory"]
         camera = PhotoCamera(feed, Vision.from_settings(settings), detector)
     from hardware.audio import MicGate
-    from hardware.speech import PrintTTS, TextToSpeech
+    from hardware.speech import TextToSpeech
     gate = MicGate()                     # the speaker mutes the mic while talking
-    speaker = PrintTTS(gate) if args.print_speech else TextToSpeech.from_settings(settings, gate)
-    app = App(settings, flipper, camera=camera, speaker=speaker, use_llm=not args.offline,
+    speaker = parts["speaker"](gate) if "speaker" in parts else TextToSpeech.from_settings(settings, gate)
+    app = App(settings, flipper, camera=camera, speaker=speaker,
+              use_llm=not getattr(args, "offline", False),      # tests only; the product uses Bonsai
               mode=args.mode, event_log=log, rules=rules, dashboard=not args.no_dashboard,
               port=args.port,
               lights_off_at_start=bool(settings.get("integration", {}).get("lights_off_at_start", True)),
               known_outlets=known_outlets)
-    app.video = feed                     # alarm recording (None with the stand-in camera)
+    app.video = feed                     # alarm recording
     if not args.no_mic:
-        from hardware.audio import Recorder
+        from hardware.audio import Recorder, play_chime
+        from hardware.diarize import Diarizer
+        from hardware.owner_voice import OwnerVoice
         from hardware.speech import SpeechToText
         from integration.voice import Voice
         audio = settings.get("audio", {})
         wake = dict(audio.get("wake", {}))
         if args.no_wake:
             wake["enabled"] = False
-        from hardware.audio import play_chime
-        from hardware.diarize import Diarizer
-        from hardware.owner_voice import OwnerVoice
         speaker_device = audio.get("speaker_device")
         diarizer = Diarizer.from_settings(settings)
         owner_voice = OwnerVoice.from_settings(settings, diarizer)      # None until enrolled
-        app.voice = Voice(Recorder.from_settings(settings, gate), SpeechToText.from_settings(settings),
-                          app.submit, listen=audio.get("listen"), wake=wake,
+        recorder = Recorder.from_settings(settings, gate)
+        if "stream_factory" in parts:
+            recorder.stream_factory = parts["stream_factory"]
+        chime = parts["chime"] if "chime" in parts else (lambda: play_chime(gate, speaker_device))
+        stt = parts["stt"] if "stt" in parts else SpeechToText.from_settings(settings)
+        app.voice = Voice(recorder, stt,
+                          app.submit, out=lambda line: app.out(line), listen=audio.get("listen"), wake=wake,
                           diarizer=diarizer,
                           diarize_grace_s=Diarizer.grace_s(settings),
                           owner_voice=owner_voice, owner_voice_grace_s=OwnerVoice.grace_s(settings),
                           urgent=lambda: app.pipeline.modes.alert != "normal",
-                          busy=app.speech_busy,
-                          chime=None if args.print_speech else (lambda: play_chime(gate, speaker_device)))
+                          busy=app.speech_busy, chime=chime)
     if app.board is not None:
         # Hooks for Dell's dashboard (PLAN Q26). listening_hook drives the mic-open
         # indicator (True only while a visitor/owner window is recording). The
@@ -103,13 +117,11 @@ def build_app(args: argparse.Namespace, settings, known_outlets=None) -> App:
     if feed is not None:
         app.extras.append(feed)
     if not args.no_controls:
+        from hardware.intercom import Intercom
         from integration.controls import ControlsServer
-        intercom = None
-        if not args.print_speech:
-            from hardware.intercom import Intercom
-            intercom = Intercom(gate, settings.get("audio", {}).get("speaker_device"))
-            if app.voice is not None:
-                intercom.on_end = app.voice.on_intercom_end   # then hear the visitor's reply
+        intercom = Intercom(gate, settings.get("audio", {}).get("speaker_device"))
+        if app.voice is not None:
+            intercom.on_end = app.voice.on_intercom_end   # then hear the visitor's reply
         dash = settings.get("dashboard", {})
         cfg = settings.get("controls", {})
         dash_port = (app.board.httpd.server_address[1] if app.board is not None
@@ -124,7 +136,7 @@ def build_app(args: argparse.Namespace, settings, known_outlets=None) -> App:
     return app
 
 
-def console(app: App, fake: bool) -> None:
+def console(app: App) -> None:
     modes = app.pipeline.modes
     while True:
         try:
@@ -141,9 +153,6 @@ def console(app: App, fake: bool) -> None:
                 print("  mic is off (--no-mic)")
             elif not app.voice.listen_once("console"):
                 print("  already listening")
-        elif key == "t" and rest.strip():
-            app.submit(make_event(EventType.SPEECH_HEARD, SpeechHeardData(text=rest.strip()),
-                                  Source.DASHBOARD))
         elif key in ("2", "3"):
             if app.pipeline.owner_set_mode(Mode.AWAY if key == "2" else Mode.NIGHT) is None:
                 print(f"  already {modes.mode}")
@@ -154,13 +163,6 @@ def console(app: App, fake: bool) -> None:
             attempt = rest or getpass.getpass("  passphrase: ")
             if app.pipeline.owner_passphrase(attempt) is None:
                 print("  wrong passphrase")
-        elif key in ("d", "m"):
-            if not fake:
-                print("  d/m only work with the fake Flipper (--fake)")
-            elif key == "d":
-                app.flipper.device.press_doorbell()
-            else:
-                app.flipper.device.wave()
         elif key == "s":
             print(f"  mode {modes.mode}, alert {modes.alert}, LED {app.flipper.current_color()}, "
                   f"flipper {'connected' if app.flipper.connected.is_set() else 'NOT connected'}")
@@ -174,18 +176,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             stream.reconfigure(errors="replace")
         except AttributeError:
             pass
-    ap = argparse.ArgumentParser(prog="py -m integration", description="Start Faraday")
-    ap.add_argument("--fake", action="store_true", help="fake Flipper (no hardware)")
-    ap.add_argument("--offline", action="store_true", help="skip Bonsai, rules-only brain")
+    ap = argparse.ArgumentParser(prog="python3 -m integration", description="Start Faraday",
+                                 allow_abbrev=False)        # no prefix can bring back an old flag
     ap.add_argument("--no-mic", action="store_true", help="no microphone at all")
     ap.add_argument("--no-wake", action="store_true", help='mic only in windows, no "Hey Faraday"')
     ap.add_argument("--no-controls", action="store_true", help="no camera stream / intercom server")
     ap.add_argument("--controls-port", type=int, help="controls port (default dashboard port + 1)")
-    ap.add_argument("--print-speech", action="store_true", help="print speech instead of TTS")
     ap.add_argument("--no-detect", action="store_true",
                     help="no object detection (boxes on the stream, counts on photos)")
-    ap.add_argument("--standin-camera", action="store_true",
-                    help="no webcam: answer take_photo with a fixed description")
     ap.add_argument("--mode", choices=sorted(Mode.ALL), default=Mode.HOME)
     ap.add_argument("--log", help="log file (default: logs/events.jsonl)")
     ap.add_argument("--port", type=int, help="dashboard port (default from settings)")
@@ -209,10 +207,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             logs_name = Path(settings.get("paths", {}).get("logs", "logs")).name
             known_outlets = outlet_states_in(moved / logs_name / "events.jsonl")
     app = build_app(args, settings, known_outlets)
-    fake = type(app.flipper).__name__ == "FakeFlipper"
     print(f"Faraday. Settings: {'settings.json' if (CONFIG_DIR / 'settings.json').exists() else 'settings.example.json (public example passphrase!)'}")
-    print(f"Flipper: {'FAKE' if fake else 'real (autodetect, then settings port)'}. "
-          f"Bonsai: {'off' if args.offline else 'on'}. Log: {app.pipeline.log.path}")
+    print(f"Flipper: autodetect, then the settings port. Log: {app.pipeline.log.path}")
     app.start()
     if app.board is not None:
         print(f"Dashboard: {app.board.url}")
@@ -225,9 +221,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if app.voice is not None:
         app.voice.start_wake()
     vision = getattr(app.camera, "vision", None)
-    if vision is not None and not args.offline:
+    if vision is not None:
         # LM Studio loads the vision part on the first image: do it now, not at the doorbell
-        import threading
         def warm_vision() -> None:
             secs = vision.warm_up()
             print(f"  [vision] warm-up {secs} s" if secs is not None
@@ -238,11 +233,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"Object detection: {detector.engine}"
               + (f" + faces ({detector.faces.engine})" if detector.faces is not None else ""))
     prerender = getattr(app.speaker, "prerender", None)
-    from hardware.settings import for_os
     tts_cfg = for_os(settings.get("tts", {})) or {}
     if prerender is not None and getattr(app.speaker, "cache_dir", None) and tts_cfg.get("prerender", True):
         # Faraday's fixed lines, rendered once with the fixed voice: instant and identical
-        import threading
         from integration.fixed_lines import fixed_lines
         lines = fixed_lines()
 
@@ -250,9 +243,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             made = prerender(lines, wait=app.speech_busy, stop=app._stopping)
             print(f"  [tts] {made} fixed line(s) rendered, {len(lines)} cached")
         threading.Thread(target=warm_tts, name="faraday-tts-prerender", daemon=True).start()
-    print("Keys: r listen now, t <text>, 1/2/3 home/away/night, d/m fake radio, s status, q quit")
+    print("Keys: r listen now, 1/2/3 home/away/night, s status, q quit")
     try:
-        console(app, fake)
+        console(app)
     finally:
         app.stop()
     return 0

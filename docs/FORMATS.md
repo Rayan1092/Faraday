@@ -198,7 +198,7 @@ Sent by `brain/` right after a `photo_described`. It says what the scene at the 
 
 | data key | type | default | notes |
 |---|---|---|---|
-| `category` | string | required | `delivery`, `visitor`, `suspicious`, `nobody` |
+| `category` | string | required | `delivery`, `visitor`, `suspicious`, `nobody`, `unknown`. `nobody` whenever the object detector counted zero people. `unknown` when the photo couldn't be analysed (no description from the vision model): never a guess |
 | `reason` | string | `""` | one short line, at most 200 characters |
 | `via` | string | `"rules"` | `bonsai` or `rules` |
 | `model` | string or null | `null` | LM Studio model id when `via` is `bonsai` |

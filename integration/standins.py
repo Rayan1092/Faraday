@@ -1,4 +1,4 @@
-"""Stand-ins used when real hardware is off (fake mode, or a part not wired yet)."""
+"""Stand-ins for the automated tests only (the product start command has none)."""
 from __future__ import annotations
 
 from typing import Optional
