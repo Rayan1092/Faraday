@@ -348,6 +348,17 @@ class Pipeline:
                                            Source.BRAIN, caused_by=event.id), result, done)
                 return  # the owner asked for this photo: there's no visitor to answer
 
+        if event.type == EventType.SPEECH_HEARD and not owner.is_owner_speech(event, mode):
+            # Owner, Mac test: the detector can't see boxes. A visitor who says package,
+            # parcel, delivery or courier is a delivery: this visit's label updates.
+            try:
+                relabel = threat_rules.relabel_for_speech(event, mode, self.log.recent(TRACE_WINDOW))
+            except Exception as e:     # the label is a nicety: never stop the visitor's reply
+                self.say(f"[threat] relabel failed: {e!r}")
+                relabel = None
+            if relabel is not None:
+                self.say(f"[threat] the visitor talked about a delivery: {relabel.data['reason']}")
+                self._process(relabel, result, depth + 1)
         if owner.is_owner_speech(event, mode):
             # "Hey Faraday, ...": the owner's own router, never the visitor conversation.
             self._owner_request(event, result, done, mode)

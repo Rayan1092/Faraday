@@ -5,8 +5,11 @@ suspicious, nobody or unknown, with a one-line reason, and sent as a threat_asse
 event (FORMATS.md). Honest and grounded (owner, 2026-11-15):
 
 0. Plain code first, no model: zero people from NV's object detector is always
-   "nobody"; if vision failed (no description from the vision model) it's
-   "unknown: couldn't analyse the photo", never a guess.
+   "nobody". If vision failed, the label comes from the detector's facts plus the
+   context (rang or not, the mode); only if the detector failed too is it
+   "unknown: couldn't analyse the photo", never a guess (owner, Mac test).
+   A visitor who says package, parcel, delivery or courier is a delivery: the
+   detector can't see boxes (owner, Mac test). It never lowers "suspicious".
 1. Otherwise Bonsai (the fast model, see llm fast_model) answers through one
    forced-choice tool, `classify(category, reason)`. Inputs: the 9B's factual
    description, the detector's people count, objects and visible faces, the mode,
@@ -39,6 +42,7 @@ from shared import Event, EventType, Mode, Source, ThreatCategory, make_event
 
 from . import look
 from .core import _clean_line
+from .fallback import _DELIVERY
 from .guard import _json_objects
 
 C = ThreatCategory
@@ -73,11 +77,13 @@ _POS_RING = re.compile(r"\b(rang|rings?|ringing|doorbell|bell)\b", re.I)
 REASON_MAX = 160
 SYSTEM_PROMPT = (
     "You judge one photo of a home's front door for a home guard. Call classify once. "
-    "delivery: someone dropping off a package. visitor: someone who rang to talk or visit. "
+    "delivery: anyone holding or carrying a box, package, parcel or envelope, or a courier, "
+    "even if they rang the doorbell. visitor: someone who rang with nothing to deliver. "
     "suspicious: someone hiding, forcing entry, covering their face, or prowling without "
     "ringing while the owner is away or asleep. nobody: no person in view. "
-    "Trust the object detector's people count. The reason names what you see "
-    "('1 person, holding a box', 'face covered') or the context ('rang the doorbell')."
+    "Trust the object detector's people count; it can't see boxes, so read the description "
+    "for them. The reason names what you see ('1 person, holding a box', 'face covered') "
+    "or the context ('rang the doorbell')."
 )
 TOOL = {"type": "function", "function": {
     "name": "classify",
@@ -111,6 +117,7 @@ class Context:
     faces: Optional[int] = None   # visible faces (only meaningful close up)
     detections: Optional[List[Dict[str, Any]]] = None   # [{"label", "count", "confidence"}]
     vision_ok: bool = True        # False: no description from the vision model
+    said: str = ""                # a delivery word the visitor said this visit ("package")
 
     @property
     def night(self) -> bool:
@@ -179,6 +186,13 @@ def grounded(reason: str, ctx: Context) -> bool:
 
 
 _BOXY = re.compile(r"\b(package|parcel|box|boxes|carton|envelope)\b", re.I)
+_COURIER = re.compile(r"\bcouriers?\b", re.I)
+
+
+def delivery_word(text: str) -> str:
+    """The delivery word a visitor said ("package", "courier", "FedEx"), or ""."""
+    m = _DELIVERY.search(text or "")
+    return m.group(0) if m else ""
 
 
 def reason_for(ctx: Context, category: str, sign: str = "") -> str:
@@ -199,15 +213,19 @@ def reason_for(ctx: Context, category: str, sign: str = "") -> str:
                                   if ctx.cause == EventType.MOTION and not ctx.doorbells
                                   else "behaving suspiciously"))
         elif category == C.DELIVERY:
-            box = _BOXY.search(text)
+            box = _BOXY.search(text) if ctx.vision_ok else None
             if box:
                 word = box.group(0).lower()
                 parts.append(f"holding a {'box' if word == 'boxes' else word}")
+            elif ctx.said:
+                parts.append(f'said "{ctx.said.lower()}"')
             else:     # only the description's own words: never an invented package
                 word = (_first(PACKAGE, text) or "delivery").lower()
                 parts.append({"courier": "a courier", "uniform": "in a uniform", "mail": "carrying mail",
                               "delivery": "a delivery", "delivering": "delivering"}.get(word, word))
         if category in (C.DELIVERY, C.VISITOR):
+            if not ctx.vision_ok and ctx.faces:
+                parts.append("face visible")
             parts.append("rang the doorbell" if ctx.doorbells else "at the door")
     line = ", ".join(p for p in parts if p)
     return (line[0].upper() + line[1:] + ".") if line else "Someone at the door."
@@ -219,17 +237,37 @@ def rules(ctx: Context) -> Tuple[str, str]:
     if people_seen(ctx) == 0:
         return C.NOBODY, reason_for(ctx, C.NOBODY)        # zero people detected: always nobody
     if not ctx.vision_ok:
-        return C.UNKNOWN, reason_for(ctx, C.UNKNOWN)      # vision failed: never a guess
+        if people_seen(ctx) is None:
+            return C.UNKNOWN, reason_for(ctx, C.UNKNOWN)  # vision and the detector both failed
+        return _from_detector(ctx)
     if STRONG.search(text):
         return C.SUSPICIOUS, reason_for(ctx, C.SUSPICIOUS, _first(STRONG, text))
     if FACE_HIDDEN.search(text):
         return C.SUSPICIOUS, reason_for(ctx, C.SUSPICIOUS, _first(FACE_HIDDEN, text))
     if ctx.people is None and (NOBODY.search(text) or not PERSON.search(text)):
-        return C.NOBODY, reason_for(ctx, C.NOBODY)
+        return C.NOBODY, reason_for(ctx, C.NOBODY)        # what the visitor said never overrides it
     if ctx.cause == EventType.MOTION and ctx.mode in Mode.ARMED and not ctx.doorbells:
         # Owner 2026-11-15: stayed at the door without ringing = suspicious, box or not.
         return C.SUSPICIOUS, reason_for(ctx, C.SUSPICIOUS)
-    if PACKAGE.search(text):
+    if PACKAGE.search(text) or ctx.said:
+        return C.DELIVERY, reason_for(ctx, C.DELIVERY)
+    return C.VISITOR, reason_for(ctx, C.VISITOR)
+
+
+def _from_detector(ctx: Context) -> Tuple[str, str]:
+    """Vision failed but the detector saw someone (owner, Mac test): the label comes
+    from its facts plus the context, never "unknown"."""
+    weapon = next((str(d.get("label")) for d in ctx.detections or []
+                   if str(d.get("label")) in _WEAPONS), "")
+    if weapon:
+        return C.SUSPICIOUS, reason_for(ctx, C.SUSPICIOUS, f"{weapon} in view")
+    text = ctx.description or ""       # the detector's own sentence ("No face is visible: covered ...")
+    for rx in (STRONG, FACE_HIDDEN):
+        if rx.search(text):            # review: never less careful just because vision is down
+            return C.SUSPICIOUS, reason_for(ctx, C.SUSPICIOUS, _first(rx, text))
+    if ctx.cause == EventType.MOTION and ctx.mode in Mode.ARMED and not ctx.doorbells:
+        return C.SUSPICIOUS, reason_for(ctx, C.SUSPICIOUS)   # stayed without ringing while armed
+    if ctx.said:
         return C.DELIVERY, reason_for(ctx, C.DELIVERY)
     return C.VISITOR, reason_for(ctx, C.VISITOR)
 
@@ -254,6 +292,8 @@ def prompt(ctx: Context) -> str:
         # Faces only when some were seen: zero can just mean too far away to tell.
         lines.append(f"Object detector: {seen}" + (f"; faces visible: {ctx.faces}" if ctx.faces else ""))
     lines.append(f"Camera sees: {ctx.description}")
+    if ctx.said:
+        lines.append(f'The visitor said: "{ctx.said}"')
     return "\n".join(lines)
 
 
@@ -305,6 +345,11 @@ def check(category: str, reason: str, ctx: Context) -> Tuple[str, str, str]:
     if category == C.SUSPICIOUS and ctx.doorbells and rule_cat in (C.VISITOR, C.DELIVERY):
         # Owner 2026-11-15: walked up and rang, plain face, no warning signs = visitor/delivery.
         return rule_cat, rule_reason, "code: rang the doorbell with no warning signs"
+    if category == C.VISITOR and rule_cat == C.DELIVERY and (
+            _BOXY.search(ctx.description or "") or ctx.said or _COURIER.search(ctx.description or "")):
+        # Owner, Mac test: a box or a courier in the description, or the visitor said
+        # "package": a delivery, even though they rang. (Not "uniform" or "mail" alone.)
+        return C.DELIVERY, rule_reason, "code: a package in the description or in what they said"
     clean = _clean_line(reason) or ""
     note = ""
     if not grounded(clean, ctx):
@@ -368,12 +413,24 @@ def context_for(photo: Event, mode: str, recent: Iterable[Any], voices: Optional
     # walked up and stayed isn't "a visitor who rang" because of an earlier visitor.
     since = _when(origin.get("timestamp", "")) if origin.get("type") == EventType.MOTION else None
     doorbells = motions = 0
+    said = ""
+    # The visit starts at the first doorbell in the window (a second press keeps what
+    # was said after the first), else at the motion that led to the photo. No doorbell
+    # and no motion (a Snapshot): what any visitor said earlier doesn't count.
+    bells = [t for t in (_when(e.get("timestamp", "")) for e in entries
+                         if e.get("type") == EventType.DOORBELL)
+             if t and when and 0 <= (when - t).total_seconds() <= window_s]
+    visit = min(bells) if bells else (
+        _when(origin.get("timestamp", "")) if origin.get("type") == EventType.MOTION else None)
     for e in entries:
         t = _when(e.get("timestamp", ""))
         if when and t and 0 <= (when - t).total_seconds() <= window_s:
             if e.get("type") == EventType.DOORBELL and (since is None or t >= since):
                 doorbells += 1
             motions += e.get("type") == EventType.MOTION
+            if (e.get("type") == EventType.SPEECH_HEARD and visit is not None and t >= visit
+                    and _visitor_speech(e, mode)):
+                said = delivery_word(str((e.get("data") or {}).get("text", ""))) or said
     data = photo.data or {}
     by = data.get("described_by")
     # Vision worked if the vision model wrote the description; "detector" means it
@@ -390,7 +447,56 @@ def context_for(photo: Event, mode: str, recent: Iterable[Any], voices: Optional
                    people=people if isinstance(people, int) else None,
                    faces=faces if isinstance(faces, int) else None,
                    detections=dets if isinstance(dets, list) else None,
-                   vision_ok=vision_ok)
+                   vision_ok=vision_ok, said=said)
+
+
+def _visitor_speech(entry: Dict[str, Any], mode: str) -> bool:
+    """A visitor said it: from a visitor window, or untagged while armed."""
+    channel = (entry.get("data") or {}).get("channel")
+    return channel == "visitor" or (channel is None and mode in Mode.ARMED)
+
+
+def latest_label(entries: Iterable[Any], since: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
+    """The newest threat_assessed entry in the log (at or after `since`), or None."""
+    found = None
+    for e in entries:
+        e = e.to_dict() if hasattr(e, "to_dict") else e
+        if isinstance(e, dict) and e.get("type") == EventType.THREAT_ASSESSED:
+            t = _when(e.get("timestamp", ""))
+            if since is None or (t is not None and t >= since):
+                found = e
+    return found
+
+
+def relabel_for_speech(speech: Event, mode: str, entries: Iterable[Any],
+                       window_s: float = 300) -> Optional[Event]:
+    """The visitor said a delivery word after this visit's photo was labelled: a new
+    threat_assessed (delivery) for that photo, so the dashboard updates. None if
+    nothing to change: no delivery word, not a visitor, no label for this visit yet
+    (the photo's label then reads the speech itself), or already delivery or
+    suspicious (a label never gets less careful)."""
+    data = speech.data or {}
+    word = delivery_word(str(data.get("text", "")))
+    if not word or not _visitor_speech({"data": data}, mode):
+        return None
+    entries = [e.to_dict() if hasattr(e, "to_dict") else e for e in entries]
+    now = _when(speech.timestamp)
+    bells = [t for t in (_when(e.get("timestamp", "")) for e in entries
+                         if isinstance(e, dict) and e.get("type") == EventType.DOORBELL) if t]
+    visit = max(bells) if bells else None
+    if visit is None or now is None or (now - visit).total_seconds() > window_s:
+        return None
+    label = latest_label(entries, since=visit)
+    if label is None:
+        return None
+    info = label.get("data") or {}
+    if info.get("category") in (C.DELIVERY, C.SUSPICIOUS):
+        return None
+    reason = f'Said "{word.lower()}". {info.get("reason", "")}'.strip()
+    return make_event(EventType.THREAT_ASSESSED,
+                      {"category": C.DELIVERY, "reason": reason[:200], "via": "rules", "model": None,
+                       "voices": info.get("voices")},
+                      Source.BRAIN, caused_by=label.get("caused_by"))
 
 
 def _when(stamp: str) -> Optional[datetime]:

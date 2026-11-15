@@ -68,14 +68,79 @@ class Honest(unittest.TestCase):
         self.assertEqual((a.category, a.via, client.calls), (C.NOBODY, "rules", []))
         self.assertEqual(a.reason, "No person detected, car in view.")
 
-    def test_vision_failed_is_unknown_never_a_guess(self):
-        client = FakeClient(classify("visitor", "someone"))
+    def test_vision_failed_labels_from_the_detector(self):
+        """Owner, Mac test: vision failed, the detector saw 1 person and a face, and the
+        label said "unknown". Now the detector's facts plus the context decide."""
+        client = FakeClient(classify("suspicious", "someone"))
         a = threat.ThreatAssessor(client, "fast", log=lambda _m: None).assess(
             seen("One person is at the door.", vision_ok=False))
-        self.assertEqual((a.category, a.via, client.calls), (C.UNKNOWN, "rules", []))
-        self.assertEqual(a.reason, "Couldn't analyse the photo, the detector saw 1 person.")
-        self.assertEqual(threat.rules(seen("Photo saved.", people=None, detections=[], vision_ok=False))[0],
-                         C.UNKNOWN)
+        self.assertEqual((a.category, a.via, client.calls), (C.VISITOR, "rules", []))
+        self.assertEqual(a.reason, "1 person, face visible, rang the doorbell.")
+        stayed = threat.rules(seen("One person is at the door.", cause="motion", doorbells=0,
+                                   faces=0, vision_ok=False))
+        self.assertEqual(stayed, (C.SUSPICIOUS, "1 person, stayed at the door without ringing while armed."))
+        armed_knife = threat.rules(seen("One person is at the door.", vision_ok=False, detections=[
+            PERSON1[0], {"label": "knife", "count": 1, "confidence": 0.6}]))
+        self.assertEqual(armed_knife[0], C.SUSPICIOUS)
+        home = threat.rules(seen("One person is at the door.", cause="", doorbells=0, mode=Mode.HOME,
+                                 vision_ok=False))
+        self.assertEqual(home, (C.VISITOR, "1 person, face visible, at the door."))
+
+    def test_a_hidden_face_still_counts_when_vision_fails(self):
+        """Review: the detector writes "No face is visible: covered or turned away." and
+        that must stay suspicious even with "package" said, as with vision working."""
+        hidden = seen("One person at the door. No face is visible: covered or turned away.", faces=0,
+                      vision_ok=False)
+        self.assertEqual(threat.rules(hidden)[0], C.SUSPICIOUS)
+        hidden.said = "package"
+        self.assertEqual(threat.rules(hidden)[0], C.SUSPICIOUS)
+
+    def test_a_uniform_alone_is_not_a_delivery(self):
+        """Review: the override is for a box, a courier or what they said, not "uniform"."""
+        client = FakeClient(classify("visitor", "1 person in a uniform, rang the doorbell"))
+        a = threat.ThreatAssessor(client, "fast", log=lambda _m: None).assess(
+            seen("A police officer in a uniform at the door, face visible."))
+        self.assertEqual(a.category, C.VISITOR)
+
+    def test_said_never_overrides_nobody(self):
+        empty = threat.Context("Nobody is there.", Mode.AWAY, cause="doorbell", doorbells=1, said="package")
+        self.assertEqual(threat.rules(empty)[0], C.NOBODY)
+
+    def test_unknown_only_when_vision_and_the_detector_failed(self):
+        a = threat.ThreatAssessor(None).assess(seen("Photo saved.", people=None, detections=[],
+                                                    vision_ok=False))
+        self.assertEqual((a.category, a.reason), (C.UNKNOWN, "Couldn't analyse the photo."))
+
+    def test_a_box_in_the_description_is_a_delivery_even_if_they_rang(self):
+        """Mac bench: "person with a box who rang" 0/10, "courier with a box" 6/10. The 2B
+        said visitor with a reason like "rang the doorbell", and code let it through."""
+        for description in ("One person holding a cardboard box at the front door, face visible.",
+                            "A person in a dark jacket holding a cardboard box at the front door."):
+            client = FakeClient(classify("visitor", "someone who rang the doorbell while away"))
+            a = threat.ThreatAssessor(client, "fast", log=lambda _m: None).assess(seen(description))
+            self.assertEqual(a.category, C.DELIVERY, description)
+            self.assertIn("holding a box", a.reason)
+            self.assertIn("package", a.note)
+
+    def test_the_prompt_says_what_a_delivery_is(self):
+        self.assertIn("holding or carrying a box", threat.SYSTEM_PROMPT)
+        self.assertIn("even if they rang", threat.SYSTEM_PROMPT)
+        self.assertIn("can't see boxes", threat.SYSTEM_PROMPT)
+
+    def test_what_the_visitor_said_makes_it_a_delivery(self):
+        """Owner, Mac test: "package, parcel, delivery, courier in speech_heard means delivery"."""
+        said = threat.Context("One person at the front door, face visible.", Mode.AWAY, cause="doorbell",
+                              doorbells=1, people=1, faces=1, detections=PERSON1, said="package")
+        self.assertEqual(threat.rules(said), (C.DELIVERY, '1 person, said "package", rang the doorbell.'))
+        client = FakeClient(classify("visitor", "1 person, rang the doorbell"))
+        self.assertEqual(threat.ThreatAssessor(client, "fast", log=lambda _m: None).assess(said).category,
+                         C.DELIVERY)
+        blind = threat.Context("One person is at the door.", Mode.AWAY, cause="doorbell", doorbells=1,
+                               people=1, faces=1, detections=PERSON1, vision_ok=False, said="parcel")
+        self.assertEqual(threat.rules(blind)[0], C.DELIVERY)
+        masked = threat.Context("A man wearing a ski mask at the door.", Mode.AWAY, cause="doorbell",
+                                doorbells=1, people=1, detections=PERSON1, said="package")
+        self.assertEqual(threat.rules(masked)[0], C.SUSPICIOUS)            # never less careful
 
     def test_from_the_real_event(self):
         """context_for reads NV's fields; "detector" and a bare camera photo mean vision failed."""
