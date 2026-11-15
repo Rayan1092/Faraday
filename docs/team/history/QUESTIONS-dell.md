@@ -39,3 +39,10 @@ Each one has the default I used. Answer inline and I'll adjust.
 20. **A courier who doesn't ring while armed.** Following your rule ("stayed at the door without ringing = suspicious"), someone with a box who never rings gets the warning after the grace period and the label suspicious. One who rings is a delivery. *Default:* as you wrote it.
 
 21. **The detector says 0 people but the 9B describes someone.** Following your rule, it's labelled nobody ("zero people detected always means nobody"). Motion still raises the warning and the alarm on its own. A face the face detector saw counts as a person. *Default:* your rule. The alternative is to call it unknown when the two disagree.
+
+
+## Round 3: after the second Mac test (2026-11-15 morning, owner asleep)
+
+Each one has the default I used. Answer inline and I'll adjust.
+
+22. **The grace has no extra margin now.** The warning comes 15 s after the wave, as you asked. A doorbell pressed in the last 2 s or so can arrive after the warning, because the radio reports a press 2 s late. That visitor still never gets the alarm: a doorbell after the warning blocks it. *Default:* exactly 15 s. To get a margin back, set `alerts.doorbell_settle_s` to 2 in `config/settings.json`, and the warning comes 2 s later.
