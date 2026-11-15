@@ -68,7 +68,7 @@ def report_delay_s(event: Event, now: datetime) -> float:
         if ts.tzinfo is None:
             ts = ts.astimezone()
         delay = (now - ts).total_seconds()
-    except (TypeError, ValueError):
+    except Exception:          # a timestamp that can't be read must never stop the motion
         return 0.0
     return delay if MIN_REPORT_DELAY_S <= delay <= MAX_REPORT_DELAY_S else 0.0
 

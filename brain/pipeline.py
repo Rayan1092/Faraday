@@ -214,7 +214,9 @@ class Pipeline:
             motion_id = self.modes.grace_ended
             if motion_id is None:
                 return None
-            self.say(f"[motion] no doorbell within {self.modes.motion_grace_s:.0f} s: warning")
+            grace = self.modes.motion_grace_s + self.modes.doorbell_settle_s
+            self.say("[motion] warning now (forced)" if force
+                     else f"[motion] no doorbell within {grace:.0f} s: warning")
             result = Result()
             mode = self.modes.mode
             for e in events:          # [] when an old warning is given again: no level change

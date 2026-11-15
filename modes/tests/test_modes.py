@@ -172,6 +172,14 @@ class AlertRules(unittest.TestCase):
             s.on_event(motion)
             self.assertAlmostEqual(s.grace_remaining(), 15.0, places=3, msg=ts)
 
+    def test_an_unreadable_timestamp_never_stops_the_motion(self):
+        """Review: a naive pre-1970 timestamp raised OSError on Windows."""
+        s, _ = state(Mode.AWAY)
+        motion = events.motion()
+        motion.timestamp = "1969-12-31T23:59:59"
+        s.on_event(motion)
+        self.assertEqual(s.last_outcome, MotionOutcome.GRACE)
+
     def test_a_press_that_arrives_in_time_counts(self):
         s, clock = state(Mode.AWAY)
         s.on_event(events.motion())

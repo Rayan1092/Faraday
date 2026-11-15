@@ -62,7 +62,7 @@ Notes:
   - Every motion prints why on the console: `[motion] porch light on; warning in 15 s unless the doorbell rings`, `[motion] ignored: a visitor rang 20 s ago ...`, `[motion] ignored: the same wave ...`.
   - No doorbell by the end of the grace period: `warning`, with the warning line, the photo and the threat label.
   - `alarm` only from motion at least `alerts.min_gap_s` (8 s) and at most `alerts.alarm_window_s` (60 s) after the warning, with no doorbell in between. Sooner is the same wave. Later is a new walk-up: a new grace period, and if nobody rings the warning steps run again (the level stays warning), so a courier who trips the sensor long after an old warning and then rings is never alarmed.
-  - The doorbell radio reports a press after the burst ends, so a press counts until about 2.5 s after the grace period (`flipper.burst_gap_s` + 1 s).
+  - A doorbell counts if it arrives before the grace period ends. No margin by default (`alerts.doorbell_settle_s`, owner: "15 s after the first motion"); the radio reports a press about 1.5 s after it, so a ring in the last moments arrives after the warning, and a doorbell after the warning still means no alarm.
   - No user-rule photo while the grace period or a visitor's quiet period runs: its label ("nobody rang yet") would warn a visitor before they ring. The grace period's own photo covers it.
   - A `suspicious` label while armed raises normal to warning at once.
   - Only the passphrase returns the alert to `normal`. A mode change ends a visitor's quiet period and a pending warning. Motion at Home never raises an alert.
