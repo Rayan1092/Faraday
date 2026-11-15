@@ -125,6 +125,7 @@ class CameraFeed:
         self._jpeg: Optional[bytes] = None
         self._jpeg_at = 0.0
         self._viewers = 0
+        self._holders = 0                      # keep_open() users (alarm recording): no detection
         self._used_at = 0.0
         self._lock = threading.Lock()
         self._new_frame = threading.Condition(self._lock)
@@ -149,6 +150,7 @@ class CameraFeed:
             running = self._thread is not None and self._thread.is_alive()
             if not running:
                 self._stop.clear()
+                self.failed = False            # a new attempt: the last failure is old news
                 self._thread = threading.Thread(target=self._loop, name="faraday-camera",
                                                 daemon=True)
                 self._thread.start()
@@ -172,6 +174,20 @@ class CameraFeed:
                 self._viewers -= 1
                 self._used_at = time.monotonic()
 
+    @contextlib.contextmanager
+    def keep_open(self) -> Iterator["CameraFeed"]:
+        """Keeps the camera open (alarm recording) without counting as a viewer,
+        so the object detector doesn't run for it."""
+        with self._lock:
+            self._holders += 1
+        self._touch()
+        try:
+            yield self
+        finally:
+            with self._lock:
+                self._holders -= 1
+                self._used_at = time.monotonic()
+
     def _release(self) -> None:
         if self._cap is not None:
             try:
@@ -185,7 +201,7 @@ class CameraFeed:
         try:
             while not self._stop.is_set():
                 with self._lock:
-                    idle = (self._viewers == 0
+                    idle = (self._viewers == 0 and self._holders == 0
                             and time.monotonic() - self._used_at > self.idle_s)
                 if idle:
                     break
@@ -228,15 +244,19 @@ class CameraFeed:
 
     # ---- reading -----------------------------------------------------------------
     def _wait_frame(self, after: float, timeout: float) -> Any:
+        return self._wait_frame_at(after, timeout)[0]
+
+    def _wait_frame_at(self, after: float, timeout: float) -> "tuple[Any, float]":
+        """(frame newer than `after`, its time), read together; (None, after) if none."""
         self._touch()
         end = time.monotonic() + timeout
         with self._lock:
             while self._frame is None or self._frame_at <= after:
                 left = end - time.monotonic()
                 if left <= 0 or self.failed:
-                    return None
+                    return None, after
                 self._new_frame.wait(left)
-            return self._frame
+            return self._frame, self._frame_at
 
     def jpeg(self, timeout: float = 3.0) -> Optional[bytes]:
         """Latest frame as JPEG (re-encoded at most once per new frame)."""
@@ -269,49 +289,59 @@ class CameraFeed:
             at = self._frame_at
         return self.jpeg(timeout=0.1), at
 
-    def record(self, seconds: float, out_dir: Path) -> Dict[str, Any]:
+    def record(self, seconds: float, out_dir: Path,
+               stop: Optional[threading.Event] = None) -> Dict[str, Any]:
         """Save every new frame for `seconds` (alarm recording): JPEGs
-        frame-0001.jpg ... in out_dir, plus clip.avi (MJPG) when OpenCV can write
-        it. Blocks, so run it on its own thread. Keeps the camera open meanwhile.
-        Returns {"path", "frames", "duration_s", "video_path"}."""
+        frame-0001.jpg ... in out_dir, then clip.avi (MJPG) at the frame rate that
+        was really reached. Only frames newer than the call count; a camera that
+        fails meanwhile is retried until the time is up; `stop` ends it early.
+        Blocks, so run it on its own thread. Returns {"path", "frames",
+        "duration_s", "video_path"}."""
         import cv2
         out_dir.mkdir(parents=True, exist_ok=True)
-        frames, writer, first, last = 0, None, None, None
-        video = out_dir / "clip.avi"
+        frames, first, last, size = 0, None, None, None
         end = time.monotonic() + seconds
-        with self.viewer():
-            after = 0.0
-            while time.monotonic() < end:
-                frame = self._wait_frame(after=after, timeout=2.0)
+        after = time.monotonic()                  # nothing from before the alarm
+        with self.keep_open():
+            while time.monotonic() < end and not (stop is not None and stop.is_set()):
+                frame, at = self._wait_frame_at(after=after, timeout=min(1.0, max(0.05, end - time.monotonic())))
                 if frame is None:
-                    if self.failed:
-                        break
+                    time.sleep(0.1)               # camera reopening: keep trying until the end
                     continue
-                with self._lock:
-                    after = self._frame_at
+                after = at
+                if size is None:
+                    size = (frame.shape[1], frame.shape[0])
+                elif (frame.shape[1], frame.shape[0]) != size:
+                    frame = cv2.resize(frame, size)   # resolution changed after a reopen
                 frames += 1
-                first = first if first is not None else after
-                last = after
+                first = at if first is None else first
+                last = at
                 cv2.imwrite(str(out_dir / f"frame-{frames:04d}.jpg"), frame,
                             [cv2.IMWRITE_JPEG_QUALITY, 85])
-                if writer is None and frames == 1:
-                    try:
-                        h, w = frame.shape[:2]
-                        writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"MJPG"),
-                                                 float(self.fps), (w, h))
-                        if not writer.isOpened():
-                            writer = None
-                    except Exception as e:
-                        log.warning("no alarm video (%r); frames only", e)
-                        writer = None
-                if writer is not None:
-                    writer.write(frame)
-        if writer is not None:
+        duration = round((last - first) if frames > 1 else 0.0, 2)
+        video = self._write_clip(out_dir, frames, duration, size) if frames > 1 else None
+        return {"path": out_dir, "frames": frames, "duration_s": duration, "video_path": video}
+
+    @staticmethod
+    def _write_clip(out_dir: Path, frames: int, duration: float, size: Any) -> Optional[Path]:
+        """clip.avi from the saved JPEGs, at the frame rate really reached (so it
+        plays in real time even if the machine was busy)."""
+        import cv2
+        video = out_dir / "clip.avi"
+        fps = max(1.0, min(30.0, (frames - 1) / duration)) if duration > 0 else 10.0
+        try:
+            writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"MJPG"), fps, size)
+            if not writer.isOpened():
+                return None
+            for i in range(1, frames + 1):
+                img = cv2.imread(str(out_dir / f"frame-{i:04d}.jpg"))
+                if img is not None:
+                    writer.write(img)
             writer.release()
-        has_video = video.exists() and video.stat().st_size > 0
-        return {"path": out_dir, "frames": frames,
-                "duration_s": round((last - first) if frames > 1 else 0.0, 2),
-                "video_path": video if has_video else None}
+        except Exception as e:
+            log.warning("no alarm video (%r); frames only", e)
+            return None
+        return video if video.exists() and video.stat().st_size > 0 else None
 
     def snapshot(self) -> Optional[Path]:
         """Same interface as Camera.snapshot(), but through the shared feed."""

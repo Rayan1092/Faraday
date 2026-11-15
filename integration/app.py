@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from shared import (Action, ActionType, AlertLevel, Event, EventType, Mode, RecordingSavedData,
                     Source, make_event)
@@ -25,6 +25,19 @@ from shared import (Action, ActionType, AlertLevel, Event, EventType, Mode, Reco
 from brain.pipeline import Pipeline
 
 log = logging.getLogger("integration")
+
+
+def last_outlet_states(entries: Iterable[Dict[str, Any]]) -> Dict[str, str]:
+    """outlet -> "outlet_on"/"outlet_off" from the last outlet action in the log
+    entries (oldest first). The outlets toggle on a repeated code, so the app
+    must know what it sent last even across a restart."""
+    states: Dict[str, str] = {}
+    for e in entries:
+        if e.get("kind") == "action" and e.get("type") in (ActionType.OUTLET_ON, ActionType.OUTLET_OFF):
+            outlet = (e.get("args") or {}).get("outlet")
+            if outlet:
+                states[outlet] = e["type"]
+    return states
 
 
 class PrintSpeaker:
@@ -44,7 +57,8 @@ class App:
                  use_llm: bool = True, mode: str = Mode.HOME,
                  event_log: Any = None, rules: Any = None,
                  dashboard: bool = True, port: Optional[int] = None,
-                 out: Callable[[str], None] = print, lights_off_at_start: bool = False):
+                 out: Callable[[str], None] = print, lights_off_at_start: bool = False,
+                 known_outlets: Optional[Dict[str, str]] = None):
         self.settings = settings
         self.out = out
         self.flipper = flipper
@@ -62,6 +76,9 @@ class App:
         self.video: Any = None                     # hardware.camera.CameraFeed: alarm recording
         self.alarm_record_s = float(settings.get("camera", {}).get("alarm_record_s", 10))
         self._recording = threading.Lock()         # one alarm recording at a time
+        self._rec_stop = threading.Event()         # App.stop() ends a recording early
+        self._rec_thread: Optional[threading.Thread] = None
+        self._started = False
         self.voice: Any = None                     # integration.voice.Voice, set by __main__
         self.extras: List[Any] = []                # things with stop(): controls server, camera feed
         self.flipper.on_event = self.submit
@@ -70,6 +87,11 @@ class App:
             on_event=self._on_pipeline_event, on_action=self._on_action, say=out)
         self.pipeline.on_event = self._on_pipeline_event
         self.pipeline.on_action = self._on_action
+        # What each outlet was last told, from the log (or from the archived log with
+        # --fresh): a restart must not repeat the last code (the outlets toggle on it)
+        seeded = known_outlets if known_outlets is not None else last_outlet_states(
+            self.pipeline.log.recent(500))
+        self._outlet_state.update({o: s for o, s in seeded.items() if o in self.flipper.outlets})
         self.board = None
         if dashboard:
             from dashboard import Dashboard
@@ -77,7 +99,9 @@ class App:
 
     # ---- lifecycle -----------------------------------------------------------
     def start(self) -> "App":
+        self._started = True
         self._stopping.clear()
+        self._rec_stop.clear()
         for name, target in (("events", self._event_worker), ("speech", self._speech_worker),
                              ("camera", self._camera_worker)):
             t = threading.Thread(target=target, name=f"faraday-{name}", daemon=True)
@@ -93,12 +117,18 @@ class App:
 
     def stop(self) -> None:
         self._stopping.set()
+        if not self._started:
+            return          # never started: nothing runs (a never-started server's shutdown() would hang)
+        self._started = False
         for q in (self.events, self._speech, self._photos):
             q.put(None)
         for t in self._threads:
             t.join(5)
         self._threads = []
         self.pipeline.wait_background(5)
+        self._rec_stop.set()                       # finish an alarm recording cleanly
+        if self._rec_thread is not None:
+            self._rec_thread.join(5)
         if self.voice is not None:
             self.voice.stop()
         for extra in reversed(self.extras):
@@ -122,10 +152,15 @@ class App:
                 or self._speech.unfinished_tasks > 0 or self._photos.unfinished_tasks > 0)
 
     def _all_lights_off(self) -> None:
-        """Every start: send off to every outlet, so the real lamps match the
-        dashboard (owner 2026-11-14). Logged as `system` actions, so the Lights
-        panel shows them off; the skip-repeat state starts as "off"."""
-        for outlet in list(self.flipper.outlets):
+        """Every start: make the real lamps match the dashboard (owner 2026-11-14).
+        Off goes to each outlet that was last told "on", or whose state is unknown;
+        an outlet already off gets nothing, because repeating its last code would
+        toggle it ON. Logged as `system` actions, so the Lights panel shows them off."""
+        with self._sent_lock:
+            already = [o for o in self.flipper.outlets
+                       if self._outlet_state.get(o) == ActionType.OUTLET_OFF]
+        todo = [o for o in self.flipper.outlets if o not in already]
+        for outlet in todo:
             action = Action(ActionType.OUTLET_OFF, Source.SYSTEM, {"outlet": outlet})
             self.pipeline.log.write(action)
             with self._sent_lock:
@@ -135,7 +170,8 @@ class App:
                 fut.add_done_callback(lambda f, a=action: self._check_send(f, a))
             except ValueError as e:
                 self.out(f"  [flipper] refused {action.type}: {e}")
-        self.out(f"  [startup] all lights off ({', '.join(self.flipper.outlets)})")
+        self.out("  [startup] lights off: " + (", ".join(todo) or "none needed")
+                 + (f" (already off: {', '.join(already)})" if already else ""))
 
     def _record_alarm(self, alert: Event) -> None:
         """About 10 s of frames when the alarm goes off, then a recording_saved
@@ -151,8 +187,8 @@ class App:
                 captures = self.settings.get("paths", {}).get("captures", "captures")
                 out_dir = REPO_ROOT / captures / f"alarm-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
                 self.out(f"  [camera] alarm: recording {self.alarm_record_s:.0f} s")
-                info = self.video.record(self.alarm_record_s, out_dir)
-                if not info["frames"]:
+                info = self.video.record(self.alarm_record_s, out_dir, stop=self._rec_stop)
+                if info["frames"] < 2:
                     self.out("  [camera] alarm recording FAILED: no frames (camera unavailable?)")
                     return
                 data = RecordingSavedData(
@@ -167,7 +203,8 @@ class App:
                 log.exception("alarm recording failed")
             finally:
                 self._recording.release()
-        threading.Thread(target=run, name="faraday-alarm-recording", daemon=True).start()
+        self._rec_thread = threading.Thread(target=run, name="faraday-alarm-recording", daemon=True)
+        self._rec_thread.start()
 
     def outlet_states(self) -> Dict[str, str]:
         """Last command sent OK per outlet (for the Controls page)."""
@@ -237,8 +274,10 @@ class App:
         except Exception as e:  # cable dropped mid-send
             ok, out = False, [repr(e)]
         if not ok:
-            with self._sent_lock:               # state unknown now: allow the next attempt
-                self._outlet_state.pop(action.args.get("outlet"), None)
+            with self._sent_lock:               # state unknown now: allow the next attempt,
+                outlet = action.args.get("outlet")   # unless a newer command replaced it
+                if self._outlet_state.get(outlet) == action.type:
+                    self._outlet_state.pop(outlet, None)
             self.out(f"  [flipper] {action.type} {action.args.get('outlet')} FAILED: {out[-1:]}")
 
     def _check_led(self, fut, what: str) -> None:

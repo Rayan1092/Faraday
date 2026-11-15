@@ -7,6 +7,7 @@ the models stay where they are.
 """
 from __future__ import annotations
 
+import json
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -33,7 +34,28 @@ def archive_run(settings: Dict[str, Any], root: Path = REPO_ROOT,
         if not src.is_dir() or not any(src.iterdir()):
             continue
         dest.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(src), str(dest / Path(name).name))
+        try:
+            shutil.move(str(src), str(dest / Path(name).name))
+        except OSError as e:     # e.g. Windows: a file in it is open in another program
+            print(f"  --fresh: could not move {src} ({e}); close what uses it and try again."
+                  f" A copy may be in {dest}")
         src.mkdir(parents=True, exist_ok=True)
         moved = True
     return dest if moved else None
+
+
+def outlet_states_in(events_jsonl: Path) -> Dict[str, str]:
+    """The outlets' last commands from an (archived) events.jsonl, so the first
+    start after --fresh doesn't repeat a code (the outlets toggle on it)."""
+    from integration.app import last_outlet_states
+    entries = []
+    try:
+        with open(events_jsonl, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    entries.append(json.loads(line))
+                except ValueError:
+                    continue
+    except OSError:
+        return {}
+    return last_outlet_states(entries)

@@ -306,6 +306,10 @@ def validate_event(d: Dict[str, Any]) -> List[str]:
         dur = data["duration_s"]
         if isinstance(dur, bool) or not isinstance(dur, (int, float)) or dur < 0:
             errors.append("data.duration_s must be a number >= 0")
+        if data.get("video_path") is not None and not isinstance(data["video_path"], str):
+            errors.append("data.video_path must be a string or null")
+        if not isinstance(data.get("reason", ""), str):
+            errors.append("data.reason must be a string")
     if d["type"] == EventType.SPEECH_HEARD and not str(data["text"]).strip():
         errors.append("data.text is empty")
     if d["type"] == EventType.SPEECH_HEARD and data.get("voices") is not None:
