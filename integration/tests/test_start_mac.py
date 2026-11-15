@@ -87,6 +87,26 @@ class Server:
         self.httpd.server_close()
 
 
+class Bash32(unittest.TestCase):
+    """Owner 2026-11-15: macOS /bin/bash 3.2 failed with "unexpected EOF while looking
+    for matching `''": it reads an apostrophe in a heredoc inside $( ) (there: "isn't" in
+    a comment) as an open quote. Git Bash here is 5.x and can't show it, so check the text."""
+
+    def test_no_apostrophes_in_heredocs_inside_command_substitutions(self):
+        lines = SCRIPT.read_text(encoding="utf-8").splitlines()
+        found, inside, start = [], False, 0
+        for n, line in enumerate(lines, 1):
+            if inside:
+                if line == "EOF":
+                    inside = False
+                elif "'" in line:
+                    found.append(f"line {n}: {line.strip()}")
+            elif "$(" in line and "<<'EOF'" in line:
+                inside, start = True, n
+        self.assertFalse(inside, f"heredoc from line {start} never ends")
+        self.assertEqual(found, [], "apostrophes in a heredoc inside $( ) break macOS bash 3.2")
+
+
 @unittest.skipUnless(BASH, "needs bash")
 class StartMac(unittest.TestCase):
     def setUp(self):
@@ -168,7 +188,7 @@ class StartMac(unittest.TestCase):
         self.settings["llm"]["profiles"]["mac"]["base_url"] = self.lm.base
         code, out = self.run_script(self.settings)
         self.assertEqual(code, 0, out)
-        self.assertIn("can't tell which models are loaded", out)
+        self.assertIn("cannot tell which models are loaded", out)
 
     def use_lm(self, **kw):
         self.lm.close()

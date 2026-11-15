@@ -204,18 +204,20 @@ for m in need:
     if m in have:
         print(f"OK|LM Studio at {url} has {m} downloaded")
     else:
-        print(f"FAIL|LM Studio has no model '{m}' downloaded. Download it, or fix llm.profiles in settings (see: curl {url}/v1/models).")
+        print(f"FAIL|LM Studio has no model {m!r} downloaded. Download it, or fix llm.profiles in settings (see: curl {url}/v1/models).")
 if loaded is None:
-    print("WARN|can't tell which models are loaded (no /api/v0/models); every request names its model id exactly")
+    print("WARN|cannot tell which models are loaded (no /api/v0/models); every request names its model id exactly")
 else:
+    now = ", ".join(loaded) or "nothing"
     for m in need:
         if m in loaded:
             print(f"OK|{m} is loaded")
         elif m in have:
-            print(f"FAIL|{m} is downloaded but NOT loaded (loaded now: {', '.join(loaded) or 'nothing'}). Load it in LM Studio. Only Bonsai 2 is allowed.")
+            print(f"FAIL|{m} is downloaded but NOT loaded (loaded now: {now}). Load it in LM Studio. Only Bonsai 2 is allowed.")
     extra = [m for m in loaded if m not in need]
     if extra:
-        print(f"WARN|other models are loaded ({', '.join(extra)}): eject them. Only Bonsai 2 is allowed, and they use RAM.")
+        others = ", ".join(extra)
+        print(f"WARN|other models are loaded ({others}): eject them. Only Bonsai 2 is allowed, and they use RAM.")
 EOF
 )"
     while IFS='|' read -r level msg; do
@@ -301,12 +303,14 @@ try:
     import sounddevice as sd
     mic = dev(sys.argv[2])
     i = sd.query_devices(mic, kind="input") if mic is not None else sd.query_devices(kind="input")
-    print(f"OK|mic: {i['name']}")
+    name = i["name"]
+    print(f"OK|mic: {name}")
 except Exception as e:
     print(f"FAIL|no mic ({e}). Plug it in; python3 -m hardware.check devices")
 try:
-    # an OUTPUT device only, and a WARN when it isn't the system output (where
-    # argmax-cli --play speaks every live line)
+    # an OUTPUT device only, and a WARN when it is not the system output (where
+    # argmax-cli --play speaks every live line). No apostrophes in a heredoc inside
+    # a command substitution: macOS bash 3.2 reads one as an open quote.
     from hardware.audio import speaker_report
     for level, msg in speaker_report(dev(sys.argv[3])):
         print(f"{level}|{msg}")
