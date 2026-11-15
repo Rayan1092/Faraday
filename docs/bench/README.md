@@ -4,7 +4,7 @@ Made with `python -m brain.bench` (see `brain/bench.py`). Each scripted moment t
 
 ## Mac mini, 9B + 2B, 2026-11-15 (second full-system test)
 
-`python -m brain.bench --profile mac`: `ternary-bonsai-2-9b-mlx` (smart) and `ternary-bonsai-2-2b-mlx` (fast), `9b` prompts, 39 cases, 10 runs each. The 9B thinks anyway, so the startup probe gave it the no-think prompts; the 2B answered without thinking.
+`python -m brain.bench --profile mac` ([0420](2026-11-15-0420-ternary-bonsai-2-9b-mlx-prompts-9b.md), copied from the owner's run): `ternary-bonsai-2-9b-mlx` (smart) and `ternary-bonsai-2-2b-mlx` (fast), `9b` prompts, 39 cases, 10 runs each. The 9B thinks anyway, so the startup probe gave it the no-think prompts; the 2B answered without thinking.
 
 | | Result |
 |---|---|
@@ -73,7 +73,7 @@ File: `2026-11-14-2252-ternary-bonsai-2-4b-q2-0-prompts-small-effort-off.md`. Be
 
 ## Honest threat label, 2026-11-15
 
-Owner's list, item 6. The label now reads NV's detector (people, faces, objects) and `described_by`. Zero people is always nobody, and failed vision is "unknown", both decided by code with no model call. The reason must name what was seen. Text cases are built the way NV's camera reports them (detector summary plus the 9B's factual description). 4B q2_0, 3 runs each:
+Owner's list, item 6. The label now reads NV's detector (people, faces, objects) and `described_by`. Zero people is always nobody, and failed vision was "unknown" (since the second Mac test, the detector's facts decide, and "unknown" only if the detector failed too), both decided by code with no model call. The reason must name what was seen. Text cases are built the way NV's camera reports them (detector summary plus the 9B's factual description). 4B q2_0, 3 runs each:
 
 | Case | Model | Final | Avg |
 |---|---|---|---|
@@ -97,4 +97,4 @@ python -m brain.bench --profile mac --force smart   # everything on the 9B
 python -m brain.bench --profile mac --force fast    # everything on the 2B
 ```
 
-Each file ends with "Average Bonsai time by model". Compare the `fast` time with the same cases under `--force smart`; that difference is the pitch's sustainability line. **[TBD: Mac numbers]** On the Windows laptop both roles are the same 4B, so there's no difference to measure there.
+Each file ends with "Average Bonsai time by model". Compare the `fast` time with the same cases under `--force smart`; that difference is the pitch's sustainability line. The Mac run ([0420](2026-11-15-0420-ternary-bonsai-2-9b-mlx-prompts-9b.md)) gave 0.38 s per 2B call and 1.41 s per 9B call, but on different cases. **[TBD: the same cases under `--force smart` and `--force fast` on the Mac]** On the Windows laptop both roles are the same 4B, so there's no difference to measure there.

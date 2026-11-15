@@ -17,7 +17,7 @@ You present alone: you talk, ring the doorbell, wave at the motion sensor and pl
 
 ## 0:00 Hook (25 s)
 
-*Stand in the camera's view, face visible, holding the box at chest height. Press and hold the doorbell, and start the stopwatch.* Faraday: "Hello. No one can come to the door right now. I can take a message or help with a delivery."
+*Stand in the camera's view, face visible, holding the box at chest height. Press and hold the doorbell.* Faraday: "Hello. No one can come to the door right now. I can take a message or help with a delivery."
 
 *As the courier, within a few seconds of the greeting ending:* "Hi, I've got a package for Sam." Faraday: "Please leave it by the side door. I'll let the owner know it arrived."
 
@@ -41,7 +41,7 @@ I wanted the useful parts of a smart home guard without giving my doorstep away.
 
 *Point at the dashboard: the live camera with its detection box around you, the label pill **Delivery** with its reason and the object chips under it, and the hook's photo in the activity list.*
 
-"When I rang, it took a photo. The detector found one person, the 9B saw the box and wrote what it saw, and the 2B labelled it a delivery, with a reason that names what was seen. If nobody's in frame, code says 'nobody' without asking a model. If vision fails, the label says 'unknown' instead of guessing."
+"When I rang, it took a photo. The detector found one person, the 9B saw the box and wrote what it saw, and the 2B labelled it a delivery, with a reason that names what was seen. If nobody's in frame, code says 'nobody' without asking a model. If vision fails, code labels it from the detector and whether they rang. 'Unknown' only if both fail."
 
 ## 1:45 AI for understanding, code for safety (25 s)
 
@@ -75,7 +75,7 @@ This is the key line, say it slowly: **"AI for understanding, code for safety.**
 
 ## 3:35 Eyes and captions at the door (12 s)
 
-*Stand at the camera.* "Hey Faraday, who's at the door?" Faraday: "Checking the camera." Then: "One person is at the front door. It looks like a visitor."
+*Put the box down and stand at the camera.* "Hey Faraday, who's at the door?" Faraday: "Checking the camera." Then: "One person is at the front door. It looks like a visitor."
 
 "For someone who can't see, that's eyes at the door. And for someone who can't hear, every word said at the door is captioned live." *Point at Heard & said, or open Controls and show Live captions.*
 

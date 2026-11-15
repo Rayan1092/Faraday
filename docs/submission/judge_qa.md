@@ -14,7 +14,7 @@ The motion sensor sends 17 copies of its code over about 2 seconds every time it
 Cheap remote outlets listen for their own 433 MHz codes. I saved those codes on the Flipper, and it replays the right one. The Flipper can't listen and send at the same time, so the driver pauses listening, sends, then starts listening again. On the real hardware, listening was back about 1.2 seconds after each send.
 
 **Does the radio work for real?**
-Yes. First the driver on its own, on a Windows laptop: doorbell events, motion events, switching outlets, and the alarm signal, where the Flipper's LED turns red and it buzzes three times. The LED is off the rest of the time. If the USB cable drops, it reconnects in about 8 seconds. Then the whole app on the laptop: real sensors through the Flipper, Bonsai, the real lamps and the alarm. Then a full-system test on the Mac mini.
+Yes. First the driver on its own, on a Windows laptop: doorbell events, motion events, switching outlets, and the alarm signal, where the Flipper's LED turns red and it buzzes three times. The LED is off the rest of the time. If the USB cable drops, it reconnects in about 8 seconds. Then the whole app on the laptop: real sensors through the Flipper, Bonsai, the real lamps and the alarm. Then two full-system tests on the Mac mini.
 
 **Why is the doorbell sometimes slow to react?**
 My cheap doorbell is flaky. It has to be held for a second or two, and late in testing even holds got through only about 1 time in 3. Raw Flipper listening with none of my code was just as bad, so it's the doorbell, not the code. A new one is going in. **[TBD: new doorbell results]**
@@ -33,7 +33,7 @@ Yes. These sensors send the same fixed code every time, so anyone with a radio c
 - **Plain code** does the modes, alerts, lights, photos, the passphrase, and checks every model answer.
 
 **Why two model sizes?**
-Speed where it matters, understanding where it matters. The label and the owner's quick requests go to the 2B, because a light switch shouldn't wait. Looking at a photo and holding a conversation need the 9B. Both are Bonsai 2 in LM Studio: `ternary-bonsai-2-9b-mlx` and `ternary-bonsai-2-2b-mlx`. On the Mac mini a 2B call takes 0.38 s and a 9B call 1.41 s on average.
+Speed where it matters, understanding where it matters. The label and the owner's quick requests go to the 2B, because a light switch shouldn't wait. Looking at a photo and holding a conversation need the 9B. Both are Bonsai 2 in LM Studio: `ternary-bonsai-2-9b-mlx` and `ternary-bonsai-2-2b-mlx`. In the benchmark on the Mac mini a 2B call takes 0.38 s and a 9B call 1.41 s on average (text calls, on different cases).
 
 **How honest is the threat label?**
 Code keeps it honest. Zero people from the detector is always "nobody". If vision fails, code labels it from the detector's facts and the context (rang or not, the mode), and "unknown" only if the detector failed too. Neither asks a model. The detector can't see boxes, so a visitor who says package, parcel, delivery or courier makes it a delivery. Otherwise the 2B judges the 9B's description plus the detector's counts. Someone who walked up and rang with a plain face is a visitor or a delivery, and someone who stayed at the door without ringing while armed is suspicious. The reason has to name what was seen ("1 person, holding a box", "face covered"), or code writes it from the facts. On the Mac the 2B called a person holding a box a visitor, so code now makes that a delivery whenever the description shows a box or the visitor talks about one.
@@ -83,13 +83,13 @@ A few things:
 **Does it actually make mistakes?**
 Yes. Before tuning, the 4B was right on its own 61% of the time. Its worst habit: when you said "I'm heading out" it tried to switch to Home mode, 10 times out of 10. The code checks dropped that every time.
 
-The fix was simple. Instead of an "arm" tool with a mode to fill in, it gets two buttons: "arm away" and "arm night". After that and some sharper descriptions, it was right on its own in 136 of 140 runs (97%). That includes sentences I never tuned on, like "I'm off to work, see you later". Code fixed the rest except one, and zero unsafe actions got through. On the Mac mini, with the 9B and the 2B (39 cases, 10 runs each): 61% right by the models alone (227 of 370), 95% after the code checks (374 of 390), zero unsafe. The misses left were the delivery label and two summaries, and code now covers both.
+The fix was simple. Instead of an "arm" tool with a mode to fill in, it gets two buttons: "arm away" and "arm night". After that and some sharper descriptions, it was right on its own in 136 of 140 runs (97%). That includes sentences I never tuned on, like "I'm off to work, see you later". Code fixed the rest except one, and zero unsafe actions got through. On the Mac mini, with the 9B and the 2B (39 cases, 10 runs each): 61% right by the models alone (227 of 370), 95% after the code checks (374 of 390), zero unsafe. That 61% isn't worse than the 97% above: it's a bigger set, and it counts every code fix and fallback as a model miss, including cases code handles on purpose. The misses left were the delivery label and two summaries, and code now covers both.
 
 **Why doesn't it describe the person out loud?**
 On the Mac it once told someone to "leave now with your black hooded jacket and bag", and there was no bag. A small model can invent a detail, and a wrong detail said out loud to a stranger is worse than none. So nothing Faraday says describes anyone: the description is on the dashboard, for the owner to read.
 
 **Can I say instructions any way I like?**
-Yes. "If a delivery comes, I want you to tell him to leave the package by the side door" works. When the keywords can't read a sentence, the 2B pulls the instruction out, and code checks that it names who it's for, is complete, and is made of the owner's own words, so the model can't invent one.
+Yes, as long as you say who it's for. "If a delivery comes, I want you to tell him to leave the package by the side door" works. When the keywords can't read a sentence, the 2B pulls the instruction out, and code checks that it names who it's for, is complete, and is made of the owner's own words, so the model can't invent one.
 
 ## Bonsai and Argmax
 
@@ -112,10 +112,10 @@ The whole point is that your front door doesn't leave your house. And the hackat
 ## Speed
 
 **How fast is it?**
-The lights, photos, the doorbell greeting and the alarm happen right away, because they're plain code. On the Mac mini a Bonsai answer takes 0.7 s on average and 3.0 s at worst: 0.38 s for the 2B, 1.41 s for the 9B.
+The lights, photos, the doorbell greeting and the alarm happen right away, because they're plain code. In the benchmark on the Mac mini a Bonsai answer takes 0.7 s on average and 3.0 s at worst: 0.38 s for the 2B, 1.41 s for the 9B. Those are text calls; describing a photo takes longer, and vision gives up after 20 s.
 
-**Why is it that slow?**
-It's a model running on a small computer. Even a tiny request took a couple of seconds on the test laptop. That's why anything urgent is plain code.
+**Why keep the AI out of anything urgent?**
+A photo description can take several seconds, and any model call can fail or time out. The lights, the alarm and the passphrase can't wait for that, so they're plain code.
 
 ## Accessibility
 
@@ -148,7 +148,7 @@ That's a real weakness. Someone could overhear it. You can also type it on the d
 Everything in this repo: the pipeline, the safety checks, the modes and alarm, the rules, the log, the dashboard, the hardware drivers, the app wiring and the simulator. I used the Flipper's normal firmware, LM Studio, the Bonsai models, Argmax, and two small open detector models (YOLOX-tiny and YuNet).
 
 **How did you test without hardware?**
-A simulator sends the exact same events the hardware does. More than 600 automated tests run without any hardware or AI. The hardware ones replay real radio captures and use stand-in devices. One opt-in test opens the Controls page in a real browser with a fake mic and checks the audio reaches the door speaker. Then I tested against a real Bonsai model, then on the real devices: first a Windows laptop with the radio, Bonsai, the real lamps and the alarm, then a full-system test on the Mac mini.
+A simulator sends the exact same events the hardware does. More than 600 automated tests run without any hardware or AI. The hardware ones replay real radio captures and use stand-in devices. One opt-in test opens the Controls page in a real browser with a fake mic and checks the audio reaches the door speaker. Then I tested against a real Bonsai model, then on the real devices: first a Windows laptop with the radio, Bonsai, the real lamps and the alarm, then two full-system tests on the Mac mini.
 
 **Why "Faraday"?**
 A Faraday cage keeps signals out. This keeps your data in.
