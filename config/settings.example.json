@@ -113,7 +113,8 @@
     "max_record_s": 8,
     "_note": "Hands-free: one mic stream stays open. Audio is used only in listening windows (after a doorbell, after a question, after the wake phrase) and dropped while Faraday speaks. A window opens after_speech_s after Faraday has finished everything it had to say, lasts up to max_s, ends silence_s after the speaker stops or after no_speech_s if nobody spoke. The wake listener cuts speech into segments at wake.silence_s pauses.",
     "listen": {"max_s": 15, "silence_s": 1.8, "no_speech_s": 8, "after_speech_s": 0.3},
-    "wake": {"enabled": true, "phrase": "hey faraday", "silence_s": 0.7, "max_s": 10}
+    "wake": {"enabled": true, "phrase": "hey faraday", "silence_s": 0.7, "max_s": 10},
+    "voice_check": {"enrollment": "cache/owner_voice.wav", "grace_s": 2.0}
   },
 
   "camera": {

@@ -79,11 +79,15 @@ def build_app(args: argparse.Namespace, settings, known_outlets=None) -> App:
             wake["enabled"] = False
         from hardware.audio import play_chime
         from hardware.diarize import Diarizer
+        from hardware.owner_voice import OwnerVoice
         speaker_device = audio.get("speaker_device")
+        diarizer = Diarizer.from_settings(settings)
+        owner_voice = OwnerVoice.from_settings(settings, diarizer)      # None until enrolled
         app.voice = Voice(Recorder.from_settings(settings, gate), SpeechToText.from_settings(settings),
                           app.submit, listen=audio.get("listen"), wake=wake,
-                          diarizer=Diarizer.from_settings(settings),
+                          diarizer=diarizer,
                           diarize_grace_s=Diarizer.grace_s(settings),
+                          owner_voice=owner_voice, owner_voice_grace_s=OwnerVoice.grace_s(settings),
                           busy=app.speech_busy,
                           chime=None if args.print_speech else (lambda: play_chime(gate, speaker_device)))
     if app.board is not None:
