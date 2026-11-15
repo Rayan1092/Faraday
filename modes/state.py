@@ -160,7 +160,7 @@ class ModeState:
         [alert_changed normal -> warning] (caused_by that motion), or [] if the
         alert was already warning (a new walk-up long after an old warning: warned
         again, no level change) or nothing was pending or due.
-        force=True ends it early (the backup demo's rehearsal speed)."""
+        force=True ends it early (the simulator's "w" key and tests)."""
         self.grace_ended = None
         if self._grace_since is None or not (force or self.grace_due()):
             return []

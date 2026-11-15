@@ -1,6 +1,6 @@
 """Rule-based answers used when Bonsai errors, times out or returns garbage.
 
-Simple keyword rules so the demo never stalls. Output goes through the same
+Simple keyword rules so Faraday always answers. Output goes through the same
 guard rails as the model's output.
 """
 from __future__ import annotations

@@ -103,7 +103,7 @@ A big local web page for the projector shows:
 - what Faraday heard and said,
 - the lights as real switches, the rules and instructions, and the messages.
 
-A small **Listen** button opens the mic once, like saying "Hey Faraday", and a green mic shows while it's listening.
+A small green mic shows on the dashboard while Faraday is listening ("Hey Faraday" or after the doorbell).
 
 The **Controls** button opens a phone-style page: the live camera, a **Snapshot** button that takes a photo and shows its description and label, a big **Hold to talk to visitor** button that plays your voice on the door speaker (the door mic is muted while you talk), the live captions, and all the light switches.
 
@@ -146,7 +146,7 @@ On Windows use `py` instead of `python`.
 **With the real hardware.** Plug in the Flipper (close any app on it first), the camera, the mic and the speaker.
 - **On the Mac mini:** in LM Studio, load `ternary-bonsai-2-9b-mlx` and `ternary-bonsai-2-2b-mlx`, and raise Parallel above 1 so a background call doesn't wait in line. Start Argmax (`argmax-cli serve`). Then run `integration/start_mac.sh`. It checks that LM Studio and Argmax answer, warns you if the Wi-Fi is still on, and starts Faraday with the dashboard at http://127.0.0.1:8080 and the camera and intercom server next to it on port 8081.
 - **On a Windows laptop:** `py -m integration`.
-- **No hardware at all:** `py -m integration --fake --offline` gives you a fake Flipper with no LM Studio.
+- **No hardware at all (developers):** `python -m sim --offline --dashboard` runs the same pipeline and dashboard with typed keys instead of sensors. It's a development and test tool, not part of the product.
 
 Then turn the Wi-Fi off. **[TBD: full run on the Mac mini]**
 
@@ -156,7 +156,7 @@ Then turn the Wi-Fi off. **[TBD: full run on the Mac mini]**
 3. Set it to **Enabled**.
 4. Click **Relaunch**.
 
-With the Wi-Fi off, other devices can't reach the Mac, so on stage use the Controls page on the Mac itself.
+With the Wi-Fi off, other devices can't reach the Mac, so open the Controls page on the Mac itself.
 
 **Tests:** `python -m unittest discover`
 
@@ -166,7 +166,7 @@ We'd rather be honest about these:
 
 - **Cheap sensors use fixed codes.** The doorbell and motion sensor send the same code every time, so anyone with a radio like a Flipper could record and replay it. That could fake a doorbell press or trigger the alarm. It can't disarm anything, because disarming needs the passphrase. A real product should use rolling-code sensors.
 - **The outlets work the same way.** Someone nearby could replay the "light on" code.
-- **Our cheap doorbell is flaky.** It has to be held for a second or two, because a quick tap never registers. Late in testing, even holds only got through about 1 time in 3, with or without our code. We're swapping in a new doorbell. **[TBD: new doorbell results]** Until then, the dashboard has a "Ring doorbell" button that sends the same event, and the log marks it as coming from the dashboard.
+- **Our cheap doorbell is flaky.** It has to be held for a second or two, because a quick tap never registers. Late in testing, even holds only got through about 1 time in 3, with or without our code. We're swapping in a new doorbell. **[TBD: new doorbell results]**
 - **The radio goes deaf for a moment.** It can't hear sensors for about 1.2 seconds while it switches an outlet, and about 2.5 seconds during the alarm buzz.
 - **Small models make mistakes.** Before tuning, the 4B picked the right action on its own only 61% of the time. It kept trying to switch to Home mode when you said "I'm heading out". We built a benchmark (`python -m brain.bench`) and tuned the tools and prompts with it. After tuning it was right on its own 97% of the time (136 of 140 runs), including reworded sentences we never tuned on. Code fixed most of the rest, for 99% final. Nothing unsafe got through in any run. On the threat label it was right in 15 of 15 runs, and it passed on the owner's instructions by itself in 6 of 6. Full numbers are in [docs/bench/](docs/bench/README.md). It's still a small model, so code stays the safety net.
 - **It's not instant.** On a laptop running the 4B, a Bonsai call took 2.5 seconds on average and 5.7 seconds at worst in the benchmark. So lights and photos never wait for the AI, and Faraday says "One moment, please" to visitors while it thinks. **[TBD: timings on the Mac mini with the 9B and the 2B]**
