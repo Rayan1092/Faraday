@@ -37,6 +37,7 @@ The **Controls** button in the dock opens a phone-style page in the same glass l
 - **Snapshot:** `POST /api/snapshot` makes `pipeline.owner_snapshot()` emit a `take_photo` with `source: dashboard`. The page waits for the photo whose `request` matches, then shows it with its description and threat label. Nobody at the door is greeted for an owner snapshot.
 - **Talk to visitor:** a big hold button (pointer, touch or Space/Enter). Chrome's mic goes through `getUserMedia`, then 16-bit mono PCM chunks are POSTed to integration's `/api/intercom` with `X-Sample-Rate`, and `/api/intercom/end` on release. Integration mutes the door mic meanwhile. There's no text fallback. If the browser blocks the mic, the page says why: an untrusted address (with the `chrome://flags/#unsafely-treat-insecure-origin-as-secure` steps and the exact two origins to add), permission denied, no mic, or mic busy.
 - **Lights:** all three outlets as big switches, same `/api/control` and log-based state as the dock.
+- **Live captions:** everything heard and said at the door, in big text, newest at the bottom. It follows along unless you've scrolled up. For a deaf owner, it's the conversation as it happens.
 
 The page finds the controls server at `location.hostname` plus `controls_port` from `/api/state` (settings `controls.port`, else dashboard port + 1), so it works from a phone at the Mac's address too.
 

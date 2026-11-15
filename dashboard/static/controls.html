@@ -25,6 +25,7 @@
       <span class="pill cp-status"><span class="dot" aria-hidden="true"></span><span id="status-text">Connecting…</span></span>
     </header>
 
+    <div class="cp-col cp-col-main">
     <!-- Live camera + snapshot -->
     <section class="glass cp-card cp-cam" aria-label="Front door camera">
       <div class="cam-frame">
@@ -47,6 +48,14 @@
       </div>
     </section>
 
+    <!-- Live captions: everything said at the door, as it's said (for a deaf owner too) -->
+    <section class="glass cp-card cp-captions" aria-label="Live captions">
+      <div class="card-head"><span data-icon="message"></span><h2>Live captions</h2></div>
+      <ol id="captions" class="captions" aria-live="polite"><li class="empty">Nothing said at the door yet.</li></ol>
+    </section>
+    </div>
+
+    <div class="cp-col cp-col-side">
     <!-- Talk to the visitor: hold to speak through the door speaker -->
     <section class="glass cp-card cp-talk" aria-label="Talk to visitor">
       <button id="btn-talk" class="hold" type="button" aria-describedby="talk-note">
@@ -73,6 +82,7 @@
       <div id="cp-lights" class="cp-lights"></div>
       <p id="lights-note" class="talk-note" hidden>The light switches aren't connected.</p>
     </section>
+    </div>
   </main>
 
   <script src="/static/icons.js"></script>
