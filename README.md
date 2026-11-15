@@ -35,7 +35,7 @@ Faraday does all of it on one computer in your house: the radio, the object dete
 **A small detector spots what's in frame, the 9B describes, the 2B judges, Argmax hears and speaks, and code guarantees safety.** Each part does the job it's best at, and nothing about safety depends on any model.
 
 - **Spots: a small object detector** (YOLOX-tiny, no LLM) runs on the live camera and on every photo. It counts people and objects and draws the boxes you see on the dashboard. A face detector counts visible faces.
-- **Describes: Bonsai 9B** writes one or two factual sentences about each photo: how many people, what they hold, whether the face is visible, what they're doing. It gets the detector's counts as a hint. I checked that Bonsai really looks at images: given a test picture of a green triangle on black, it said exactly that, and asked the same thing with no image, it made something up.
+- **Describes: Bonsai 9B** writes one or two factual sentences about each photo: how many people, what they hold, whether the face is visible, what they're doing. It gets the detector's counts as a hint. I checked that Bonsai really looks at images: given a test picture of a green triangle on black, the 4B said exactly that, and asked the same thing with no image, it made something up.
 - **Judges: Bonsai 2B** labels each photo delivery, visitor, suspicious or nobody, from the description, the detector, the mode and the doorbell and motion history. Code keeps it honest:
   - zero people detected is always "nobody";
   - if vision failed, the label is "unknown: couldn't analyse the photo", never a guess;
@@ -44,7 +44,7 @@ Faraday does all of it on one computer in your house: the radio, the object dete
   - the reason must name what was seen ("1 person, holding a box", "face covered") or the context ("stayed at the door without ringing while armed"), or code writes it from the facts.
 - **Picks the owner's request: Bonsai 2B.** After "Hey Faraday", the 2B chooses one of a fixed set: arm Away or Night, a light on or off, "who's at the door?", "what happened?", a new rule or an instruction for visitors. Code checks the choice against the words. Anything else gets "Sorry, I didn't catch that." Disarming is never the AI's choice: only the passphrase does that, checked in plain code before any model sees the words.
 - **Talks: Bonsai 9B** replies to what a visitor says, passes on your instructions, writes one line to an intruder about what it sees, and sums up the day.
-- **Hears and speaks: Argmax.** Speech-to-text after the wake phrase and after the doorbell, voice counting for visitors, and text-to-speech in one calm, professional voice. Fixed lines are rendered once at startup, so they play instantly.
+- **Hears and speaks: Argmax.** Speech-to-text after the wake phrase and after the doorbell, voice counting for visitors **[TBD: voice counting on the Mac mini]**, and text-to-speech in one calm, professional voice. Fixed lines are rendered once at startup, so they play instantly.
 - **Guarantees safety: plain code.** Modes, alerts, lights, photos and the passphrase are all plain code, and so is the check on every model answer. Details below.
 
 On the Mac mini the models are `ternary-bonsai-2-9b-mlx` and `ternary-bonsai-2-2b-mlx` in LM Studio. The 9B MLX build thinks before answering even when told not to, so Faraday checks every model once at startup and uses prompts that can't think when needed. **[TBD: speed of each on the Mac mini]**
@@ -72,13 +72,13 @@ Faraday is in Home, Away or Night. What always happens is written in plain code:
 | No doorbell within those 15 s | | warning line, photo, the label, alert to WARNING | same as Away |
 | Motion again 8 to 60 s after the warning, nobody rang | | ALARM: both lights, photo, the alarm line, a line about what the camera sees, a recording | same as Away |
 
-A visitor who walks up and rings is never warned or alarmed. When you come home and say the passphrase, the lights Faraday turned on go off again; lights you switched on yourself stay on.
+A visitor who walks up and rings is never warned or alarmed. When you come home and say the passphrase, the lights Faraday turned on, or that you asked it to turn on, go off again; lights you switched on from the dashboard stay on.
 
 ### What you can say
 
 Start with **"Hey Faraday"**:
 - **"I'm heading out." / "Goodnight."** arms the house in Away or Night.
-- **"Who's at the door?"** Faraday says "Checking the camera.", takes a fresh photo and tells you what it sees, plus the label: "A courier holding a box at the front door. It looks like a delivery." If the camera or vision fails, it says "I can't see the door right now."
+- **"Who's at the door?"** Faraday says "Checking the camera.", takes a fresh photo and tells you what it sees, plus the label: "A courier holding a box at the front door. It looks like a delivery." If the camera fails or nothing can describe the photo, it says "I can't see the door right now."; if only the vision model fails, it says what the detector saw.
 - **"If a delivery comes, ask them to leave it by the side door."** An instruction for visitors. The next courier who mentions a package hears "Please leave it by the side door." Instructions only change what Faraday *says*; anything about lights, modes, the alarm, locks or codes is refused. They're listed on the dashboard, where you can delete them, or say "forget the delivery instruction".
 - **"When there's motion at night, turn on the living room lamp too."** becomes a rule.
 - **"What happened while I was out?"** gets a short spoken summary.
@@ -92,7 +92,7 @@ While the house is armed, a "Hey Faraday" request changes nothing: only the pass
 - The AI never sees the passphrase. It's blanked out of speech before anything is logged, shown or sent to a model.
 - Everything the AI picks goes through checks in code. Unknown actions, bad arguments and anything that would change the mode while armed get dropped.
 - If a model errors, times out or says something useless, simple keyword rules take over, so the house never stalls.
-- A visitor can only talk and leave a message: no rules, instructions, lights or summary, in any mode.
+- A visitor can only talk and leave a message: no rules, instructions, lights or summary, in any mode. The one exception is by design: while you're home, anyone who says "Hey Faraday" is treated as you, because the owner is assumed to be in. While the house is armed, "Hey Faraday" changes nothing.
 - The threat label can only make Faraday more careful. Owner instructions are words to pass on, never actions.
 
 ### Accessibility
@@ -160,7 +160,7 @@ Being honest about these:
 - **Small models make mistakes.** Before tuning, the 4B picked the right action on its own only 61% of the time. After building a benchmark (`python -m brain.bench`) and tuning the tools and prompts with it, the 4B was right on its own 97% of the time (136 of 140 runs) and 99% after the code checks, with nothing unsafe getting through. Full numbers are in [docs/bench/](docs/bench/README.md). It's still a small model, so code stays the safety net. The latest runs on the 4B:
   - the owner's requests, 39 of 39 after the code checks;
   - the threat label, 30 of 30, with every reason naming what was seen;
-  - with the model thinking before every answer, 46 of 46;
+  - with thinking left switched on in LM Studio, so the startup probe had to switch to prompts that can't think, 46 of 46;
   - the owner's delivery instruction, passed on 5 times out of 5 with code, against 1 in 5 for the model alone.
 - **It's not instant.** On a laptop running the 4B, a Bonsai call takes about 3 seconds. Lights, photos, the doorbell greeting and the alarm never wait for the AI. **[TBD: timings on the Mac mini with the 9B and the 2B]**
 - **The passphrase is spoken out loud.** Anyone who hears you say it could use it. A typed passphrase works on the dashboard too, and wrong guesses get locked out for 30 seconds after 5 tries.
