@@ -83,7 +83,7 @@
       </div>
     </section>
 
-    <!-- Bottom dock: lights, modes, talk, backup -->
+    <!-- Bottom dock: lights, modes, Controls page, talk, backup -->
     <nav class="glass dock" aria-label="Controls">
       <div id="lights" class="lights"></div>
 
@@ -94,6 +94,7 @@
       </div>
 
       <div class="dock-actions">
+        <a id="btn-controls" class="pill-btn" href="/controls"><span data-icon="sliders"></span>Controls</a>
         <button id="btn-talk" class="pill-btn talk" type="button" hidden><span data-icon="mic"></span>Talk</button>
         <button id="btn-backup" class="icon-btn" type="button" aria-expanded="false" aria-controls="backup" title="Stage backup"><span data-icon="more"></span></button>
       </div>
@@ -131,6 +132,7 @@
     </form>
   </div>
 
+  <script src="/static/icons.js"></script>
   <script src="/static/dashboard.js"></script>
 </body>
 </html>

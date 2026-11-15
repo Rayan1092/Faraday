@@ -33,10 +33,13 @@ class StaticAssetsAreOffline(unittest.TestCase):
             self.assertNotIn("fonts.googleapis", text, f.name)
 
     def test_page_only_references_local_assets(self):
-        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-        for ref in re.findall(r'(?:src|href)="([^"]+)"', html):
-            self.assertTrue(ref.startswith("/static/"), ref)
-            self.assertTrue((STATIC_DIR / ref[len("/static/"):]).exists(), ref)
+        for page in ("index.html", "controls.html"):
+            html = (STATIC_DIR / page).read_text(encoding="utf-8")
+            for ref in re.findall(r'(?:src|href)="([^"]+)"', html):
+                if ref in ("/", "/controls"):   # links between the two pages
+                    continue
+                self.assertTrue(ref.startswith("/static/"), (page, ref))
+                self.assertTrue((STATIC_DIR / ref[len("/static/"):]).exists(), (page, ref))
 
 
 class ServerTests(unittest.TestCase):

@@ -27,7 +27,17 @@ Or from the sim: `python -m sim --dashboard` (add `--offline` to run without LM 
 - **Real offline check:** the badge asks the OS for a route to a reserved test address (192.0.2.1 / 2001:db8::1) with a UDP connect, which sends no packets. No route shows a green OFFLINE. Any network shows a red, blinking "ONLINE: turn Wi-Fi off".
 - **One big banner for the audience,** most important first: ALARM, DISARMED BY PASSPHRASE (20 s), THE AI CAN'T DISARM (while armed, 60 s), DOORBELL PRESSED (15 s), WARNING, DOORBELL AT NIGHT (2 min).
 - **Real photos:** the newest `.jpg`/`.png` in `captures/photos/` shows the moment it's saved, with "Looking at the photo..." until its `photo_described` arrives.
-- **Tested** at 1280×720 and 1920×1080.
+- **Tested** at 1280×720 and 1920×1080 (the Controls page also at 390 px phone width).
+
+## Controls page (`/controls`)
+
+The **Controls** button in the dock opens a phone-style page in the same glass look: one column on a phone, two on a laptop.
+- **Live camera:** `<img>` on integration's `GET /stream.mjpg` (controls server, dashboard port + 1). It shows "The camera isn't connected" (from `/api/status`) with a Try again button.
+- **Snapshot:** `POST /api/snapshot` makes `pipeline.owner_snapshot()` emit a `take_photo` with `source: dashboard`. The page waits for the photo whose `request` matches, then shows it with its description and threat label. Nobody at the door is greeted for an owner snapshot.
+- **Talk to visitor:** a big hold button (pointer, touch or Space/Enter). Chrome's mic goes through `getUserMedia`, then 16-bit mono PCM chunks are POSTed to integration's `/api/intercom` with `X-Sample-Rate`, and `/api/intercom/end` on release. Integration mutes the door mic meanwhile. There's no text fallback. If the browser blocks the mic, the page says why: an untrusted address (with the `chrome://flags/#unsafely-treat-insecure-origin-as-secure` steps and the exact two origins to add), permission denied, no mic, or mic busy.
+- **Lights:** all three outlets as big switches, same `/api/control` and log-based state as the dock.
+
+The page finds the controls server at `location.hostname` plus `controls_port` from `/api/state` (settings `controls.port`, else dashboard port + 1), so it works from a phone at the Mac's address too.
 
 **How it updates:** the page polls `GET /api/state` every second. That snapshot is built by `state.build_state()` from the log alone, so it's redacted, stateless and survives restarts.
 
@@ -43,5 +53,7 @@ Or from the sim: `python -m sim --dashboard` (add `--offline` to run without LM 
 | `POST /api/sensor {"type": "doorbell"\|"motion"}` | stage backup: the same event the Flipper would send |
 | `POST /api/control {"outlet": ..., "on": true\|false}` | light switch through `board.control_hook`. 400 for a bad outlet, 503 if the hook isn't set |
 | `POST /api/talk` | opens one listening window through `board.talk_hook` |
+| `GET /controls` | the Controls page |
+| `POST /api/snapshot` | owner snapshot: a `take_photo` with `source: dashboard`. Replies 202 with the request `id` |
 
 POSTs need the header `X-Faraday: 1`, so another web page can't press the buttons.

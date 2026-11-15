@@ -1,0 +1,15 @@
+# Controls page (Dell, item 5)
+- Laptop / branch / PR: Dell / `dell/controls-page` / PR "Controls page"
+- What changed:
+  - **Page:** `dashboard/static/controls.html`, `controls.css`, `controls.js`, served at `/controls`, opened by the new **Controls** button in the dock. Same glass look, phone-like: one column on a phone, two on a laptop.
+    - Live camera from NV's `/stream.mjpg` (dashboard port + 1).
+    - Snapshot button.
+    - A big **Hold to talk to visitor** button (browser mic → 16-bit PCM → NV's `/api/intercom` + `/api/intercom/end`). No text fallback.
+    - All three light switches.
+  - **Mic blocked:** the page says exactly why. On an untrusted address it shows the Chrome flag steps with the two origins to paste. It also covers permission denied, no mic and mic busy.
+  - **Snapshot:** `POST /api/snapshot` → `Pipeline.owner_snapshot()` emits `take_photo` (source dashboard). Its `photo_described` gets the threat label but no visitor reply. `/api/state` has `photo.request` so the page knows its photo arrived, and `controls_port` so it finds NV's server.
+  - **Icons:** moved into `static/icons.js`, shared by both pages.
+  - **Docs:** dashboard/README, PLAN Cross-laptop rows (Q27 accepted, owner snapshot), Q28 `voices` confirmed.
+- How it was tested: `python -m unittest discover` passes. 6 new tests: page served and linked, no text box, controls port, snapshot through the pipeline with its label, no visitor reply for an owner photo. Opt-in browser test `FARADAY_BROWSER=1 python -m unittest dashboard.tests.test_controls_page`: headless Edge with a fake mic holds Talk on my page at :port and the audio reaches NV's real `ControlsServer` + `Intercom` at port+1 (door mic muted, then unmuted). It passes on the Dell laptop. Screenshots at 390 px, 1280×720 and 1920×1080, including the snapshot result and the mic-blocked message.
+- For NV: nothing to change. On the Mac please check Talk with the real speaker, and the stream with the real camera.
+- Next: item 6 (re-check the polish), then item 7 (Listen button).
