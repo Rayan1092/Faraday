@@ -36,12 +36,13 @@ Every other new setting already has the right default in the code. The full file
 
 ## With Wi-Fi OFF
 
-6. In LM Studio, load only the 9B and the 2B. Start `argmax-cli serve`.
+6. Open LM Studio. You don't need to start `argmax-cli serve` yourself any more: the launcher in step 8 does it, and it also loads the 9B and the 2B if the `lms` command is installed. If not, load only the 9B and the 2B by hand. Eject anything else.
 7. `python3 -m hardware.check camera`, then `python3 -m hardware.check vision`.
    - **Expect:** the warm-up time, the detector's line, and a factual description. With nobody in view, it says "Nobody is there."
    - **If it says FAILED:** send me the output.
-8. Look at the lamps first, then run `integration/start_mac.sh --fresh`.
-   - **Startup output:** every line OK, including "object detection model present" and "OpenCV".
+8. Look at the lamps first, then run **`integration/start_mac.sh`** (one command; it starts with `--fresh` by default, `--no-fresh` keeps the old log).
+   - **Startup output:** big `[ OK ]` / `[WARN]` / `[FAIL]` lines, then **READY** (it starts Faraday) or **NOT READY** (nothing started, with the list to fix). Expect OK for LM Studio and both models, Argmax STT ("started and answering" the first time), the object detection model, OpenCV, mic, speaker and camera.
+   - If `argmax-cli serve` needs different flags on this Mac, put the exact command in `config/settings.json` under `"stt"` → `"mac"` as `"serve_command": [...]`. Its log is `cache/argmax-serve.log`.
    - **Lamps:** lamps that were off must stay off. If one turns ON, set `"lights_off_at_start": false` under `"integration"`.
 9. Open the Controls page at `http://127.0.0.1:8081/` and walk into view. You should see a labelled "person" box.
 10. Arm **Away** (console key `2`), keep away from the motion sensor, then ring the doorbell. (In Home the doorbell only says "Someone is at the door." and takes no photo; the greeting, the photo and the visitor window are Away.)
@@ -60,3 +61,9 @@ Every other new setting already has the right default in the code. The full file
 14. Hold to talk on the Controls page, then release. "[mic] listening (intercom)" appears, and the visitor's reply is heard.
 15. Switch to Night and wave twice. Expect the alarm, both lights on and the buzz. After about 10 s, "Recording saved: captures/alarm-…/" prints, and that folder has the frames plus `clip.avi`.
 16. Disarm with the passphrase: the lights go off. Then do the full demo once.
+
+## Owner voice check (display only)
+
+17. `python3 -m hardware.owner_voice enroll`: read anything aloud for 10 s.
+18. Restart with `integration/start_mac.sh` (it prints "owner voice enrolled"). Say a few "Hey Faraday, …" requests: the console prints `[voice] the owner's voice` (or "unknown voice").
+19. Score it: `python3 -m hardware.owner_voice trial` (you, 10 tries), then `python3 -m hardware.owner_voice trial --other` with someone else speaking. Enforce it for disarm only if both are 9/10 or better.
