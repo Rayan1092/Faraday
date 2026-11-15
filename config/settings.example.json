@@ -97,7 +97,10 @@
     "mic_device": null,
     "speaker_device": null,
     "sample_rate": 16000,
-    "max_record_s": 8
+    "max_record_s": 8,
+    "_note": "Hands-free: the mic opens only in listening windows (after a doorbell, after a question, Listen button, wake phrase) and is muted while Faraday speaks.",
+    "listen": {"max_s": 6, "silence_s": 0.8, "no_speech_s": 3},
+    "wake": {"enabled": true, "phrase": "hey faraday", "window_s": 4}
   },
 
   "camera": {
