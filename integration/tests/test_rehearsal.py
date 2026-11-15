@@ -45,7 +45,7 @@ from hardware.audio import MicGate
 from hardware.flipper.fake import FakeFlipper
 from hardware.settings import CONFIG_DIR
 from hardware.speech import TextToSpeech
-from hardware.tests.test_camera import FakeLMStudio, make_scene
+from hardware.tests.test_camera import FakeLMStudio, isolate_vision_cache, make_scene
 from hardware.tests.test_listen import LiveMic
 
 RATE = 16000
@@ -135,6 +135,7 @@ def wait_until(cond, timeout=15.0, step=0.05):
 class Rehearsal(unittest.TestCase):
     def setUp(self):
         from integration.__main__ import build_app
+        isolate_vision_cache(self)
         self.tmp = Path(tempfile.mkdtemp(prefix="faraday-rehearsal-"))
         s = json.loads((CONFIG_DIR / "settings.example.json").read_text(encoding="utf-8"))
         self.passphrase = s["security"]["passphrase"]
