@@ -57,3 +57,23 @@ A window records up to 6 s and ends about 0.8 s after the speaker stops (energy 
 Set on the `Dashboard` object by `integration/__main__.py` (PLAN Q26):
 - `board.listen_hook()` opens one listening window (`talk_hook` does the same, for the existing Talk button).
 - `board.control_hook(outlet, on)` switches an outlet through the normal dispatcher, with the same never-resend rule, and logs it as a `dashboard` action.
+
+## Controls server (camera, intercom, lights)
+
+Started with the app on **dashboard port + 1** (`http://127.0.0.1:8081`, `--controls-port`, `--no-controls`). It carries what the JSON-only dashboard server can't (PLAN Q27):
+
+| Route | Does |
+|---|---|
+| `GET /` | reference Controls page: live camera, hold-to-talk intercom, lights, Listen |
+| `GET /stream.mjpg`, `GET /frame.jpg` | live camera (MJPEG) / one frame. The webcam has one owner (`CameraFeed`), shared with photos |
+| `POST /api/intercom` | raw int16 mono PCM chunk, header `X-Sample-Rate`. Plays live on the door speaker; the door mic is muted meanwhile |
+| `POST /api/intercom/end` | owner released the button |
+| `POST /api/control {"outlet", "on"}` | outlet through the dispatcher (never resends) |
+| `POST /api/listen` | open one listening window |
+| `GET /api/status` | camera / intercom / listen available, outlet states |
+
+POSTs need `X-Faraday: 1`. CORS only for pages on the dashboard's port or this one.
+
+**Chrome mic trust step:** none on the Mac itself (`127.0.0.1` is a secure context). From another device: `dashboard.host` = `0.0.0.0`, and add `http://<mac-ip>:8080,http://<mac-ip>:8081` to `chrome://flags/#unsafely-treat-insecure-origin-as-secure`.
+
+**Tests:** `python -m unittest integration.tests.test_controls hardware.tests.test_media`; the real page in headless Chrome with a fake mic: `FARADAY_BROWSER=1 python -m unittest integration.tests.test_browser_intercom`.

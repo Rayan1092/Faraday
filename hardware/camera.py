@@ -1,7 +1,14 @@
 """Camera: OpenCV snapshot -> captures/photos/<time>.jpg, then Bonsai vision.
 
-    cam = PhotoCamera.from_settings(settings)
-    event = cam.take(take_photo_action)      # photo_described event, or None
+    feed = CameraFeed.from_settings(settings)          # the one owner of the webcam
+    cam = PhotoCamera(feed, Vision.from_settings(settings))
+    event = cam.take(take_photo_action)                 # photo_described event
+    feed.jpeg()                                         # latest frame for the live stream
+
+The webcam can only be opened once, so CameraFeed owns it: photos and the
+Controls page's live stream both read from the same capture. It opens on
+first use and closes again after `idle_s` with no viewer and no photo, so the
+camera light isn't on all day.
 
 If vision fails or times out the photo is kept and the description is
 "Photo saved." (source "camera"), so the dashboard still shows it. If the
@@ -11,12 +18,14 @@ doorbell photo) still happens.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Iterator, Optional
 
 from shared import Action, Event, EventType, PhotoDescribedData, Source, make_event
 
@@ -71,6 +80,184 @@ class Camera:
             return path
         finally:
             cap.release()
+
+
+def _open_capture(index: int, width: int, height: int) -> Any:
+    import cv2
+    backend = cv2.CAP_DSHOW if sys.platform.startswith("win") else (
+        cv2.CAP_AVFOUNDATION if sys.platform == "darwin" else cv2.CAP_ANY)
+    cap = cv2.VideoCapture(index, backend)
+    if cap.isOpened():
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    return cap
+
+
+class CameraFeed:
+    """Single owner of the webcam, shared by photos (snapshot) and the live
+    stream (jpeg / viewer). One grabber thread reads frames at `fps` while the
+    camera is in use; snapshot() waits for a frame newer than the call."""
+
+    def __init__(self, index: int = 0, width: int = 1280, height: int = 720,
+                 photos_dir: Path = REPO_ROOT / "captures" / "photos",
+                 fps: float = 10.0, idle_s: float = 15.0, jpeg_quality: int = 75,
+                 capture_factory: Callable[[int, int, int], Any] = _open_capture):
+        self.index, self.width, self.height = index, width, height
+        self.photos_dir = photos_dir
+        self.fps, self.idle_s, self.jpeg_quality = fps, idle_s, jpeg_quality
+        self.capture_factory = capture_factory
+        self.opens = 0                         # how many times the device was opened
+        self._cap: Any = None
+        self._frame: Any = None                # latest BGR frame
+        self._frame_at = 0.0
+        self._jpeg: Optional[bytes] = None
+        self._jpeg_at = 0.0
+        self._viewers = 0
+        self._used_at = 0.0
+        self._lock = threading.Lock()
+        self._new_frame = threading.Condition(self._lock)
+        self._thread: Optional[threading.Thread] = None
+        self._stop = threading.Event()
+        self.failed = False                    # last open attempt failed
+
+    @classmethod
+    def from_settings(cls, settings: Dict[str, Any]) -> "CameraFeed":
+        cfg = settings.get("camera", {})
+        captures = settings.get("paths", {}).get("captures", "captures")
+        return cls(int(cfg.get("index", 0)), int(cfg.get("width", 1280)),
+                   int(cfg.get("height", 720)), REPO_ROOT / captures / "photos",
+                   float(cfg.get("stream_fps", 10)), float(cfg.get("idle_s", 15)))
+
+    # ---- lifecycle ----------------------------------------------------------------
+    def _touch(self) -> None:
+        with self._lock:
+            self._used_at = time.monotonic()
+            running = self._thread is not None and self._thread.is_alive()
+            if not running:
+                self._stop.clear()
+                self._thread = threading.Thread(target=self._loop, name="faraday-camera",
+                                                daemon=True)
+                self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(3)
+            self._thread = None
+
+    @contextlib.contextmanager
+    def viewer(self) -> Iterator["CameraFeed"]:
+        """Keeps the camera open while a live stream is being watched."""
+        with self._lock:
+            self._viewers += 1
+        self._touch()
+        try:
+            yield self
+        finally:
+            with self._lock:
+                self._viewers -= 1
+                self._used_at = time.monotonic()
+
+    def _release(self) -> None:
+        if self._cap is not None:
+            try:
+                self._cap.release()
+            except Exception:
+                pass
+        self._cap = None
+
+    def _loop(self) -> None:
+        period = 1.0 / max(1.0, self.fps)
+        try:
+            while not self._stop.is_set():
+                with self._lock:
+                    idle = (self._viewers == 0
+                            and time.monotonic() - self._used_at > self.idle_s)
+                if idle:
+                    break
+                if self._cap is None:
+                    self._cap = self.capture_factory(self.index, self.width, self.height)
+                    self.opens += 1
+                    if not self._cap.isOpened():
+                        log.error("camera %s did not open", self.index)
+                        self._release()
+                        self.failed = True
+                        with self._lock:
+                            self._new_frame.notify_all()
+                        self._stop.wait(2.0)
+                        continue
+                    self.failed = False
+                    for _ in range(WARMUP_FRAMES):   # dark frames while exposure settles
+                        self._cap.read()
+                t0 = time.monotonic()
+                ok, frame = self._cap.read()
+                if ok and frame is not None:
+                    with self._lock:
+                        self._frame, self._frame_at = frame, time.monotonic()
+                        self._new_frame.notify_all()
+                else:
+                    log.warning("camera %s gave no frame; reopening", self.index)
+                    self._release()
+                self._stop.wait(max(0.0, period - (time.monotonic() - t0)))
+        finally:
+            self._release()
+            with self._lock:
+                self._frame, self._jpeg = None, None
+                self._new_frame.notify_all()
+
+    # ---- reading -----------------------------------------------------------------
+    def _wait_frame(self, after: float, timeout: float) -> Any:
+        self._touch()
+        end = time.monotonic() + timeout
+        with self._lock:
+            while self._frame is None or self._frame_at <= after:
+                left = end - time.monotonic()
+                if left <= 0 or self.failed:
+                    return None
+                self._new_frame.wait(left)
+            return self._frame
+
+    def jpeg(self, timeout: float = 3.0) -> Optional[bytes]:
+        """Latest frame as JPEG (re-encoded at most once per new frame)."""
+        frame = self._wait_frame(after=0.0, timeout=timeout)
+        if frame is None:
+            return None
+        with self._lock:
+            if self._jpeg is not None and self._jpeg_at == self._frame_at:
+                return self._jpeg
+            frame, at = self._frame, self._frame_at
+        import cv2
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
+        if not ok:
+            return None
+        data = buf.tobytes()
+        with self._lock:
+            self._jpeg, self._jpeg_at = data, at
+        return data
+
+    def next_jpeg(self, after: float, timeout: float = 3.0) -> "tuple[Optional[bytes], float]":
+        """Wait for a frame newer than `after`; returns (jpeg, its time)."""
+        frame = self._wait_frame(after=after, timeout=timeout)
+        if frame is None:
+            return None, after
+        with self._lock:
+            at = self._frame_at
+        return self.jpeg(timeout=0.1), at
+
+    def snapshot(self) -> Optional[Path]:
+        """Same interface as Camera.snapshot(), but through the shared feed."""
+        frame = self._wait_frame(after=time.monotonic(), timeout=6.0)
+        if frame is None:
+            log.error("camera %s gave no frame for the photo", self.index)
+            return None
+        import cv2
+        self.photos_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+        path = self.photos_dir / f"{stamp}.jpg"
+        if not cv2.imwrite(str(path), frame):
+            log.error("could not write %s", path)
+            return None
+        return path
 
 
 def relative(path: Path) -> str:

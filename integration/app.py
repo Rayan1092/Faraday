@@ -57,6 +57,7 @@ class App:
         self._outlet_state: Dict[str, str] = {}   # outlet -> last command sent OK (on/off)
         self._sent_lock = threading.Lock()
         self.voice: Any = None                     # integration.voice.Voice, set by __main__
+        self.extras: List[Any] = []                # things with stop(): controls server, camera feed
         self.flipper.on_event = self.submit
         self.pipeline = pipeline or Pipeline.from_settings(
             settings, use_llm=use_llm, log=event_log, mode=mode, rules=rules,
@@ -92,9 +93,19 @@ class App:
         self.pipeline.wait_background(5)
         if self.voice is not None:
             self.voice.stop_wake()
+        for extra in reversed(self.extras):
+            try:
+                extra.stop()
+            except Exception:
+                log.exception("stopping %s failed", type(extra).__name__)
         self.flipper.stop()
         if self.board is not None:
             self.board.stop()
+
+    def outlet_states(self) -> Dict[str, str]:
+        """Last command sent OK per outlet (for the Controls page)."""
+        with self._sent_lock:
+            return dict(self._outlet_state)
 
     # ---- inputs ----------------------------------------------------------------
     def submit(self, event: Event) -> None:
