@@ -59,6 +59,15 @@ _IF_FORM = re.compile(
     r"\b[^,;]*?[,;]?\s*(?:then\s+)?" + _ASK +
     r"(?:them|him|her|the\s+\w+)\s+(?:know\s+)?(?P<to>to\s+|that\s+)?(?P<req>.+)$", re.I)
 
+# "if a delivery comes, leave it by the side door": the request said straight to them
+_IF_DO_FORM = re.compile(
+    _WAKE + r"(?:if|when|whenever)\s+(?:" + _who_group().replace("?P<", "?P<i_") + r")\b(?:\s+\w+){0,3}?\s+"
+    + _ARRIVE + r"\b[^,;]*?[,;]?\s*(?:then\s+)?(?:(?:they|he|she)\s+(?:should|can|must)\s+|have\s+them\s+)?"
+    r"(?P<req>(?:please\s+)?(?:leave|put|drop|place|wait|knock|ring|come|go|call|text|use|try)\b.+)$", re.I)
+# A request that stops mid-sentence ("ask them to", "tell visitors that") is not one.
+_CUT = re.compile(r"(?:^|\s)(?:to|that|the|a|an|and|or|but|by|at|for|with|of|in|on|my|your|their|it|"
+                  r"is|are|if|when|so|then|please)$", re.I)
+
 # "tell delivery drivers to leave packages by the side door"
 _DIRECT_FORM = re.compile(
     _WAKE + _ASK + r"(?:" + _who_group().replace("?P<", "?P<d_") + r")\b(?:\s+who\s+\w+)?\s+"
@@ -77,16 +86,17 @@ def parse_instruction(text: str) -> Optional[Dict[str, str]]:
     """{"audience", "verb", "form", "request"} if this is an owner instruction, else None.
     form is "to" ("ask them to leave it...") or "say" ("tell them I'm in the garden")."""
     text = text.strip().rstrip(".!")
-    for pattern, prefix in ((_IF_FORM, ""), (_DIRECT_FORM, "d_")):
+    for pattern, prefix in ((_IF_FORM, ""), (_IF_DO_FORM, "i_"), (_DIRECT_FORM, "d_")):
         m = pattern.match(text)
         if not m:
             continue
         audience = next(a for a in AUDIENCES if m.group(prefix + a))
         req = m.group("req").strip().rstrip(".!,")
         req = re.sub(r"^please\s+", "", req, flags=re.I)
-        verb = m.group("verb").lower()
-        form = "to" if (m.group("to") or "").lower().startswith("to") or verb == "ask" else "say"
-        if not 2 < len(req) <= MAX_REQUEST:
+        groups = m.groupdict()
+        verb = (groups.get("verb") or "ask").lower()
+        form = "to" if (groups.get("to") or "").lower().startswith("to") or verb == "ask" else "say"
+        if not 2 < len(req) <= MAX_REQUEST or _CUT.search(req):
             return None
         return {"audience": audience, "verb": verb, "form": form, "request": req}
     return None
