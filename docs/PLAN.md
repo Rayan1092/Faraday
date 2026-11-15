@@ -8,6 +8,27 @@ Faraday is a home guard that runs entirely on one Mac mini with Wi-Fi off. A Fli
 
 What we want judges to remember: **useful, private, safe**. It's useful because it answers the door, controls lights, takes messages and learns rules by voice. It's private because nothing leaves the box, which we show by turning Wi-Fi off on stage. It's safe because the AI can't unlock the house.
 
+## AI pipeline
+
+**The 9B sees, the 2B judges, Argmax hears and counts voices, the 9B talks, and code guarantees safety.** Each model does the job it's best at, and nothing safety-related depends on any of them.
+
+| Step | Who | What | Where |
+|---|---|---|---|
+| Hears | Argmax speech-to-text (`argmax-cli serve`, port 50060) | turns speech into text. The passphrase is blanked by code before anything is logged or sent to a model | `hardware/speech.py`, `modes/passphrase.py` |
+| Counts voices | Argmax diarization (`argmax-cli diarize`) | how many people spoke in a visitor recording (`speech_heard.voices`). It never delays the reply | `hardware/diarize.py` |
+| Sees | Bonsai 9B (vision) | one or two sentences about each photo | `hardware/vision.py` |
+| Judges | Bonsai 2B | delivery, visitor, suspicious or nobody after each photo, using the description, the mode, the doorbell/motion history and the voice count. Code checks the answer, and rules decide if the 2B can't | `brain/threat.py` |
+| Talks | Bonsai 9B (the 2B for quick owner commands at Home) | the visitor conversation, owner instructions passed on, the confrontation line, the spoken summary | `brain/core.py` |
+| Speaks | Argmax text-to-speech | Faraday's voice through the speaker | `hardware/speech.py` |
+| Guarantees safety | plain code | modes, alerts, lights, photos, the passphrase, checks on every model answer, owner instructions as words only, "who's at the door?" | `modes/`, `rules/`, `brain/guard.py`, `brain/look.py` |
+
+The model ids are in the `mac` profile: `ternary-bonsai-2-9b-mlx` (smart) and `ternary-bonsai-2-2b-mlx` (fast). **[TBD: Mac mini timings for each]**
+
+## Accessibility
+
+- **Eyes at the door, for a blind or low-vision owner.** "Hey Faraday, who's at the door?" takes a fresh photo and says what the camera sees, plus the threat label ("It looks like a delivery."). A doorbell at Home is announced out loud. Everything else works by voice: arming, lights, rules, instructions for visitors and "what happened while I was out?".
+- **Captions, for a deaf or hard-of-hearing owner.** Everything heard and said at the door is written out as it happens: Heard & Said on the dashboard, and the big-text **Live captions** card on the Controls page. Doorbells and alarms show as banners, the threat label as a coloured pill, and the live camera is on the Controls page.
+
 ## Demo script (about 3 minutes)
 
 | # | Who does what | What Faraday does | Proves |
@@ -142,9 +163,9 @@ Add new ones at the bottom. When one is settled, write the answer next to it and
     - Still to check: real camera photos, and the 9B on the Mac.
 3. **Argmax TTS command.** The exact argmax-cli TTS subcommand and flags are not confirmed. The settings example has a guess. Does it write a WAV that we play, or does it play directly?
 4. **Argmax STT server.** The exact `argmax-cli serve` start command and model on the Mac, plus warm-up time before the first request.
-5. ~~**Night LED colour.**~~ **Closed 2026-11-14:** purple. Updated in CLAUDE.md and `settings.example.json`.
+5. ~~**Night LED colour.**~~ **Closed 2026-11-14, then superseded by 24 (no mode colours on the LED):** purple. Updated in CLAUDE.md and `settings.example.json`.
 6. ~~**Alarm.**~~ **Closed 2026-11-14:** new `alert_changed` event (`source: modes`, `data: {level, previous, reason}`). The first motion in Away or Night sets `warning` (yellow). Motion again within 60 s sets `alarm` (red). Only the passphrase disarm returns to `normal`. Doorbell presses don't change the alert. Details are in FORMATS.md.
-7. **Speech trigger.** Proposal: push-to-talk (a key or a dashboard button) for demo reliability. The alternatives are a "Faraday" wake word or always-on with VAD.
+7. ~~**Speech trigger.**~~ **Closed 2026-11-14 by 25:** listening windows and "Hey Faraday", no push-to-talk. Original proposal: push-to-talk (a key or a dashboard button) for demo reliability. The alternatives are a "Faraday" wake word or always-on with VAD.
 8. ~~**Passphrase matching.**~~ **Closed 2026-11-14:** ignore case and punctuation, split hyphens, and treat digits as number words ("17" = "seventeen"). The passphrase words must appear in order. The example passphrase is plain words with no numbers. The text is redacted before the log, the brain and any display. A typed passphrase is the fallback. Code: `modes/passphrase.py`.
 9. **Action results.** Should a failed action (Flipper busy, app open, camera missing) produce an event so the dashboard can show it? A possible new type: `action_failed`.
 10. **Doorbell debounce.** We fire after `min_duration_ms` of packets (800 ms proposed). How long do we ignore repeat presses afterwards?
@@ -169,7 +190,7 @@ Add new ones at the bottom. When one is settled, write the answer next to it and
     `on_action(action)` is called as soon as each action exists, so hardware runs without waiting for Bonsai. `on_event(event)` gets every `mode_changed` / `alert_changed` for the bus and LED. Typed passphrase: `pipeline.owner_passphrase(text)`. Dashboard Away/Night: `pipeline.owner_set_mode(mode)`. OK with NV?
 22. ~~**Dashboard startup and threads (Dell → NV).**~~ **Closed 2026-11-14 (owner):** `integration/` starts the dashboard next to the pipeline and runs `speak` / `take_photo` / outlets on their own workers, so `on_action` from any thread is safe (NV PR #6). Original: The dashboard is `dashboard.Dashboard.from_settings(pipeline, settings).start()`, a stdlib server on `dashboard.host:port` (127.0.0.1:8080). Proposal: `integration/` starts it next to the pipeline. Note that `on_action` can now be called from other threads (the alarm confrontation, dashboard buttons, the text box), so the hardware executor must be thread-safe, for example by putting actions on a queue. Pipeline entry points take a lock, so events never interleave. OK with NV?
 23. ~~**Real photos on the dashboard (Dell → NV).**~~ **Closed 2026-11-14 (owner):** the camera saves `.jpg` files under `captures/photos/`. The dashboard shows the newest one right away and serves it through `/media` (NV PR #7, Dell PR #10). Original: The page shows `photo_described.photo_path` through `/media/<path>`, but only for `.jpg`/`.png` files inside `captures/`. `hardware/camera` should save there, as FORMATS.md already says.
-24. ~~**Flipper LED colours (NV → owner).**~~ **Closed 2026-11-14 (owner):** dropped. The LED is **off** in every mode and at warning; only an **alarm** shows **red plus three buzzes**, and it goes off again at the passphrase disarm. Reason: the stock firmware's charge indicator owns the LED's red and green while `subghz rx` runs (listening pauses charging, and the indicator rewrites those channels about a second after listening restarts), so on the real device green never showed and purple and blue looked the same. It can't be turned off from the CLI. The dashboard is the status display. Code: `hardware/flipper/device.py`; settings `flipper.led` keeps only `alarm` (the dashboard has its own defaults for the rest). FORMATS.md and the submission drafts still mention mode colours; Dell to update.
+24. ~~**Flipper LED colours (NV → owner).**~~ **Closed 2026-11-14 (owner):** dropped. The LED is **off** in every mode and at warning; only an **alarm** shows **red plus three buzzes**, and it goes off again at the passphrase disarm. Reason: the stock firmware's charge indicator owns the LED's red and green while `subghz rx` runs (listening pauses charging, and the indicator rewrites those channels about a second after listening restarts), so on the real device green never showed and purple and blue looked the same. It can't be turned off from the CLI. The dashboard is the status display. Code: `hardware/flipper/device.py`; settings `flipper.led` keeps only `alarm` (the dashboard has its own defaults for the rest). ~~FORMATS.md and the submission drafts still mention mode colours; Dell to update.~~ Done 2026-11-14 (Dell PR "docs"): FORMATS.md now says the LED is off except red plus three buzzes at alarm. The drafts only mention the dashboard's colours, which stay.
 25. ~~**Hands-free listening (owner).**~~ **Closed 2026-11-14 (owner):** push-to-talk is gone. The mic opens only in *listening windows*: after a doorbell (once Faraday has greeted, or after 4 s), after every spoken line that ends with "?", from the dashboard Listen button, and for the wake listener. A window records up to 6 s, ends about 0.8 s after the speaker stops (energy VAD), or after 3 s if nobody spoke; the audio goes to Argmax STT → `speech_heard` (`source: speech`). The mic is always muted while Faraday speaks. **Wake phrase:** while idle, short windows run back to back and a transcript is acted on only if it starts with "hey faraday"; plain "Faraday" and everything else is dropped and the audio deleted. Settings: `audio.listen`, `audio.wake`. Code: `hardware/audio.py`, `integration/voice.py`.
 26. **Dashboard hooks (NV → Dell).** `integration/` sets these on the `Dashboard` object; Dell adds the buttons and routes (same pattern as `talk_hook`):
     - **Dell 2026-11-14: listen_hook accepted and built** (Listen button; also asks NV for an optional `listening_hook`, see the Cross-laptop table).
