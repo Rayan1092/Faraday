@@ -602,6 +602,22 @@ class Visit(Base):
         self.events()
         self.assertGreater(v._visit_until, before)
 
+    def test_the_visit_never_lasts_past_its_cap(self):
+        """Review: a radio left on in Away kept the visit going for ever."""
+        from integration.voice import VISIT_MAX_S
+        v = self.visit(FakeSTT("I have a package."), visitor_s=500.0)
+        self.say(("speech", 1.2), ("quiet", 2.5))
+        self.events()
+        self.assertLessEqual(v._visit_until, v._ring_at + VISIT_MAX_S)
+
+    def test_a_ring_at_home_starts_no_visit_even_if_armed_after(self):
+        """Review: a ring at Home, then "night mode": the partner's talk became the visitor's."""
+        v = self.visit(FakeSTT("Did you lock the back door?"), mode="home")
+        self.mode = "night"
+        self.say(("speech", 1.2), ("quiet", 2.5))
+        self.assertTrue(wait_until(lambda: v.wake_ignored == 1, timeout=10))
+        self.assertEqual(self.got, [])
+
 
 class IntercomAndQuestions(Base):
     def test_intercom_reply_window_closes_fast_if_nobody_answers(self):
@@ -636,14 +652,55 @@ class IntercomAndQuestions(Base):
 
     def test_dells_owner_marker_opens_an_owner_window(self):
         """PLAN Q44: speak args listen "owner": whatever the line, the owner may answer
-        without the wake phrase, even right after a ring."""
-        v = self.voice(FakeSTT("Yes, talk to them."))
-        v.on_doorbell()
-        v.on_said("Someone is at the door. Shall I talk to them.", caused_by="evt_doorbell1", listen="owner")
-        self.assertFalse(v._pending_doorbell)
+        without the wake phrase."""
+        v = self.voice(FakeSTT("Yes, the side door."))
+        v.on_said("Got it. Which door should they use.", caused_by="evt_doorbell1", listen="owner")
         self.assertTrue(wait_until(lambda: v.windows_opened == 1))
         self.say(("speech", 1.0), ("quiet", 2.5))
         self.assertEqual(self.events()[0].data["channel"], "owner")
+
+    def test_owner_marker_keeps_a_pending_doorbell(self):
+        """Review: the marker cleared a pending doorbell, and the visitor was never heard."""
+        v = self.voice(FakeSTT())
+        v.on_doorbell()
+        v.on_said("Someone is at the door.", listen="owner")
+        self.assertTrue(v._pending_doorbell)
+
+    def test_visitor_marker_on_a_busy_mic_keeps_retrying_the_doorbell(self):
+        v = self.voice(FakeSTT("Turn on the lamp."))
+        self.assertTrue(v.listen_once("wake", purpose="owner"))
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        self.say(("speech", 2.0), ("quiet", 2.5))                       # the owner is talking
+        self.assertTrue(wait_until(lambda: v.recorder.window_state()["speech_started"]))
+        v.on_doorbell()
+        v.on_said("Hello. No one can come to the door right now.", listen="visitor")
+        self.assertTrue(v._pending_doorbell)                            # not lost: it retries
+        self.assertIsNotNone(v._doorbell_timer)
+
+    def test_intercom_while_a_visitor_window_is_open_takes_the_short_rule(self):
+        """Review: the doorbell window was still open when the owner pressed Talk, so the
+        reply window kept its 8 s and caught the owner."""
+        v = self.voice(FakeSTT("should not be heard"),
+                       listen={"max_s": 15, "silence_s": 1.8, "no_speech_s": 8.0, "after_speech_s": 0.3,
+                               "intercom_reply_s": 1.0})
+        v.listen_once("doorbell")
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        self.gate.mute()                                               # the owner talks
+        time.sleep(0.2)
+        self.gate.unmute()
+        t0 = time.monotonic()
+        v.on_intercom_end()
+        self.assertTrue(any("listening (intercom)" in s for s in self.said))
+        self.assertTrue(wait_until(lambda: any("nobody spoke" in s for s in self.said), timeout=10))
+        self.assertLess(time.monotonic() - t0, 1.5)                    # 1 s of audio, not 8
+
+    def test_ordinary_lines_are_not_asking_again(self):
+        v = self.voice(FakeSTT())
+        for line in ("I'll repeat that to the owner.", "I can't say it's safe.",
+                     "They didn't say it was urgent."):
+            v.on_said(line, caused_by="evt_x")
+        time.sleep(0.5)
+        self.assertEqual(v.windows_opened, 0)
 
     def test_visitor_marker_opens_a_visitor_window(self):
         v = self.voice(FakeSTT("Sure."))
