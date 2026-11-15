@@ -109,12 +109,14 @@ class SensorButtons(unittest.TestCase):
 
     def test_doorbell_and_motion_buttons(self):
         self.pipeline.owner_set_mode("away")
+        self.assertEqual(self.post({"type": "motion"}), 202)
+        self.assertTrue(self.wait_for("motion"))                     # same path as the radio
+        self.pipeline.tick(force=True)                               # no doorbell: the warning
+        self.assertTrue(self.wait_for("alert_changed"))
         self.assertEqual(self.post({"type": "doorbell"}), 202)
         bell = self.wait_for("doorbell")
         self.assertEqual(bell[0]["source"], Source.DASHBOARD)        # honest in the log
         self.assertEqual(bell[0]["data"]["key"], "0x00DEC608")
-        self.assertEqual(self.post({"type": "motion"}), 202)
-        self.assertTrue(self.wait_for("alert_changed"))              # same path as the radio
         self.assertEqual(self.post({"type": "disarm"}), 400)
 
 if __name__ == "__main__":

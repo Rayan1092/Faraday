@@ -96,10 +96,11 @@ def rules(ctx: Context) -> Tuple[str, str]:
         return C.SUSPICIOUS, "Warning signs in the photo: " + _first(STRONG, text) + "."
     if NOBODY.search(text) or not PERSON.search(text):
         return C.NOBODY, "No one is visible at the door."
+    if ctx.cause == EventType.MOTION and ctx.mode in Mode.ARMED and not ctx.doorbells:
+        # Owner 2026-11-15: stayed at the door without ringing = suspicious, box or not.
+        return C.SUSPICIOUS, "Stayed at the door without ringing while the house is armed."
     if PACKAGE.search(text):
         return C.DELIVERY, "Carrying a package" + (" and rang the doorbell." if ctx.doorbells else ".")
-    if ctx.cause == EventType.MOTION and ctx.mode in Mode.ARMED and not ctx.doorbells:
-        return C.SUSPICIOUS, "Someone at the door who didn't ring, while the house is armed."
     return C.VISITOR, "Someone at the door" + (" who rang the doorbell." if ctx.doorbells else ".")
 
 
@@ -161,6 +162,9 @@ def check(category: str, reason: str, ctx: Context) -> Tuple[str, str, str]:
         return C.SUSPICIOUS, rule_reason, f"code escalated {category} to suspicious"
     if category == C.NOBODY and PERSON.search(ctx.description or "") and not NOBODY.search(ctx.description or ""):
         return rule_cat, rule_reason, "code rejected nobody: a person is described"
+    if category == C.SUSPICIOUS and ctx.doorbells and rule_cat in (C.VISITOR, C.DELIVERY):
+        # Owner 2026-11-15: walked up and rang, no warning signs = a visitor or a delivery.
+        return rule_cat, rule_reason, "code: rang the doorbell with no warning signs"
     clean = _clean_line(reason) or rule_reason
     if len(clean) > REASON_MAX:
         clean = clean[:REASON_MAX - 3].rsplit(" ", 1)[0] + "..."
@@ -212,11 +216,15 @@ def context_for(photo: Event, mode: str, recent: Iterable[Any], voices: Optional
     shot = by_id.get(photo.caused_by or "") or {}
     origin = by_id.get(shot.get("caused_by") or "") or {}
     when = _when(photo.timestamp)
+    # A photo caused by motion only counts doorbells from that motion on: someone who
+    # walked up and stayed isn't "a visitor who rang" because of an earlier visitor.
+    since = _when(origin.get("timestamp", "")) if origin.get("type") == EventType.MOTION else None
     doorbells = motions = 0
     for e in entries:
         t = _when(e.get("timestamp", ""))
         if when and t and 0 <= (when - t).total_seconds() <= window_s:
-            doorbells += e.get("type") == EventType.DOORBELL
+            if e.get("type") == EventType.DOORBELL and (since is None or t >= since):
+                doorbells += 1
             motions += e.get("type") == EventType.MOTION
     return Context(description=str(photo.data.get("description", "")), mode=mode,
                    cause=str(origin.get("type", "")),

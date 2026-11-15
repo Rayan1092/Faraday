@@ -59,6 +59,11 @@ def wake_pattern(phrase: str = DEFAULT_WAKE) -> "re.Pattern[str]":
     return re.compile(r"^\s*" + sep.join(words) + r"\b" + sep, re.I)
 
 
+def _voice_label(result: Optional[bool]) -> str:
+    return {True: "the owner's voice", False: "unknown voice, not the enrolled owner (display only)",
+            None: "voice check: can't tell"}[result]
+
+
 def strip_wake(text: str, phrase: str = DEFAULT_WAKE) -> Optional[str]:
     """The request after the wake phrase, "" if only the phrase was said, or
     None if the transcript doesn't start with it ("Faraday is great" -> None)."""
@@ -72,7 +77,9 @@ class Voice:
                  listen: Optional[Dict[str, Any]] = None, wake: Optional[Dict[str, Any]] = None,
                  diarizer: Any = None, diarize_grace_s: float = 0.0,
                  busy: Optional[Callable[[], bool]] = None,
-                 chime: Optional[Callable[[], None]] = None):
+                 chime: Optional[Callable[[], None]] = None,
+                 owner_voice: Any = None, owner_voice_grace_s: float = 2.0,
+                 urgent: Optional[Callable[[], bool]] = None):
         self.recorder, self.stt, self.submit, self.out = recorder, stt, submit, out
         listen = listen or {}
         self.max_s = float(listen.get("max_s", 15.0))
@@ -87,6 +94,11 @@ class Voice:
         self.diarizer = diarizer
         self.diarize_grace_s = diarize_grace_s     # how long STT may wait for the count
         self.busy = busy or (lambda: False)        # Faraday has a line queued / being made
+        self.owner_voice = owner_voice              # hardware.owner_voice.OwnerVoice (display only)
+        self.owner_voice_grace_s = owner_voice_grace_s
+        # urgent(): a warning or alarm is on. Then the (display-only) voice check never
+        # holds a request back: "Hey Faraday, <passphrase>" must disarm at once.
+        self.urgent = urgent or (lambda: False)
         self.chime = chime
         self._lock = threading.Lock()
         self._purpose: Optional[str] = None        # open segment: "wake" | VISITOR | OWNER
@@ -377,10 +389,30 @@ class Voice:
                 except OSError:
                     pass
 
+    def _start_voice_check(self, wav: Path) -> Optional[Dict[str, Any]]:
+        """Start the owner voice check (display only) in its own thread."""
+        if self.owner_voice is None or wav is None or not Path(wav).exists():
+            return None
+        check: Dict[str, Any] = {"lock": threading.Lock()}
+
+        def run_check() -> None:
+            result = self.owner_voice.check(wav)
+            with check["lock"]:
+                check["r"] = result
+                late = check.get("late")
+            if late:
+                self.out(f"  [voice] {_voice_label(result)} (too late for this line)")
+        check["thread"] = threading.Thread(target=run_check, name="faraday-owner-voice", daemon=True)
+        check["thread"].start()
+        return check
+
     def _wake_check(self, seq: int, wav: Path, seconds: float) -> None:
         owner_next = self._owner_next_seq == seq
         if owner_next:
             self._owner_next_seq = None
+        # "Hey Faraday, <request>" in one breath is long: start the voice check now, so it
+        # runs alongside the wake STT instead of after it (dropped if it isn't a request)
+        early = self._start_voice_check(wav) if (owner_next or seconds >= 1.2) else None
         try:
             text = self.stt.transcribe(wav)
         except Exception:
@@ -397,7 +429,8 @@ class Voice:
             request = text if rest is None else rest
             if request:
                 self.out("  [wake] owner request heard")
-                self._transcribe(wav, seconds, text_override=request, channel=OWNER, diarize=False)
+                self._transcribe(wav, seconds, text_override=request, channel=OWNER, diarize=False,
+                                 check=early)
             else:
                 self.out("  [stt] no words recognized")
             return
@@ -411,7 +444,8 @@ class Voice:
         self.wake_heard += 1
         if rest:
             self.out("  [wake] owner request heard")
-            self._transcribe(wav, seconds, text_override=rest, channel=OWNER, diarize=False)
+            self._transcribe(wav, seconds, text_override=rest, channel=OWNER, diarize=False,
+                             check=early)
             return
         self._after_phrase(seq)
 
@@ -446,7 +480,7 @@ class Voice:
     # ---- STT (+ optional diarization) ----------------------------------------------
     def _transcribe(self, wav: Path, seconds: float, source: str = Source.SPEECH,
                     text_override: Optional[str] = None, diarize: bool = True,
-                    channel: str = VISITOR) -> None:
+                    channel: str = VISITOR, check: Optional[Dict[str, Any]] = None) -> None:
         voices_thread = None
         voices: Dict[str, Any] = {}
         if self.diarizer is not None and diarize:       # visitor recordings only
@@ -461,6 +495,8 @@ class Voice:
 
             voices_thread = threading.Thread(target=run, name="faraday-diarize", daemon=True)
             voices_thread.start()
+        if channel == OWNER and check is None:
+            check = self._start_voice_check(wav)        # alongside STT (display only)
         text = text_override if text_override is not None else self.stt.transcribe(wav)
         if not text:
             self.out("  [stt] no words recognized" + ("" if self.stt.available
@@ -476,6 +512,17 @@ class Voice:
                 voices["late"] = True
             elif voices.get("n") is not None:
                 data["voices"] = int(voices["n"])
+        if check is not None and channel == OWNER:
+            check["thread"].join(0.0 if self.urgent() else self.owner_voice_grace_s)
+            with check["lock"]:
+                done = "r" in check
+                if not done:
+                    check["late"] = True           # printed when it finishes
+                result = check.get("r")
+            if done:
+                if result is not None:
+                    data["owner_voice"] = bool(result)
+                self.out(f"  [voice] {_voice_label(result)}")
         event = make_event(EventType.SPEECH_HEARD, SpeechHeardData(**data), source)
         if channel == OWNER:
             self._owner_ids.append(event.id)      # Faraday's questions back to it are for the owner

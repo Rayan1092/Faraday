@@ -48,6 +48,9 @@ class Flow(unittest.TestCase):
         s["flipper"]["burst_gap_s"] = 0.3       # fast tests
         s["flipper"]["led_refresh_s"] = 0       # deterministic LED commands
         s["flipper"]["led_settle_s"] = self.led_settle_s
+        # Owner 2026-11-15 (Dell PR "walk-up grace"): motion waits a grace period for a
+        # doorbell before the warning, and the alarm needs a gap after it. Fast here.
+        s.setdefault("alerts", {}).update(motion_grace_s=0.5, min_gap_s=0.3)
         self.settings = s
         self.said = []
         # The fake models the firmware's charge indicator rewriting red/green
@@ -150,7 +153,7 @@ class Flow(unittest.TestCase):
         self.wave()
         self.assertTrue(wait_until(lambda: self.fl.device.outlet_lit[1]))
         self.assertTrue(wait_until(lambda: self.app.pipeline.modes.alert == "warning"))
-        self.app.pipeline.modes._last_motion -= 61.7          # replay the real timing...
+        self.app.pipeline.modes._warned_at -= 61.7            # replay the real timing...
         import integration.app as app_module                   # ...for the app's clock too
 
         class Later:                                            # monotonic() 61.7 s ahead
