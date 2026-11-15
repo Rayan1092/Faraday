@@ -276,6 +276,22 @@ class Brain:
             return actions, False            # the owner, not a courier
         text = str(event.data.get("text", ""))
         recent = list(recent)
+        ins = list(ins)
+        said_now = [l.lower() for l in _said_since(recent, event.timestamp, VISIT_S)]
+        d_ins = next((i for i in ins if i["audience"] == oi.DELIVERY), None)
+        d_first = (oi.spoken_line(d_ins) if d_ins else spoken.DELIVERY_DEFAULT).lower()
+        if any(DELIVERED in l or d_first in l for l in said_now):
+            # Owner, Mac: the side-door line looped. Once the delivery reply was said this
+            # visit, no drop-off line again (code or Bonsai); "okay thank you" gets at most
+            # one "You're welcome."
+            kept = [a for a in actions if not (a.type == ActionType.SPEAK and (
+                fb.mentions_dropoff(a.args["text"]) or DELIVERED in a.args["text"].lower()))]
+            if fb.is_closing(text):
+                kept = [a for a in kept if a.type != ActionType.SPEAK]
+                if not any(spoken.YOURE_WELCOME.lower() in l for l in said_now):
+                    extra, _ = filter_actions([fb._speak(spoken.YOURE_WELCOME)], event, mode, allowed)
+                    kept += extra
+            return kept, False
         words = fb.mentions_delivery(text)
         if not (words or latest_label(recent, event.timestamp, VISIT_S) == ThreatCategory.DELIVERY):
             return actions, False
@@ -540,6 +556,9 @@ def latest_label(recent: Iterable[Any], now: Any = None, within_s: Optional[floa
                 continue
             label = str((entry.get("data") or {}).get("category", ""))
     return label
+
+
+DELIVERED = "let the owner know it arrived"     # the end of every delivery reply with a drop-off
 
 
 def _said_since(recent: Iterable[Any], now: Any, within_s: float) -> List[str]:

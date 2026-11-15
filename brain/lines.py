@@ -27,6 +27,7 @@ ALREADY_HOME = "The system is already disarmed."
 MESSAGE_SAVED = "Thank you. I'll pass that along."
 # A visitor with a delivery and no owner instruction (owner, Mac test): code's reply.
 DELIVERY_DEFAULT = "You can leave it by the door. I'll let the owner know it arrived."
+YOURE_WELCOME = "You're welcome."    # once, to "okay thank you" after the delivery reply (owner, Mac)
 CANT_HELP = "I'm sorry, I can't help with that."
 CANT_DISARM = "I'm sorry, I can't do that. Only the owner can disarm the system."
 
@@ -103,6 +104,7 @@ FIXED_LINES = [
     "The system is already disarmed.",
     "Thank you. I'll pass that along.",
     "You can leave it by the door. I'll let the owner know it arrived.",
+    "You're welcome.",
     "I'm sorry, I can't help with that.",
     "I'm sorry, I can't do that. Only the owner can disarm the system.",
     "Sorry, I can't help with that. You can ask who's at the door, what happened, or arm the house.",

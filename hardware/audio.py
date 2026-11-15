@@ -47,7 +47,7 @@ class MicGate:
     def __init__(self) -> None:
         self._count = 0
         self._lock = threading.Lock()
-        self._quiet_since = time.monotonic()
+        self._quiet_since = time.monotonic() - 3600.0   # no tail at start: nothing has played yet
 
     @property
     def muted(self) -> bool:
@@ -135,6 +135,9 @@ def _default_stream(**kwargs: Any):
 class Recorder:
     """Listening windows over ONE microphone stream that stays open (no gaps).
 
+    ECHO_TAIL_S: the mic stays deaf this long after every spoken line (owner, Mac: the
+    Bluetooth speaker plays on for a few hundred ms after the gate opens).
+
     The stream opens on the first listen() and stays open until close(). While
     no window is open the last `preroll_s` of audio is kept, so a window (or the
     next wake segment) starts with the moment just before it: nothing said
@@ -149,6 +152,7 @@ class Recorder:
 
     PREROLL_S = 0.5
     HARD_CAP_S = 90.0      # wall-clock backstop: a stream that delivers nothing
+    ECHO_TAIL_S = 1.0      # deaf this long after every spoken line (Bluetooth speaker tail)
 
     def __init__(self, gate: Optional[MicGate] = None, sample_rate: int = 16000,
                  device: Any = None, max_s: float = 8.0,
@@ -221,7 +225,9 @@ class Recorder:
                 log.exception("closing the microphone failed")
 
     def _live_callback(self, indata, frames, time_info, status) -> None:
-        if self.gate.muted:
+        # A Bluetooth speaker keeps playing a few hundred ms after the gate opens (owner,
+        # Mac: Faraday heard its own side-door line): stay deaf for a tail after each line.
+        if self.gate.muted or not self.gate.quiet_for(self.ECHO_TAIL_S):
             # Faraday is speaking: don't hear ourselves, and forget what came just
             # before, so the next window doesn't start with stale audio
             with self._lock:

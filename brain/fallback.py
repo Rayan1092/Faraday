@@ -63,6 +63,16 @@ _DELIVERY = re.compile(r"\b(packages?|parcels?|deliver\w*|courier|a box|this box
                        r"|(?<![\w-])ups(?![\w-])", re.I)
 
 
+_CLOSING_WORD = (r"(?:ok(?:ay)?|thanks?|thank you(?: so much| very much)?|alright|all right|bye|goodbye|got it|"
+                 r"cool|great|perfect|will do|sure|no problem|cheers|see you)")
+_CLOSING = re.compile(r"^\W*" + _CLOSING_WORD + r"(?:[\s,.!]+(?:then\s+)?" + _CLOSING_WORD + r")*\W*$", re.I)
+
+
+def is_closing(text: str) -> bool:
+    """"okay thank you", "thanks, bye", "got it": the visitor is done (owner, Mac)."""
+    return bool(_CLOSING.match(text or ""))
+
+
 def mentions_delivery(text: str) -> bool:
     """Is the visitor talking about a delivery?"""
     return bool(_DELIVERY.search(text or ""))
