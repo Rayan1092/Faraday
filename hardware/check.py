@@ -273,11 +273,16 @@ def mute(settings) -> int:
     return 0 if kept < total - talked + 0.5 else 1
 
 
-def devices(_settings) -> int:
+def devices(settings) -> int:
     import sounddevice as sd
+    from hardware.audio import speaker_report, system_output
     print(sd.query_devices())
     print("Set audio.mic_device / audio.speaker_device to a number or name above;"
-          " camera.index picks the webcam (0, 1, ...).")
+          " camera.index picks the webcam (0, 1, ...). A speaker name only matches an output device.")
+    if system_output():
+        print(f"System output (argmax-cli --play speaks here): {system_output()}")
+    for level, msg in speaker_report(settings.get("audio", {}).get("speaker_device")):
+        print(msg if level == "OK" else f"{level}: {msg}")
     return 0
 
 

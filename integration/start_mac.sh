@@ -299,13 +299,19 @@ def dev(v):
     return None if v == "" else (int(v) if v.lstrip("-").isdigit() else v)
 try:
     import sounddevice as sd
-    mic, spk = dev(sys.argv[2]), dev(sys.argv[3])
+    mic = dev(sys.argv[2])
     i = sd.query_devices(mic, kind="input") if mic is not None else sd.query_devices(kind="input")
-    o = sd.query_devices(spk, kind="output") if spk is not None else sd.query_devices(kind="output")
     print(f"OK|mic: {i['name']}")
-    print(f"OK|speaker: {o['name']}")
 except Exception as e:
-    print(f"FAIL|no mic/speaker ({e}). Plug them in; python3 -m hardware.check devices")
+    print(f"FAIL|no mic ({e}). Plug it in; python3 -m hardware.check devices")
+try:
+    # an OUTPUT device only, and a WARN when it isn't the system output (where
+    # argmax-cli --play speaks every live line)
+    from hardware.audio import speaker_report
+    for level, msg in speaker_report(dev(sys.argv[3])):
+        print(f"{level}|{msg}")
+except Exception as e:
+    print(f"FAIL|no speaker ({e}). Plug it in; python3 -m hardware.check devices")
 try:
     import cv2
     idx = int(sys.argv[1])

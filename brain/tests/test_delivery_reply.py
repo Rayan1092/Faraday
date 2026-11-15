@@ -36,7 +36,10 @@ class DeliveryReply(unittest.TestCase):
         self.assertEqual(said(d.actions), [lines.DELIVERY_DEFAULT])
         saved = [a.args["text"] for a in d.actions if a.type == ActionType.SAVE_MESSAGE]
         self.assertEqual(saved, [QUESTION])
-        self.assertIn("corrected: code's delivery reply", d.fixups)
+        # "take a picture" is a promise Faraday can't keep (Mac retest 3): dropped, so the
+        # fallback says code's line instead of the fix-up correcting it.
+        self.assertTrue("corrected: code's delivery reply" in d.fixups
+                        or any("promises" in why for _, why in d.dropped), (d.fixups, d.dropped))
 
     def test_with_an_instruction_the_owners_words(self):
         from rules import instructions as oi

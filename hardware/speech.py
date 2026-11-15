@@ -25,7 +25,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
-from hardware.audio import MicGate, play_wav
+from hardware.audio import MicGate, play_wav, resolve_speaker
 from hardware.settings import REPO_ROOT, for_os
 
 log = logging.getLogger("hardware.speech")
@@ -101,7 +101,7 @@ class TextToSpeech:
     @staticmethod
     def from_settings(settings: Dict[str, Any], gate: Optional[MicGate] = None) -> "TextToSpeech":
         cfg = for_os(settings.get("tts", {})) or {}
-        device = settings.get("audio", {}).get("speaker_device")
+        device = resolve_speaker(settings.get("audio", {}).get("speaker_device"))   # output devices only
         if cfg.get("kind") == "argmax" and cfg.get("command"):
             return ArgmaxTTS.from_config(cfg, device, gate)
         if cfg.get("kind") == "pyttsx3" or (cfg.get("kind") == "standin" and _has_pyttsx3()):
@@ -200,7 +200,9 @@ class ArgmaxTTS(TextToSpeech):
     Cache: every line is also saved as a wav (--output-path/--output-format wav;
     without it the CLI writes ./output.m4a on every line). A line already in the
     cache is played from the file: instant and identical every time.
-    prerender() fills the cache for Faraday's fixed lines at startup.
+    prerender() fills the cache for Faraday's fixed lines at startup; they are the
+    backups now that most lines are written live by Bonsai (owner 2026-11-15).
+    warm_up() runs the CLI once at startup, so the first live line is quick.
     """
 
     def __init__(self, command: List[str], device: Any = None, gate: Optional[MicGate] = None,
@@ -216,6 +218,7 @@ class ArgmaxTTS(TextToSpeech):
         self.cache_hits = 0
         self._render_proc: Optional[subprocess.Popen] = None   # a pre-render running now
         self._render_lock = threading.Lock()
+        self.renders_stopped = 0            # pre-renders / warm-ups a live line stopped
 
     @classmethod
     def from_config(cls, cfg: Dict[str, Any], device: Any = None,
@@ -274,6 +277,8 @@ class ArgmaxTTS(TextToSpeech):
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if track:
             self._render_proc = proc
+            if self.speaking:                # a live line began just now: it goes first
+                self._stop_render()
         try:
             stdout, stderr = proc.communicate(timeout=self._timeout(text))
         except subprocess.TimeoutExpired:
@@ -355,8 +360,9 @@ class ArgmaxTTS(TextToSpeech):
         print(f"  SAY: {text}")
         self.speaking = True
         try:
-            self._stop_render()                  # a live line never shares the engine
             hit = self.cached(text)
+            if hit is None:
+                self._stop_render()              # a live line never shares the engine
             if hit is not None:
                 try:
                     self.player(hit, self.device)
@@ -372,6 +378,7 @@ class ArgmaxTTS(TextToSpeech):
                         hit.unlink()
                     except OSError:
                         pass
+                    self._stop_render()          # now it is a live line
             with tempfile.TemporaryDirectory(prefix="faraday-tts-") as tmp_name:
                 tmp = Path(tmp_name)
                 if self.plays_itself:
@@ -395,6 +402,7 @@ class ArgmaxTTS(TextToSpeech):
         prerender() tries that line again afterwards."""
         proc = self._render_proc
         if proc is not None and proc.poll() is None:
+            self.renders_stopped += 1
             try:
                 proc.kill()
             except OSError:
@@ -420,6 +428,38 @@ class ArgmaxTTS(TextToSpeech):
             if not self.plays_itself and (tmp / "say.wav").exists():
                 out += "\n" + str(tmp / "say.wav")
             return self._store(text, tmp, out)
+
+    WARM_TEXT = "Ready."
+
+    def warm_up(self, wait: Optional[Callable[[], bool]] = None,
+                stop: Optional[threading.Event] = None) -> Optional[float]:
+        """Run argmax-cli once at startup without playing (owner 2026-11-15: most
+        lines are now written live by Bonsai and spoken with --play, so the first
+        one must not pay for loading the voice). Nothing is played or cached.
+        Waits while Faraday talks; a live line stops it, and it tries again
+        afterwards (up to 3 tries). Returns the seconds the run took, or None if
+        it failed or never got to finish."""
+        for _ in range(3):
+            while (wait is not None and wait()) or self.speaking:
+                if stop is None:
+                    time.sleep(0.2)
+                elif stop.wait(0.2):
+                    return None
+            if stop is not None and stop.is_set():
+                return None
+            stopped = self.renders_stopped
+            t0 = time.monotonic()
+            with self._render_lock, tempfile.TemporaryDirectory(prefix="faraday-tts-") as tmp_name:
+                try:
+                    ok, _ = self._run_with_fallback(self.WARM_TEXT, Path(tmp_name), play=False, track=True)
+                except Exception as e:
+                    log.warning("TTS warm-up failed: %r", e)
+                    return None
+            if ok:
+                return round(time.monotonic() - t0, 1)
+            if self.renders_stopped == stopped:
+                return None                   # it failed by itself: a retry won't help
+        return None
 
     def prerender(self, lines: List[str], wait: Optional[Callable[[], bool]] = None,
                   stop: Optional[threading.Event] = None) -> int:

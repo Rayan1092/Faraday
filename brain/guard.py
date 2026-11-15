@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from shared import Action, ActionType, Event, Mode, Source, make_action
@@ -171,6 +172,61 @@ def _tidy(kind: str, args: Dict[str, Any]) -> Dict[str, Any]:
     if kind == ActionType.SET_MODE and isinstance(args.get("mode"), str):
         args["mode"] = args["mode"].strip().lower()
     return args
+
+
+# ---- promises Faraday can't keep -------------------------------------------
+# Faraday can only talk, take a message and pass on the owner's words. Owner, Mac
+# retest: Bonsai told someone "I will check the app settings for you".
+_COMMIT = re.compile(
+    r"\b(?:i(?:'ll|\s+will|\s+can|\s+could|\s+shall|'d|\s+would|'m\s+going\s+to|\s+am\s+going\s+to)"
+    r"|let\s+me|allow\s+me\s+to|we(?:'ll|\s+will|\s+can)|would\s+you\s+like\s+me\s+to|do\s+you\s+want\s+me\s+to"
+    r"|shall\s+i|should\s+i)\s+", re.I)
+_DOING = re.compile(
+    r"\bi(?:'m|\s+am)\s+(?:now\s+|just\s+)?(?:checking|calling|contacting|texting|emailing|sending|opening|"
+    r"unlocking|looking|searching|notifying|alerting|getting|fetching|fixing|connecting|transferring|paging|"
+    r"ringing|phoning|messaging)\b"
+    r"|\bi(?:'ve|\s+have)\s+(?:just\s+|already\s+)?(?:called|contacted|texted|messaged|sent|paged|alerted|"
+    r"phoned|emailed|opened|unlocked|checked|fixed)\b"
+    r"|\b(?:wait|moment|hold on|one sec\w*)\b[^.!?]*\bwhile i\b"
+    r"|(?:^|[.!?,]\s*)(?:checking (?:now|that|on it|for you|with)|calling|contacting|looking into|sending|"
+    r"opening)\b", re.I)
+# What may follow "I'll / I can / let me": passing things on, never doing them (review:
+# the first verb alone let "I'll let you in" and "let me take a look" through).
+_ALLOWED = re.compile(
+    r"(?:(?:also|just|now|only|gladly|happily|certainly|definitely|personally|be\s+(?:happy|glad|sure)\s+to)\s+)*"
+    r"(?:not\b|never\b|let\s+(?!you\b)[\w']+(?:\s+[\w']+)?\s+know\b|tell\s+(?!you\b)[\w']+|"
+    r"pass\s+(?:on|along|it|that|this|them|your\s+messages?|the\s+messages?|messages?)\b|"
+    r"take\s+(?:(?:a|your|the|that|down(?:\s+(?:a|your|the))?)\s+)?(?:\w+\s+)?(?:messages?|note|name|number)\b|"
+    r"save\s+(?:a|your|the|it|that)\b|note\s+(?:it|that|this|down|your)\b|record\s+(?:a|your|the)\s+message\b|"
+    r"make\s+sure\s+(?:[\w']+\s+){1,2}(?:gets?|hears?|knows?|sees?|reach\w*)\b|"
+    r"give\s+(?:the\s+owner|the\s+homeowner|them|him|her|[\w']+)\s+(?:your|the)\s+message\b|"
+    r"put\s+(?:it|that|this)\s+in\b|keep\s+(?:watch|(?:it|that)\s+in\s+mind)\b|relay\b|"
+    r"share\s+(?:it|that|this|your)\b|say\b|help\s+(?:you\s+)?leave\s+a\s+message\b|"
+    r"help\s+(?:you\s+)?with\s+(?:a\s+|the\s+|your\s+)?(?:deliver\w*|packages?|parcels?|messages?)\b|"
+    r"know\b|hear\b|ask\s+(?:the\s+owner|the\s+homeowner|them|him|her)\b)", re.I)
+_BARE_HELP = re.compile(r"help\b", re.I)
+_SENTENCES = re.compile(r"[^.!?]+[.!?]*")
+
+
+def claims_ability(text: str, skip: Optional[Any] = None) -> bool:
+    """Does this line promise something Faraday can't do ("I'll check the settings",
+    "let me call the owner", "I'm opening the gate", "I've called the police")? Taking a
+    message, letting the owner know and helping with a delivery are fine. A question
+    ("Is there anything I can help you with?") offers nothing. `skip(sentence)`: True for a
+    sentence that passes on the owner's own words ("We'll be back at five.")."""
+    text = str(text or "").replace("’", "'").replace("‘", "'")
+    for sentence in _SENTENCES.findall(text):
+        sentence = sentence.strip()
+        if not sentence or (skip is not None and skip(sentence)):
+            continue
+        if _DOING.search(sentence):
+            return True
+        question = sentence.endswith("?")
+        for m in _COMMIT.finditer(sentence):
+            if _ALLOWED.match(sentence, m.end()) or (question and _BARE_HELP.match(sentence, m.end())):
+                continue      # "Is there anything I can help you with?" offers nothing
+            return True
+    return False
 
 
 def _shorten(text: str, limit: int) -> str:

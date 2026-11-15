@@ -37,7 +37,7 @@ Everything shown is on main: the final spoken lines (including the refusal in sh
 - **Shot 1 and shot 10:** keep faces visible to the camera. Nobody in view makes the label "nobody", and a hidden face at the door makes it "suspicious", which raises the alert.
 - **Shot 4:** the courier starts talking within 8 seconds of the greeting ending, while the mic is open.
 - **Before shot 5:**
-  - Switch the porch light off from the dashboard's Lights panel.
+  - Switch the porch light off on the Controls page (the main dashboard only shows the lights' status).
   - Wait at least 1 minute after the courier rang (a visitor's quiet time).
   - Stay in Away. Switching to Night would make Faraday announce it.
 - **Shot 5:** the hooded person stands at the door without ringing; the warning comes 15 seconds after they first set off the sensor.

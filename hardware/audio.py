@@ -15,7 +15,12 @@ The older start()/stop() pair still exists for `python -m hardware.check record`
 """
 from __future__ import annotations
 
+import json
 import logging
+import shutil
+import subprocess
+import sys
+import tempfile
 import threading
 import time
 from collections import deque
@@ -435,13 +440,256 @@ class Recorder:
         return self.save(audio), seconds
 
 
+# ---- the speaker -----------------------------------------------------------------
+# audio.speaker_device (owner 2026-11-15, Mac test: cached lines and the intercom
+# played on "Mac mini Speakers" while argmax-cli --play spoke on the system output,
+# "onn Rugged Speaker"):
+# - null: the system's default output. On the Mac a file plays with afplay, which
+#   follows the current default exactly as argmax-cli --play does (PortAudio keeps
+#   the default it saw when Faraday started); the intercom looks it up each time.
+# - a number or a name: that OUTPUT device. A name never matches a device that
+#   can't play (the Mac also lists an input-only "onn Rugged Speaker S"): the exact
+#   name first (any case), else the shortest output name that contains it.
+# Startup warns when that isn't the system output (speaker_report).
+
+def _is_mac() -> bool:
+    return sys.platform == "darwin"
+
+
+def output_devices() -> List[Tuple[int, str]]:
+    """(index, name) of every device that can play sound (PortAudio's list)."""
+    import sounddevice as sd
+    return [(i, str(d.get("name", ""))) for i, d in enumerate(sd.query_devices())
+            if int(d.get("max_output_channels", 0) or 0) > 0]
+
+
+def _unset(setting: Any) -> bool:
+    return setting is None or (isinstance(setting, str) and not setting.strip())
+
+
+def match_output(setting: Any, devices: List[Tuple[int, str]]) -> Optional[int]:
+    """The output device index for audio.speaker_device (None when unset).
+    Raises ValueError if it names no output device."""
+    if _unset(setting):
+        return None
+    if isinstance(setting, bool):
+        raise ValueError(f"{setting!r} is not a device")
+    text = str(setting).strip()
+    if isinstance(setting, int) or text.lstrip("-").isdigit():
+        if any(i == int(text) for i, _ in devices):
+            return int(text)
+        raise ValueError(f"no output device number {text}")
+    want = text.lower()
+    exact = [i for i, n in devices if n.strip().lower() == want]
+    if exact:
+        return exact[0]
+    part = sorted((len(n), i) for i, n in devices if want in n.lower())
+    if part:
+        return part[0][1]
+    raise ValueError(f"no output device named {text!r}")
+
+
+def _device_name(index: Optional[int], devices: List[Tuple[int, str]]) -> Optional[str]:
+    return next((n for i, n in devices if i == index), None)
+
+
+def _fourcc(code: str) -> int:
+    return int.from_bytes(code.encode("ascii"), "big")
+
+
+_ca_run_loop_set = False
+
+
+def _coreaudio_default_output() -> Optional[str]:
+    """The default output device's name, straight from CoreAudio (no PortAudio:
+    it only knows the default from when this process started)."""
+    import ctypes
+    import ctypes.util
+
+    class Address(ctypes.Structure):
+        _fields_ = [("selector", ctypes.c_uint32), ("scope", ctypes.c_uint32),
+                    ("element", ctypes.c_uint32)]
+
+    ca = ctypes.CDLL(ctypes.util.find_library("CoreAudio"))
+    cf = ctypes.CDLL(ctypes.util.find_library("CoreFoundation"))
+    get = ca.AudioObjectGetPropertyData
+    get.argtypes = [ctypes.c_uint32, ctypes.POINTER(Address), ctypes.c_uint32, ctypes.c_void_p,
+                    ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p]
+    get.restype = ctypes.c_int32
+    scope = _fourcc("glob")                          # kAudioObjectPropertyScopeGlobal
+    global _ca_run_loop_set
+    if not _ca_run_loop_set:
+        # The HAL delivers "default device changed" on the main run loop, which this
+        # app never runs (its main thread waits in input()), so the default would stay
+        # the one from startup. A NULL run loop makes the HAL use its own thread.
+        put = ca.AudioObjectSetPropertyData
+        put.argtypes = [ctypes.c_uint32, ctypes.POINTER(Address), ctypes.c_uint32, ctypes.c_void_p,
+                        ctypes.c_uint32, ctypes.c_void_p]
+        put.restype = ctypes.c_int32
+        loop = ctypes.c_void_p(None)
+        addr = Address(_fourcc("rnlp"), scope, 0)    # kAudioHardwarePropertyRunLoop
+        put(1, ctypes.byref(addr), 0, None, ctypes.sizeof(loop), ctypes.byref(loop))
+        _ca_run_loop_set = True
+    device = ctypes.c_uint32(0)
+    size = ctypes.c_uint32(ctypes.sizeof(device))
+    addr = Address(_fourcc("dOut"), scope, 0)        # kAudioHardwarePropertyDefaultOutputDevice
+    if get(1, ctypes.byref(addr), 0, None, ctypes.byref(size), ctypes.byref(device)) or not device.value:
+        return None                                  # 1 = kAudioObjectSystemObject
+    name = ctypes.c_void_p(None)
+    size = ctypes.c_uint32(ctypes.sizeof(name))
+    addr = Address(_fourcc("lnam"), scope, 0)        # kAudioObjectPropertyName (a CFString)
+    if get(device.value, ctypes.byref(addr), 0, None, ctypes.byref(size), ctypes.byref(name)) \
+            or not name.value:
+        return None
+    try:
+        cf.CFStringGetCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32]
+        cf.CFStringGetCString.restype = ctypes.c_bool
+        buf = ctypes.create_string_buffer(1024)
+        if not cf.CFStringGetCString(name, buf, ctypes.sizeof(buf), 0x08000100):   # UTF-8
+            return None
+        return buf.value.decode("utf-8", "replace")
+    finally:
+        cf.CFRelease.argtypes = [ctypes.c_void_p]
+        cf.CFRelease(name)
+
+
+def default_output_from_profiler(data: Dict[str, Any]) -> Optional[str]:
+    """The default output in `system_profiler SPAudioDataType -json` output."""
+    for group in data.get("SPAudioDataType", []) or []:
+        for item in group.get("_items", []) or []:
+            if any("default_audio_output" in k and "yes" in str(v).lower() for k, v in item.items()):
+                return item.get("_name")
+    return None
+
+
+def _profiler_default_output() -> Optional[str]:
+    out = subprocess.run(["system_profiler", "SPAudioDataType", "-json"], capture_output=True,
+                         text=True, timeout=10).stdout
+    return default_output_from_profiler(json.loads(out or "{}"))
+
+
+def system_output(profiler: bool = True) -> Optional[str]:
+    """Mac: the name of the system's default output (System Settings > Sound >
+    Output), where argmax-cli --play and afplay play. None elsewhere or if
+    unreadable. profiler=False skips the slow system_profiler fallback."""
+    if not _is_mac():
+        return None
+    reads = (_coreaudio_default_output, _profiler_default_output) if profiler else (_coreaudio_default_output,)
+    for read in reads:
+        try:
+            name = read()
+        except Exception as e:
+            log.debug("default output via %s failed: %r", read.__name__, e)
+            continue
+        if name:
+            return name
+    return None
+
+
+def system_output_index() -> Optional[int]:
+    """PortAudio's index for the system's current default output (Mac), when
+    PortAudio lists that device (only devices present at startup); else None.
+    CoreAudio only (quick): it runs when the intercom opens."""
+    name = system_output(profiler=False)
+    if not name:
+        return None
+    want = name.strip().lower()
+    return next((i for i, n in output_devices() if n.strip().lower() == want), None)
+
+
+def resolve_speaker(setting: Any) -> Optional[int]:
+    """audio.speaker_device -> the output device index (None = the system default).
+    A name or number that isn't an output device is logged and the default is
+    used: Faraday is never silent over a typo or an unplugged speaker."""
+    if _unset(setting):
+        return None
+    try:
+        return match_output(setting, output_devices())
+    except Exception as e:
+        log.warning("audio.speaker_device %r: %s; using the system default output", setting, e)
+        return None
+
+
+def speaker_report(setting: Any, devices: Optional[List[Tuple[int, str]]] = None,
+                   system: Optional[str] = None, default_name: Optional[str] = None,
+                   mac: Optional[bool] = None) -> List[Tuple[str, str]]:
+    """Startup lines (level "OK" / "WARN", text): where Faraday's own sound goes
+    (cached lines, the chime, the intercom). WARN when that isn't the system
+    output, where argmax-cli --play speaks every live line."""
+    mac = _is_mac() if mac is None else mac
+    devices = output_devices() if devices is None else devices
+    if system is None and mac:
+        system = system_output()
+    if _unset(setting):
+        if mac and system:
+            return [("OK", f"speaker: {system} (the system output, followed live like argmax-cli --play)")]
+        if default_name is None:
+            import sounddevice as sd
+            default_name = str(sd.query_devices(kind="output")["name"])
+        return [("OK", f"speaker: {default_name} (the system default output)")]
+    try:
+        name = _device_name(match_output(setting, devices), devices) or str(setting)
+    except ValueError as e:
+        outs = ", ".join(f'"{n}"' for _, n in devices) or "none"
+        return [("WARN", f'audio.speaker_device "{setting}": {e}, so Faraday plays on the system '
+                         f"output instead. Output devices: {outs}")]
+    lines = [("OK", f'speaker: {name} (audio.speaker_device "{setting}")')]
+    if system and system.strip().lower() != name.strip().lower():
+        lines.append(("WARN", f'Faraday plays cached lines, the chime and the intercom on "{name}", but '
+                              f'the system output is "{system}", where argmax-cli --play speaks. Make them '
+                              f'the same: System Settings > Sound > Output > "{name}", or set '
+                              f'"speaker_device": null.'))
+    elif mac and not system:
+        lines.append(("WARN", f"can't read the system output: make sure System Settings > Sound > Output "
+                              f'is "{name}", where argmax-cli --play speaks.'))
+    return lines
+
+
+def _afplay(path: Path) -> bool:
+    """Mac: play a file on the system's current default output (afplay ships
+    with macOS). False if afplay is missing or failed."""
+    exe = shutil.which("afplay")
+    if exe is None:
+        return False
+    try:
+        import soundfile as sf
+        secs = float(sf.info(str(path)).duration)
+    except Exception:
+        secs = 30.0
+    try:
+        r = subprocess.run([exe, str(path)], capture_output=True, timeout=secs + 10)
+    except subprocess.TimeoutExpired:
+        log.warning("afplay timed out on %s", path)
+        return True                     # it was playing: never say the line twice
+    except OSError as e:
+        log.warning("afplay could not start (%r)", e)
+        return False
+    if r.returncode != 0:
+        log.warning("afplay failed (%s): %s", r.returncode, (r.stderr or b"")[-200:])
+        return False
+    return True
+
+
 def play_wav(path: Path, device: Any = None) -> None:
-    """Play a wav file and wait until it's done."""
+    """Play a wav file and wait until it's done. device None = the system default:
+    on the Mac through afplay, which follows the current default output like
+    argmax-cli --play. A device that fails (unplugged) falls back to the default."""
+    if device is None and _is_mac() and _afplay(Path(path)):
+        return
     import sounddevice as sd
     import soundfile as sf
     data, rate = sf.read(str(path), dtype="float32")
-    sd.play(data, rate, device=device)
-    sd.wait()
+    try:
+        sd.play(data, rate, device=device)
+        sd.wait()
+    except Exception as e:
+        if device is None:
+            raise
+        log.warning("speaker %r failed (%r); playing on the system default", device, e)
+        if _is_mac() and _afplay(Path(path)):
+            return
+        sd.play(data, rate)
+        sd.wait()
 
 
 def chime_samples(rate: int = 24000) -> np.ndarray:
@@ -454,12 +702,29 @@ def chime_samples(rate: int = 24000) -> np.ndarray:
     return np.concatenate(out).astype(np.float32)
 
 
+_chime_path: Optional[Path] = None
+
+
+def _chime_file() -> Path:
+    """The chime as a wav (for afplay), written once."""
+    global _chime_path
+    if _chime_path is None or not _chime_path.exists():
+        import soundfile as sf
+        path = Path(tempfile.gettempdir()) / "faraday-chime.wav"
+        sf.write(str(path), chime_samples(), 24000, subtype="PCM_16")
+        _chime_path = path
+    return _chime_path
+
+
 def play_chime(gate: Optional[MicGate] = None, device: Any = None) -> None:
-    """Play the chime with the mic muted (so it isn't heard as speech)."""
-    import sounddevice as sd
+    """Play the chime with the mic muted (so it isn't heard as speech), on the
+    same speaker as everything else (device None on the Mac: afplay)."""
     if gate is not None:
         gate.mute()
     try:
+        if device is None and _is_mac() and _afplay(_chime_file()):
+            return
+        import sounddevice as sd
         sd.play(chime_samples(), 24000, device=device)
         sd.wait()
     except Exception as e:

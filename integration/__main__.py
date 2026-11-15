@@ -80,6 +80,10 @@ def build_app(args: argparse.Namespace, settings, known_outlets=None,
               lights_off_at_start=bool(settings.get("integration", {}).get("lights_off_at_start", True)),
               known_outlets=known_outlets)
     app.video = feed                     # alarm recording
+    from hardware.audio import resolve_speaker
+    # one speaker for everything Faraday plays itself: an OUTPUT device by name or
+    # number, or None = the system output (followed live on the Mac, like argmax-cli)
+    speaker_device = resolve_speaker(settings.get("audio", {}).get("speaker_device"))
     if not args.no_mic:
         from hardware.audio import Recorder, play_chime
         from hardware.diarize import Diarizer
@@ -90,7 +94,6 @@ def build_app(args: argparse.Namespace, settings, known_outlets=None,
         wake = dict(audio.get("wake", {}))
         if args.no_wake:
             wake["enabled"] = False
-        speaker_device = audio.get("speaker_device")
         diarizer = Diarizer.from_settings(settings)
         owner_voice = OwnerVoice.from_settings(settings, diarizer)      # None until enrolled
         recorder = Recorder.from_settings(settings, gate)
@@ -142,7 +145,7 @@ def build_app(args: argparse.Namespace, settings, known_outlets=None,
     if not args.no_controls:
         from hardware.intercom import Intercom
         from integration.controls import ControlsServer
-        intercom = Intercom(gate, settings.get("audio", {}).get("speaker_device"))
+        intercom = Intercom(gate, speaker_device)
         if app.voice is not None:
             intercom.on_end = app.voice.on_intercom_end   # then hear the visitor's reply
         dash = settings.get("dashboard", {})
@@ -231,6 +234,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             known_outlets = outlet_states_in(moved / logs_name / "events.jsonl")
     app = build_app(args, settings, known_outlets)
     print(f"Faraday. Settings: {'settings.json' if (CONFIG_DIR / 'settings.json').exists() else 'settings.example.json (public example passphrase!)'}")
+    try:                    # the app's speaker vs the system output that argmax-cli --play uses
+        from hardware.audio import speaker_report
+        for level, msg in speaker_report(settings.get("audio", {}).get("speaker_device")):
+            print(f"  [speaker] {msg}" if level == "OK" else f"  [speaker] {level}: {msg}")
+    except Exception as e:
+        print(f"  [speaker] WARN: can't check the speaker ({e!r})")
     print(f"Flipper: autodetect, then the settings port. Log: {app.pipeline.log.path}")
     app.start()
     if app.board is not None:
@@ -266,15 +275,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"Object detection: {detector.engine}"
               + (f" + faces ({detector.faces.engine})" if detector.faces is not None else ""))
     prerender = getattr(app.speaker, "prerender", None)
+    warm_up = getattr(app.speaker, "warm_up", None)
     tts_cfg = for_os(settings.get("tts", {})) or {}
+    lines: List[str] = []
     if prerender is not None and getattr(app.speaker, "cache_dir", None) and tts_cfg.get("prerender", True):
-        # Faraday's fixed lines, rendered once with the fixed voice: instant and identical
+        # Faraday's fixed lines (the backups for Bonsai's live lines), rendered once with
+        # the fixed voice: instant and identical
         from integration.fixed_lines import fixed_lines
         lines = fixed_lines()
-
+    if lines or (warm_up is not None and tts_cfg.get("prewarm", True)):
         def warm_tts() -> None:
-            made = prerender(lines, wait=app.speech_busy, stop=app._stopping)
-            print(f"  [tts] {made} fixed line(s) rendered, {len(lines)} cached")
+            if warm_up is not None and tts_cfg.get("prewarm", True):
+                # most lines are spoken live with argmax-cli --play: load the voice now
+                secs = warm_up(wait=app.speech_busy, stop=app._stopping)
+                if secs is not None:
+                    print(f"  [tts] argmax voice warm in {secs} s")
+                elif not app._stopping.is_set():
+                    print("  [tts] argmax warm-up didn't finish (a line was spoken first, or see the log)")
+            if lines:
+                made = prerender(lines, wait=app.speech_busy, stop=app._stopping)
+                print(f"  [tts] {made} fixed line(s) rendered, {len(lines)} cached")
         threading.Thread(target=warm_tts, name="faraday-tts-prerender", daemon=True).start()
     print("Keys: r listen now, 1/2/3 home/away/night, s status, q quit")
     try:
