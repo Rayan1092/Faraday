@@ -77,7 +77,8 @@ class ServerTests(unittest.TestCase):
         code, ctype, body = self.get("/")
         self.assertEqual(code, 200)
         self.assertIn("text/html", ctype)
-        self.assertIn(b"OFFLINE", body)
+        self.assertIn(b'id="live"', body)                 # the live camera in the centre
+        self.assertNotIn(b"OFFLINE", body)
         self.assertIn("javascript", self.get("/static/dashboard.js")[1])
         self.assertIn("text/css", self.get("/static/dashboard.css")[1])
         self.assertIn("svg", self.get("/static/no-photo.svg")[1])
@@ -124,13 +125,9 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(code, 403)
         self.assertEqual(self.pipeline.modes.mode, Mode.HOME)
 
-    def test_text_box_sends_speech(self):
-        code, _ = self.post("/api/say", {"text": "When there's motion at night, turn on the lamp."})
-        self.assertEqual(code, 202)
-        for _ in range(50):  # handled on a thread
-            if self.state()["rules"]:
-                break
-            time.sleep(0.05)
+    def test_rules_by_voice_and_delete_from_the_page(self):
+        self.assertEqual(self.post("/api/say", {"text": "hi"})[0], 404)      # no typed speech
+        self.pipeline.handle(events.speech("When there's motion at night, turn on the lamp."))
         self.assertEqual(self.state()["rules"][0]["text"], "motion in night → living room lamp on")
         rule_id = self.state()["rules"][0]["id"]
         self.assertEqual(self.post("/api/rules/delete", {"id": rule_id})[0], 200)

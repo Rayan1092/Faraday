@@ -2,7 +2,7 @@
 
 **Owner: Dell laptop.**
 
-The local page for the projector. **Fully offline:** stdlib `http.server`, and every asset (`static/index.html`, `dashboard.css`, `dashboard.js`, two SVGs) is in this folder. No CDNs, no web fonts, no external JS. A test fails if a static file contains an `http(s)://` URL.
+The home's local status page. **Fully offline:** stdlib `http.server`, and every asset (`static/index.html`, `dashboard.css`, `dashboard.js`, two SVGs) is in this folder. No CDNs, no web fonts, no external JS. A test fails if a static file contains an `http(s)://` URL.
 
 ```python
 from dashboard import Dashboard
@@ -10,23 +10,21 @@ board = Dashboard.from_settings(pipeline, settings).start()   # dashboard.host:p
 print(board.url)
 ```
 
-Or from the sim: `python -m sim --dashboard` (add `--offline` to run without LM Studio).
+Developers can also start it from the simulator: `python -m sim --dashboard` (add `--offline` to run without LM Studio).
 
-**What it shows** (one screen, no scrolling, readable from the back of a room):
+**What it shows** (one screen, no scrolling, readable across a room):
 - **Mode** in huge letters, with the dashboard's own status colour: green Home, blue Away, purple Night, and an alert beats the mode (amber warning, red alarm). The Flipper's LED is separate: it stays off and only flashes red on an alarm.
-- An **Offline** badge, and a banner for an alarm or a quiet doorbell at night.
-- **Camera:** the latest photo and its description, plus why it was taken.
-- **Heard & said:** speech in, Faraday's speech out. The passphrase shows as `[passphrase]`.
-- **Live events:** feed, newest first.
+- **Live camera in the centre:** integration's `GET /stream.mjpg` on the controls server (dashboard port + 1), with the object detector's boxes drawn in, and a small LIVE badge. While the stream is down (and before it's up) the latest photo shows instead, and the stream is retried every few seconds.
+- **Under the camera:** the latest threat label (a coloured pill: delivery, visitor, suspicious, nobody, or a dashed "unknown") with its reason; the objects the detector saw in that photo as small chips ("person", "2 × backpack"); "Recording saved" while the latest alarm has its recording (NV's `recording_saved`); then the photo's description and why it was taken.
+- **Heard & said:** speech in, Faraday's speech out. The passphrase shows as `[passphrase]`. An owner request carries NV's voice check when there is one: "Owner's voice" or "Not the owner's voice" (display only, it never changes what Faraday does).
+- **Activity:** newest first. Photos and alarm recordings carry a small thumbnail.
 - **Lights:** porch light and lamp as real switches. A tap posts `/api/control` to integration's `board.control_hook`, which sends the code and logs an `outlet_on`/`outlet_off` with `source: dashboard`. The tile always shows the state from the log, never what the tap hoped for. Without the hook the tiles are display only. The spare outlet shows only while it's on.
 - **Rules & instructions:** voice rules and the owner's standing instructions for visitors ("Delivery · ask them to leave it by the side door"), each with a delete button.
 - **Messages:** plus the latest spoken summary.
 - **Buttons:** Away and Night. Home asks for the passphrase.
-- **Listen:** a small tap button (push-to-talk is gone). One tap opens one listening window through integration's `board.listen_hook`, like saying "Hey Faraday". While the mic is open the button reads "Listening…" and a small green mic breathes next to "Live". That follows `board.listening_hook()` if integration sets it, otherwise it shows for 8 s after a tap.
-- **Backup text box:** sends a `speech_heard` event.
-- **Stage backup buttons:** "Ring doorbell" and "Motion" send the same events the Flipper would, marked `source: "dashboard"` in the log.
-- **Real offline check:** the badge asks the OS for a route to a reserved test address (192.0.2.1 / 2001:db8::1) with a UDP connect, which sends no packets. No route shows a green OFFLINE. Any network shows a red, blinking "ONLINE: turn Wi-Fi off".
-- **One big banner for the audience,** most important first: ALARM, DISARMED BY PASSPHRASE (20 s), THE AI CAN'T DISARM (while armed, 60 s), DOORBELL PRESSED (15 s), WARNING, DOORBELL AT NIGHT (2 min).
+- **Mic indicator:** a small green mic breathes next to "Live" while a listening window is open (integration's `board.listening_hook()`). There is no Listen button: "Hey Faraday" and the doorbell open the mic.
+- **No demo controls:** no sensor or typed-speech buttons and no network badge. The product only acts on the real sensors and the mic, and a real home has Wi-Fi: Faraday just never uses the internet.
+- **One big banner,** most important first: ALARM (with "Recording saved." once it is), DISARMED (20 s), DISARM REFUSED (while armed, 60 s), DOORBELL (15 s), WARNING, DOORBELL AT NIGHT (2 min).
 - **Real photos:** the newest `.jpg`/`.png` in `captures/photos/` shows the moment it's saved, with "Looking at the photo..." until its `photo_described` arrives.
 - **Tested** at 1280×720 and 1920×1080 (the Controls page also at 390 px phone width).
 
@@ -50,13 +48,9 @@ The page finds the controls server at `location.hostname` plus `controls_port` f
 | `GET /media/captures/...` | photos, `.jpg`/`.png` inside `captures/` only |
 | `POST /api/mode {"mode": "away"\|"night"}` | arm. `home` is refused |
 | `POST /api/home {"passphrase": ...}` | disarm through `modes/`. 5 misses → 30 s lockout. Never logged |
-| `POST /api/say {"text": ...}` | backup for the mic |
 | `POST /api/rules/delete {"id": ...}` | remove a rule |
 | `POST /api/instructions/delete {"id": ...}` | remove an owner instruction |
-| `POST /api/sensor {"type": "doorbell"\|"motion"}` | stage backup: the same event the Flipper would send |
 | `POST /api/control {"outlet": ..., "on": true\|false}` | light switch through `board.control_hook`. 400 for a bad outlet, 503 if the hook isn't set |
-| `POST /api/listen` | Listen button: one listening window through `board.listen_hook` (`talk_hook` also works). Replies `{"opened": false}` if one is already open |
-| `POST /api/talk` | old name for `/api/listen` |
 | `GET /controls` | the Controls page |
 | `POST /api/snapshot` | owner snapshot: a `take_photo` with `source: dashboard`. Replies 202 with the request `id` |
 

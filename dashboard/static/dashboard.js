@@ -50,11 +50,13 @@
     for (const m of ["away", "night", "home"]) {
       $("btn-" + m).classList.toggle("active", s.mode === m);
     }
-    renderListen(s);
+    $("mic-open").hidden = s.listening !== true;   // integration's mic state, never a guess
 
-    renderNet(s.network);
     renderToast(s.banner);
+    renderLive(s);
     renderPhoto(s.photo);
+    renderChips(s.photo);
+    renderRecording(s.recording);
     renderLights(s.lights, s.control_available);
     if (s.version === lastVersion) return; // the log didn't change
     lastVersion = s.version;
@@ -64,27 +66,56 @@
     renderNotes(s.summary, s.messages);
   }
 
-  // Listen: one tap opens one listening window (integration's listen_hook). The mic
-  // indicator follows integration's listening state; without it, a few seconds after a tap.
-  let listenUntil = 0;
-  const LISTEN_GUESS_MS = 8000;
+  // Live camera in the centre: integration's stream on the controls port, with the
+  // object detector's boxes drawn in. The latest photo shows until the stream is up,
+  // and again whenever it drops (it's retried every few seconds).
+  let controlsPort = null;
+  let liveUp = false;
+  let liveRetry = null;
+  let lastPhotoSrc = null;
+  const LIVE_RETRY_MS = 8000;
+  const ctrl = (path) => location.protocol + "//" + location.hostname + ":" + controlsPort + path;
 
-  function renderListen(s) {
-    const btn = $("btn-listen");
-    btn.hidden = !s.listen_available;
-    const open = s.listening === true || (s.listening == null && Date.now() < listenUntil);
-    btn.classList.toggle("on", open);
-    btn.disabled = open;
-    $("listen-label").textContent = open ? "Listening…" : "Listen";
-    $("mic-open").hidden = !open;
+  function startLive() {
+    const img = $("live");
+    img.onload = () => {
+      liveUp = true;
+      img.hidden = false;
+      $("live-badge").hidden = false;
+      $("photo").hidden = true;
+      $("photo-empty").hidden = true;
+    };
+    img.onerror = () => {
+      liveUp = false;
+      img.hidden = true;
+      $("live-badge").hidden = true;
+      showPhoto(lastPhotoSrc);
+      clearTimeout(liveRetry);
+      liveRetry = setTimeout(startLive, LIVE_RETRY_MS);
+    };
+    img.src = ctrl("/stream.mjpg?t=" + Date.now());
   }
 
-  function renderNet(network) {
-    // A real check from the server (no packets sent): red if any network is up.
-    const online = network && network.offline === false;
-    $("net-text").textContent = online ? "ONLINE · WI-FI ON" : "OFFLINE";
-    $("net").classList.toggle("online", online);
-    $("net").title = (network && network.detail) || "";
+  function renderLive(s) {
+    if (controlsPort === null && s.controls_port) {
+      controlsPort = s.controls_port;
+      startLive();
+    }
+  }
+
+  // What the detector saw in the latest photo, as small chips under the camera.
+  function renderChips(photo) {
+    const box = $("chips");
+    const chips = (photo && photo.chips) || [];
+    box.replaceChildren(...chips.map((c) => el("span", "chip", c.count > 1 ? c.count + " × " + c.label : c.label)));
+    box.hidden = !chips.length;
+  }
+
+  // "Recording saved" under the camera while the alarm it belongs to is the latest one.
+  function renderRecording(rec) {
+    const show = !!(rec && rec.for_alarm);
+    $("recording").hidden = !show;
+    if (show) $("recording-text").textContent = "Recording saved · " + rec.time;
   }
 
   function renderToast(banner) {
@@ -141,16 +172,17 @@
   function showPhoto(src) {
     const img = $("photo");
     const backdrop = $("backdrop");
+    lastPhotoSrc = src;
     if (src) {
       img.src = src;
-      img.hidden = false;
+      img.hidden = liveUp;            // the live camera, when it's up, stays in front
       $("photo-empty").hidden = true;
       backdrop.style.backgroundImage = 'url("' + src.replace(/["\\]/g, "") + '")';
       backdrop.classList.add("on");
     } else {
       img.hidden = true;
       img.removeAttribute("src");
-      $("photo-empty").hidden = false;
+      $("photo-empty").hidden = liveUp;
       backdrop.classList.remove("on");
     }
   }
@@ -227,6 +259,7 @@
       const li = el("li", t.who);
       const who = el("div", "who", t.who === "heard" ? "Heard" : "Faraday");
       who.append(el("time", "", t.time));
+      if (t.voice) who.append(el("span", "voice " + t.voice, t.voice === "owner" ? "Owner's voice" : "Not the owner's voice"));
       li.append(icon(t.who === "heard" ? "mic" : "speaker"), who, el("div", "line", t.text));
       list.append(li);
     }
@@ -241,7 +274,7 @@
     doorbell: "door", motion: "motion", speech_heard: "mic", photo_described: "camera",
     mode_changed: "shield", alert_changed: "alert", speak: "speaker", outlet_on: "bulb",
     outlet_off: "bulb", take_photo: "camera", save_message: "message", add_rule: "rule",
-    summarize_log: "activity", set_mode: "shield",
+    summarize_log: "activity", set_mode: "shield", recording_saved: "camera",
   };
 
   function renderFeed(feed) {
@@ -254,7 +287,16 @@
       node.append(icon(FEED_ICON[f.type] || "activity"));
       const text = el("span", "text", f.text);
       if (f.detail) text.append(el("span", "detail", f.detail));
-      li.append(node, text, el("time", "", f.time));
+      li.append(node, text);
+      if (f.thumb) {                      // photos and recordings as small thumbnails
+        const img = el("img", "thumb");
+        img.alt = "";
+        img.loading = "lazy";
+        img.onerror = () => img.remove();
+        img.src = f.thumb;
+        li.append(img);
+      }
+      li.append(el("time", "", f.time));
       list.append(li);
     }
   }
@@ -359,32 +401,7 @@
     });
   };
 
-  const backup = $("backup");
-  const backupBtn = $("btn-backup");
-  function setBackup(open) { backup.hidden = !open; backupBtn.setAttribute("aria-expanded", String(open)); }
-  backupBtn.onclick = (e) => { e.stopPropagation(); setBackup(backup.hidden); };
-  document.addEventListener("click", (e) => {
-    if (!backup.hidden && !backup.contains(e.target) && e.target !== backupBtn) setBackup(false);
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { setBackup(false); closeDialog(); }
-  });
-
-  $("btn-listen").onclick = () => post("/api/listen", {}).then(({ status, data }) => {
-    if (status === 200 && data.opened) listenUntil = Date.now() + LISTEN_GUESS_MS;
-    poll();
-  });
-  $("btn-ring").onclick = () => post("/api/sensor", { type: "doorbell" }).then(poll);
-  $("btn-motion").onclick = () => post("/api/sensor", { type: "motion" }).then(poll);
-
-  $("say-form").onsubmit = (e) => {
-    e.preventDefault();
-    const box = $("say-text");
-    const text = box.value.trim();
-    if (!text) return;
-    box.value = "";
-    post("/api/say", { text }).then(poll);
-  };
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDialog(); });
 
   poll();
   setInterval(poll, POLL_MS);
