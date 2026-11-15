@@ -16,8 +16,7 @@ from typing import Optional
 
 from shared import Event, Source
 
-LOOKING = "Let me look."
-CANT_SEE = "I can't see the door right now."
+from .lines import CANT_SEE, LABEL_WORDS, LOOKING  # noqa: E402,F401  (one tone, brain/lines.py)
 LOOK_REASON = "Owner asked who's at the door"
 MAX_DESCRIPTION = 190
 
@@ -32,12 +31,6 @@ _LOOK = re.compile(
     r"|(?:take\s+a\s+)?look\s+(?:at\s+the\s+(?:front\s+)?door|outside)"
     r"|describe\s+(?:the\s+)?(?:front\s+)?(?:door|porch|visitor|camera))\b", re.I)
 
-LABEL_WORDS = {
-    "delivery": "It looks like a delivery.",
-    "visitor": "It looks like a visitor.",
-    "suspicious": "This looks suspicious.",
-    "nobody": "Nobody is there.",
-}
 
 
 def is_look_request(text: str) -> bool:

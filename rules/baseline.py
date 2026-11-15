@@ -22,13 +22,14 @@ from shared import (Action, ActionType, AlertLevel, ChangedBy, Event, EventType,
 
 from modes.state import MotionOutcome
 
-ANNOUNCE_DOORBELL = "Someone is at the door."
+ANNOUNCE_DOORBELL = "Someone is at the front door."
 # Away: spoken by code the moment the doorbell rings, then the visitor's listening
 # window opens. No second greeting from Bonsai; Bonsai only replies to what they say.
 DOORBELL_GREETING = ("Hello. No one can come to the door right now. "
                      "I can take a message or help with a delivery.")
-WARNING_LINE = "You're on camera. The owner has been alerted."
-ALARM_LINE = "Alarm. You are being recorded. Leave now."
+WARNING_LINE = "Please be aware this property is monitored and you are on camera."
+ALARM_LINE = ("This property is protected. You are being recorded and the owner has been notified. "
+              "Please leave now.")
 
 _PHOTO = ActionType.TAKE_PHOTO
 _ON = ActionType.OUTLET_ON

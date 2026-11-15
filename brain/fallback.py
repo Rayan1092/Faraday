@@ -10,13 +10,10 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from shared import ActionType, Event, EventType, Mode
 
-RawItem = Dict[str, Any]
+from .lines import (AWAY_ON, CANT_DISARM, CANT_HELP, DELIVERY_LINE, MESSAGE_SAVED,  # noqa: F401
+                    NIGHT_ON, OFFER_MESSAGE, RULE_SAVED)
 
-CANT_DISARM = "I can't disarm. Only the owner can do that."
-MESSAGE_SAVED = "Thank you. I saved your message."
-DELIVERY_LINE = "Please leave the package by the front door. Thank you!"
-OFFER_MESSAGE = "Would you like to leave a message?"
-RULE_SAVED = "Okay. I'll remember that."
+RawItem = Dict[str, Any]
 
 
 def _speak(text: str) -> RawItem:
@@ -90,10 +87,10 @@ def _speech(text: str, mode: str) -> List[RawItem]:
         return [{"type": ActionType.ADD_RULE, "args": rule}, _speak(RULE_SAVED)]
     if _BED.search(text) and not armed:
         return [{"type": ActionType.SET_MODE, "args": {"mode": Mode.NIGHT}},
-                _speak("Night mode on. Sleep well.")]
+                _speak(NIGHT_ON)]
     if _LEAVING.search(text) and not armed:
         return [{"type": ActionType.SET_MODE, "args": {"mode": Mode.AWAY}},
-                _speak("Away mode on. I'll watch the door.")]
+                _speak(AWAY_ON)]
     light = _LIGHT.search(text)
     if light and mode != Mode.AWAY:
         phrase = light.group(0).lower()
@@ -103,7 +100,7 @@ def _speech(text: str, mode: str) -> List[RawItem]:
     if armed:
         return [{"type": ActionType.SAVE_MESSAGE, "args": {"text": text[:500], "sender": "visitor"}},
                 _speak(MESSAGE_SAVED)]
-    return [_speak("Sorry, I can't help with that.")]
+    return [_speak(CANT_HELP)]
 
 
 # ---- rules by voice, when Bonsai can't --------------------------------------
