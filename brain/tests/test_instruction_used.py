@@ -102,9 +102,9 @@ class DeliveryInstruction(unittest.TestCase):
     def test_review_message_confirmation_kept(self):
         self.make(reply=tool_calls(("save_message", {"text": "Package for Sam", "sender": "visitor"})))
         r = self.visitor("I have a package for Sam.")
-        lines = said(r.actions)
-        self.assertEqual(len(lines), 2, lines)          # the confirmation, then the owner's words
-        self.assertIn("side door", lines[1].lower())
+        # One line from code (owner, Mac test): the owner's words, then the promise.
+        self.assertEqual(said(r.actions), ["Please leave it by the side door. I'll let the owner know it arrived."])
+        self.assertIn(ActionType.SAVE_MESSAGE, [a.type for a in r.actions])
 
     def test_review_said_once_per_visit(self):
         self.make()

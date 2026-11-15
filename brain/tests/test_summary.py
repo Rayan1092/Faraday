@@ -1,4 +1,5 @@
 """summarize_log: facts from the log, Bonsai summary, plain-code list fallback."""
+import re
 import unittest
 from datetime import datetime, timedelta
 
@@ -52,17 +53,61 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual((h.doorbells, h.motions, h.alarm), (1, 2, True))
         facts = summary.facts(h)
         text = " ".join(facts)
-        for part in ("doorbell rang once", "Motion at the door twice", "alarm went off",
-                     "courier holding a box", "Package for Sam", "porch light"):
+        for part in ("The doorbell rang.", "The alarm went off", "Package for Sam", "porch light"):
             self.assertIn(part, text)
+        self.assertNotIn("courier holding a box", text)      # never what the camera saw (owner, Mac test)
+        self.assertIsNone(re.search(r"\d", text.replace("Package for Sam, side door", "")))  # no times, no counts
+        self.assertIn(f"the alarm went off at {h.alarm_at}", summary.numbers_line(h))   # code's own sentence
         self.assertLessEqual(len(facts), 10)
 
     def test_fallback_list(self):
-        text = summary.spoken_list(summary.collect(summary.window(self.log, 1440, self.now)))
-        self.assertTrue(text.startswith("While you were out: the doorbell rang once"))
-        self.assertIn("alarm went off", text)
+        h = summary.collect(summary.window(self.log, 1440, self.now))
+        text = summary.spoken_list(h)
+        self.assertIn("the doorbell rang once", text)
+        self.assertIn(f"the alarm went off at {h.alarm_at}", text)
         self.assertIn("Package for Sam", text)
         self.assertLessEqual(len(text), 240)
+
+    def test_bonsai_only_phrases_the_log(self):
+        """Owner, Mac test: "the alarm went off at 03:40", the log said 03:49."""
+        h = summary.collect(summary.window(self.log, 1440, self.now))
+        wrong_time = "The alarm went off at 03:40 after someone came to the door."
+        self.assertFalse(summary.verified(wrong_time, h))
+        said, via = summary.final_text(wrong_time, h)
+        self.assertEqual(via, "code")
+        self.assertIn(h.alarm_at, said)
+        self.assertNotIn("03:40", said)
+        for bad in ("The doorbell rang three times.",                 # a count of its own
+                    f"The alarm went off at {h.alarm_at}.",           # even the right time: code says times
+                    "Nothing much: the doorbell rang.",               # left out the alarm
+                    "", None):
+            self.assertEqual(summary.final_text(bad, h)[1], "code", bad)
+        good = "The doorbell rang, then someone stayed at the door and the alarm went off. A visitor left a message."
+        self.assertTrue(summary.verified(good, h))
+        said, via = summary.final_text(good, h)
+        self.assertEqual(via, "bonsai")
+        self.assertTrue(said.startswith(good))
+        self.assertIn(f"the alarm went off at {h.alarm_at}.", said)       # every time comes from code
+        quiet = summary.collect([])
+        self.assertFalse(summary.verified("The alarm went off.", quiet))  # an alarm that never happened
+
+    def test_robust_to_a_hand_built_happened(self):
+        """Review: _and([]) raised, and alarm without alarm_at vanished."""
+        h = summary.Happened(doorbells=1, alarm=True, warning=True)
+        self.assertIn("The doorbell rang.", summary.facts(h))
+        self.assertIn("the alarm went off", summary.spoken_list(h))
+        self.assertEqual(summary.numbers_line(h), "The doorbell rang once.")
+
+    def test_a_time_inside_a_message_is_fine(self):
+        h = summary.Happened(doorbells=1, doorbell_times=["10:02"], messages=["I'll be back at 5:30."])
+        self.assertTrue(summary.verified("A visitor rang and said they'll be back at 5:30.", h))
+
+    def test_a_relabelled_photo_counts_once(self):
+        from shared import EventType
+        photo = "evt_photo1"
+        entries = [make_event(EventType.THREAT_ASSESSED, {"category": c, "reason": "r"}, Source.BRAIN,
+                              caused_by=photo).to_dict() for c in ("visitor", "delivery")]
+        self.assertEqual(summary.collect(entries).threats, {"delivery": 1})
 
     def test_nothing_happened(self):
         h = summary.collect([])

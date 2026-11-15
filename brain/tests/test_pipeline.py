@@ -166,8 +166,8 @@ class PipelineTests(unittest.TestCase):
 
     def test_brain_repeats_are_not_duplicated(self):
         p, _, _ = self.pipeline(tool_calls(("speak", {"text": "Thank you."}), ("speak", {"text": "Thank you."}),
-                                           ("save_message", {"text": "Package for Sam."})), Mode.AWAY)
-        texts = [a.args.get("text") for a in p.handle(events.speech("Package for Sam.")).actions]
+                                           ("save_message", {"text": "Tell Sam I came by."})), Mode.AWAY)
+        texts = [a.args.get("text") for a in p.handle(events.speech("Tell Sam I came by.")).actions]
         self.assertEqual(texts.count("Thank you."), 1)
 
     def test_baseline_survives_a_dead_or_crashing_brain(self):
