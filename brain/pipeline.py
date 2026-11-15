@@ -20,7 +20,7 @@ For each incoming event, in this order:
 
 Photos the owner asks for (owner_snapshot: the dashboard Snapshot button) get their
 threat label like any photo, but nobody at the door is greeted for them.
-"Who's at the door?" (Home or Night) is answered by plain code: "Let me look.", a
+"Who's at the door?" (Home or Night) is answered by plain code: "Checking the camera.", a
 fresh photo, then its description and threat label spoken (brain/look.py), or
 "I can't see the door right now." if the camera or vision fails or is too slow.
 
@@ -173,7 +173,7 @@ class Pipeline:
         return action
 
     def _look(self, question: Event, result: Result, done: List[Action]) -> None:
-        """'Who's at the door?': say "Let me look.", take a fresh photo, and answer when
+        """'Who's at the door?': say "Checking the camera.", take a fresh photo, and answer when
         its description arrives (or say we can't see, if it doesn't in time)."""
         self._emit(make_action(ActionType.SPEAK, {"text": look.LOOKING}, Source.BRAIN,
                                caused_by=question.id), result, done)

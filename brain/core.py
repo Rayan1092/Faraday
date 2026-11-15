@@ -375,7 +375,7 @@ class Brain:
                        for a in actions)
         last = _last_said(recent).strip()
         # an offer is a question about a message ("Would you like to leave a message?"),
-        # not a confirmation ("Thank you. I saved your message.")
+        # not a confirmation ("Thank you. I'll pass that along.")
         offered = ("message" in last.lower() and last.endswith("?")
                    and not _DECLINE.match(text))
         if not (promised or offered):

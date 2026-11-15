@@ -153,7 +153,7 @@ class ThroughThePipeline(unittest.TestCase):
                 r = self.owner(text)
                 self.assertEqual(said(r.actions), [lines.ARMED_NO_CHANGE], (mode, text))
                 self.assertEqual(kinds(r.actions), [ActionType.SPEAK], (mode, text))
-            self.assertEqual(said(self.owner("Disarm please.").actions), [lines.SAY_PASSPHRASE])
+            self.assertEqual(said(self.owner("Disarm please.").actions), [lines.CANT_DISARM])
             self.assertEqual(self.p.modes.mode, mode)
             self.assertEqual(self.p.rules.all(), [])
 

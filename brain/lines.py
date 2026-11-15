@@ -46,7 +46,7 @@ LABEL_WORDS = {
     "visitor": "It looks like a visitor.",
     "suspicious": "This looks suspicious.",
     "nobody": "No one is there.",
-    "unknown": "I couldn't analyse the photo.",
+    "unknown": "",          # "who's at the door?": the detector's own sentence says enough
 }
 
 OUTLET_NAMES = {"porch_light": "porch light", "living_room_lamp": "living room lamp",

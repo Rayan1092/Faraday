@@ -3,7 +3,7 @@
 Plain code, no AI for the decision:
 - is_look_request() spots the question ("who's at the door?", "what do you see?",
   "is anyone outside?").
-- The pipeline answers "Let me look.", takes a FRESH photo (a take_photo with
+- The pipeline answers "Checking the camera.", takes a FRESH photo (a take_photo with
   source dashboard, like the Snapshot button) and waits for its description.
 - look_line() is what Faraday says: the 9B vision description (NV's camera worker)
   plus the threat label in words. If the camera or vision failed, or nothing came
