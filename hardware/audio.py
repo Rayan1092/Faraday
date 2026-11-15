@@ -223,8 +223,14 @@ class Recorder:
                 self._ring.clear()
                 self._ring_n = 0
                 w = self._window
-                if w is not None and w["dirty"] and not w["done"].is_set():
-                    self._restart_locked(w, keep_preroll=False)
+                if w is not None and not w["done"].is_set():
+                    if w["vad"].speech_started:
+                        # someone was talking (a visitor when the owner presses the
+                        # intercom): end the window with what was said, don't lose it
+                        w["spoke"] = True
+                        w["done"].set()
+                    elif w["dirty"]:
+                        self._restart_locked(w, keep_preroll=False)
             return
         chunk = np.array(indata, copy=True).reshape(-1)
         with self._lock:
@@ -316,7 +322,9 @@ class Recorder:
         `preroll_s` (said just now, after Faraday stopped) and feeds it to the
         new detector, so someone already talking is caught."""
         frames: List[np.ndarray] = []
-        if keep_preroll:
+        if keep_preroll and w["vad"].speech_started:
+            frames = list(w["frames"])        # talking right now (after the last mute): keep it all
+        elif keep_preroll:
             n = 0
             for chunk in reversed(w["frames"]):
                 if n >= self.preroll:

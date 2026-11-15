@@ -226,7 +226,10 @@ class App:
                     self._speaking = False
                 if self.voice is not None:
                     # a question opens a listening window; caused_by tells whose question
-                    self.voice.on_said(text, caused_by=action.caused_by)
+                    try:
+                        self.voice.on_said(text, caused_by=action.caused_by)
+                    except Exception:
+                        log.exception("voice.on_said failed")
             finally:
                 self._speech.task_done()
 

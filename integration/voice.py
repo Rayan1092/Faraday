@@ -95,7 +95,9 @@ class Voice:
         self._request_at = 0.0
         self._wake_on = False
         self._owner_ids: Deque[str] = collections.deque(maxlen=20)   # owner speech_heard ids
-        self._owner_next_until = 0.0               # "Hey Faraday" alone: next segment is the request
+        self._seq = 0                              # wake segments, numbered as they end
+        self._owner_next_seq: Optional[int] = None # "Hey Faraday" alone: this segment is the request
+        self._chime_on_open = False                # chime when the queued owner window opens
         self._pending_doorbell = False
         self._doorbell_since = 0.0
         self._doorbell_timer: Optional[threading.Timer] = None
@@ -138,14 +140,36 @@ class Voice:
         if self._pending_doorbell:
             # the greeting (even "... leave a message?") is for the visitor
             self._cancel_doorbell_timer()
-            if self.listen_once("doorbell", purpose=VISITOR):
+            if self._visitor_window("doorbell"):
                 self._pending_doorbell = False
             else:
-                self._arm_doorbell(DOORBELL_RETRY_S)  # an owner window is open: try again soon
+                self._arm_doorbell(DOORBELL_RETRY_S)  # a window is busy: try again soon
             return
         if text.endswith("?"):
-            purpose = OWNER if caused_by is not None and caused_by in self._owner_ids else VISITOR
-            self.listen_once("question", purpose=purpose)
+            if caused_by is not None and caused_by in self._owner_ids:
+                self.listen_once("question", purpose=OWNER)
+            else:
+                self._visitor_window("question")
+
+    def _visitor_window(self, reason: str) -> bool:
+        """Open (or take over) a window for the visitor. An owner window that has
+        heard nothing since Faraday spoke becomes the visitor's (the owner said
+        "Hey Faraday" and then the doorbell rang); a pending owner request yields."""
+        if self.listen_once(reason, purpose=VISITOR):
+            return True
+        took = False
+        with self._lock:
+            if self._request is not None and self._request[0] == OWNER:
+                self._request = (VISITOR, reason)
+                self._request_at = time.monotonic()
+                return True
+            if self._purpose == OWNER and not self.recorder.window_state().get("speech_started") \
+                    and self.recorder.adjust(**self._rules(VISITOR)):
+                self._purpose, self._reason = VISITOR, reason
+                took = True
+        if took:
+            self._opened(VISITOR, reason)
+        return took
 
     def on_doorbell(self) -> None:
         """A visitor rang: listen after the greeting, or after 10 s regardless."""
@@ -205,10 +229,18 @@ class Voice:
             return {"max_s": self.wake_max_s, "silence_s": self.wake_silence_s, "no_speech_s": None}
         return {"max_s": self.max_s, "silence_s": self.silence_s, "no_speech_s": self.no_speech_s}
 
-    def _opened(self, purpose: str, reason: str) -> None:
+    def _opened(self, purpose: str, reason: str, chime: bool = False) -> None:
         self.windows_opened += 1
         self.out(f"  [mic] listening ({reason}{', owner' if purpose == OWNER else ''}),"
                  f" up to {self.max_s:.0f} s")
+        if purpose == OWNER and reason == "wake" and (chime or self._chime_on_open):
+            self._chime_on_open = False
+            if self.chime is not None:
+                self.out("  [wake] yes? (chime)")
+                try:
+                    self.chime()               # mutes the mic around itself
+                except Exception:
+                    log.exception("chime failed")
 
     def _mic_failed(self, purpose: str, reason: str) -> None:
         """listen() refused (mic busy or broken): back off, say it once, and give
@@ -280,7 +312,10 @@ class Voice:
         if purpose == "wake" or purpose is None:
             if spoke and wav is not None:
                 self._ensure_checker()
-                self._checks.put((wav, seconds))
+                with self._lock:
+                    self._seq += 1
+                    seq = self._seq
+                self._checks.put((seq, wav, seconds))
             return
         if not spoke or wav is None:
             self.out("  [mic] nobody spoke")
@@ -298,9 +333,9 @@ class Voice:
         self._doorbell_timer.start()
 
     def _doorbell_fallback(self) -> None:
-        if not self._pending_doorbell:
+        if not self._pending_doorbell or self._stop.is_set():
             return
-        if self.listen_once("doorbell", purpose=VISITOR):
+        if self._visitor_window("doorbell"):
             self._pending_doorbell = False
         elif time.monotonic() - self._doorbell_since < DOORBELL_GIVE_UP_S:
             self._arm_doorbell(DOORBELL_RETRY_S)
@@ -325,25 +360,47 @@ class Voice:
         while True:
             item = self._checks.get()
             if item is None or self._stop.is_set():
-                return
+                break
             try:
                 self._wake_check(*item)
             except Exception:
                 log.exception("wake check failed")
+        # shutting down: unchecked wake audio is not kept
+        while True:
+            try:
+                left = self._checks.get_nowait()
+            except queue.Empty:
+                break
+            if left is not None:
+                try:
+                    left[1].unlink()
+                except OSError:
+                    pass
 
-    def _wake_check(self, wav: Path, seconds: float) -> None:
-        if time.monotonic() < self._owner_next_until:
-            # "Hey Faraday" came alone just before: these are the owner's words
-            self._owner_next_until = 0.0
-            self.out("  [wake] owner request heard")
-            self._transcribe(wav, seconds, channel=OWNER, diarize=False)
-            return
+    def _wake_check(self, seq: int, wav: Path, seconds: float) -> None:
+        owner_next = self._owner_next_seq == seq
+        if owner_next:
+            self._owner_next_seq = None
         try:
             text = self.stt.transcribe(wav)
         except Exception:
             log.exception("wake STT failed")
             text = None
         rest = strip_wake(text or "", self.wake_phrase)
+        if owner_next:
+            # "Hey Faraday" came alone just before: these are the owner's words
+            # (and if it is the phrase again, the request is still to come)
+            if rest == "":
+                self.wake_heard += 1
+                self._after_phrase(seq)
+                return
+            request = text if rest is None else rest
+            if request:
+                self.out("  [wake] owner request heard")
+                self._transcribe(wav, seconds, text_override=request, channel=OWNER, diarize=False)
+            else:
+                self.out("  [stt] no words recognized")
+            return
         if rest is None:
             self.wake_ignored += 1
             try:
@@ -356,34 +413,35 @@ class Voice:
             self.out("  [wake] owner request heard")
             self._transcribe(wav, seconds, text_override=rest, channel=OWNER, diarize=False)
             return
-        # Just "Hey Faraday": the next words are the request.
+        self._after_phrase(seq)
+
+    def _after_phrase(self, seq: int) -> None:
+        """Just "Hey Faraday" (segment `seq`): the next words are the request."""
         if not self._checks.empty():
-            # the owner went on talking and that segment already ended: it's next in line
-            self._owner_next_until = time.monotonic() + OWNER_NEXT_S
+            # the owner went on talking and that segment already ended: it's next
+            self._owner_next_seq = seq + 1
             self.out("  [wake] yes?")
             return
         promoted, talking = False, False
         with self._lock:      # the segment recording now becomes the request window
-            if self._purpose == "wake":
+            if self._purpose == "wake" and self._request is None:
                 talking = bool(self.recorder.window_state().get("speech_started"))
                 if self.recorder.adjust(restart=not talking, **self._rules(OWNER)):
                     self._purpose, self._reason = OWNER, "wake"
                     promoted = True
         if promoted:
-            self._opened(OWNER, "wake")
-        else:
-            # it just ended (it'll be checked next) or another window is open
-            self._owner_next_until = time.monotonic() + OWNER_NEXT_S
-            if self._checks.empty():
-                promoted = self.listen_once("wake", purpose=OWNER)
-        if promoted and not talking and self.chime is not None:
-            self.out("  [wake] yes? (chime)")
-            try:
-                self.chime()               # mutes the mic around itself
-            except Exception:
-                log.exception("chime failed")
-        else:
+            self._opened(OWNER, "wake", chime=not talking)
+            if talking:
+                self.out("  [wake] yes?")
+            return
+        if not self._checks.empty():
+            # it ended just now and is queued: that segment is the request
+            self._owner_next_seq = seq + 1
             self.out("  [wake] yes?")
+            return
+        self.out("  [wake] yes?")
+        if self.listen_once("wake", purpose=OWNER):
+            self._chime_on_open = True     # chime once that window really opens
 
     # ---- STT (+ optional diarization) ----------------------------------------------
     def _transcribe(self, wav: Path, seconds: float, source: str = Source.SPEECH,

@@ -15,3 +15,18 @@ The owner asked for a fresh reviewer agent on every PR before merging. #41 (hand
 | also | `on_said` dropped the doorbell window if an owner window was open | The doorbell stays pending and retries every 1 s, for up to 30 s |
 
 Tests: `integration/tests/test_voice.py` and `hardware/tests/test_media.py` (`on_end`). Full suite 450 OK (3 opt-in skipped).
+
+## Second review (fresh reviewer agent on this PR) and fixes
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | After "Hey Faraday" alone was answered by a queued owner window, a leftover 15 s flag made the next unrelated speech an owner request | Wake segments are numbered. "The next words" means exactly segment N+1, armed only when that segment already ended or is ending. It is never armed when an owner window was opened instead |
+| 2 | That next segment wasn't checked: "Hey Faraday. … Hey Faraday. … turn on the light" sent "Hey Faraday." and deleted the request | It is transcribed and wake-stripped. The phrase again means "still waiting", otherwise the words (minus any phrase) are the request |
+| 3 | An open, silent owner window recorded the visitor's answer to the greeting as owner | A greeting or visitor question takes over an owner window that has heard nothing since Faraday spoke, and a pending owner request yields. No promotion while a visitor request waits. If the owner is talking, the doorbell waits and retries |
+| 4 | My mute reset threw away a sentence in progress (a visitor talking when the owner presses the intercom) | On mute, a window with speech in progress ends with what was said; only a window with no speech is reset. A delayed conversion keeps a sentence in progress whole |
+| 5 | The fallback chime played before any window existed | The chime plays when the owner window really opens |
+| 6 | A test passed through the doorbell path, not the `caused_by` one | Added a test with no doorbell, and the visitor channel is asserted |
+| 7 | Doorbell retries went on after stop, and queued wake audio stayed on disk | Both fixed |
+| 8 | An exception in `on_said` would end the speech worker and leave `speech_busy` stuck | Caught and logged |
+
+PLAN: the `channel` row now describes the `caused_by` rule, and Dell's Q31 is answered (fixed differently: no timer at all).
