@@ -228,9 +228,15 @@ def cases() -> List[Case]:
                    "One person with the hood up and the face covered, standing close to the door.",
                    Mode.NIGHT, "motion", 0, "suspicious", people=1, faces=0,
                    detections=[_P, {"label": "backpack", "count": 1, "confidence": 0.55}]),
-        _seen_case("t_vision_failed", "Honest label: vision failed (detector text only)",
-                   "One person is at the door.", Mode.AWAY, "doorbell", 1, "unknown", people=1, faces=1,
+        _seen_case("t_vision_failed", "Honest label: vision failed, the detector saw 1 person who rang",
+                   "One person is at the door.", Mode.AWAY, "doorbell", 1, "visitor", people=1, faces=1,
                    detections=[_P], vision_ok=False),
+        _seen_case("t_both_failed", "Honest label: vision and the detector both failed",
+                   "Photo saved.", Mode.AWAY, "doorbell", 1, "unknown", people=None, faces=None,
+                   detections=None, vision_ok=False),
+        _seen_case("t_said_package", 'Honest label: plain visitor who rang and said "package"',
+                   "One person at the front door, face visible.", Mode.AWAY, "doorbell", 1, "delivery",
+                   people=1, faces=1, detections=[_P], said="package"),
         Case("summary", "Owner: summary of the log (free text)", Mode.HOME,
              _free_text(lambda b: b.summarize(FACTS)), _summary_ok, _summary_final_ok),
         Case("i_speech_delivery", 'Instruction, away visitor: "Hi, I have a package for Sam." '
@@ -242,10 +248,6 @@ def cases() -> List[Case]:
              '"Hi, I have a package, where should I leave it?"', Mode.AWAY,
              _speech_with_instruction("", "Hi, I have a package, where should I leave it?"),
              _says("leave"), _says("leave it by the door", "let the owner know")),
-        Case("confrontation", "Alarm: one line that mentions what the camera sees (free text)",
-             Mode.AWAY, _free_text(lambda b: b.confront(events.FAKE_DESCRIPTION)),
-             _line_mentions("jacket", "box", "cardboard", "dark"),
-             _line_mentions("jacket", "box", "cardboard", "dark")),
     ]
 
 
@@ -429,7 +431,7 @@ def run_bench(brain: Brain, runs: int, only: Optional[List[str]] = None,
                 model_ok = case.model_check(text)  # type: ignore[arg-type]
                 final_ok = case.final_check(text)  # type: ignore[arg-type]
                 unsafe, fallback, sample, dropped = False, text is None, text, []
-                role = brain.force_role or "smart"   # confrontation and summary use the smart model
+                role = brain.force_role or "smart"   # the summary uses the smart model
             rows.append({"model_ok": model_ok, "final_ok": final_ok, "unsafe": unsafe,
                          "fallback": fallback, "seconds": round(took, 2), "role": role,
                          "result": sample, "dropped": dropped})
@@ -547,7 +549,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     assessor = ThreatAssessor.from_settings(settings, log=lambda _m: None)
     if args.force == "smart":  # the threat label normally runs on the fast model
         assessor = ThreatAssessor(brain.client, cfg["model"], log=lambda _m: None)
-    elif args.force == "fast":  # and the confrontation / summary normally on the smart one
+    elif args.force == "fast":  # and the summary, normally on the smart one
         brain.client = brain.fast_client
     for client in {id(c): c for c in (brain.client, brain.fast_client, assessor.client) if c}.values():
         if getattr(client, "no_think", None) == "auto":

@@ -20,7 +20,7 @@ decision.elapsed_s  # Bonsai call time (also printed)
 4. Stored user rules fire.
 5. Bonsai's actions are added on top, minus repeats. A photo is never answered by the model: the doorbell greeting, the warning and the alarm line are fixed and spoken by code.
 
-Then the software actions run: `set_mode` goes back through `modes/`, `add_rule` is stored in `rules/`, and `summarize_log` is spoken. At an alarm (Away or Night), a background thread asks Bonsai for one confrontation line once the photo description arrives. It's dropped if the owner disarmed meanwhile. `on_action` / `on_event` fire as soon as each thing exists, and one lock serializes the app, the dashboard and background threads. See PLAN.md Q21/Q22.
+Then the software actions run: `set_mode` goes back through `modes/`, `add_rule` is stored in `rules/`, and `summarize_log` is spoken. At an alarm (Away or Night) the fixed alarm line is all that's said: nothing spoken ever describes the person (owner, second Mac test). A suspicious label that raises the warning gets the fixed warning line. `on_action` / `on_event` fire as soon as each thing exists, and one lock serializes the app, the dashboard and background threads. See PLAN.md Q21/Q22.
 
 | File | What it does |
 |---|---|
@@ -30,13 +30,13 @@ Then the software actions run: `set_mode` goes back through `modes/`, `add_rule`
 | `fallback.py` | Keyword rules used when Bonsai errors, times out, returns garbage or nothing usable. Includes `parse_rule()` for rules by voice |
 | `threat.py` | The threat label after every photo: delivery, visitor, suspicious, nobody or unknown, with a reason. Plain code first: zero people from NV's detector is always nobody; failed vision is "unknown, couldn't analyse the photo" (no model call). Otherwise the 2B judges the 9B's description plus the detector's people, faces and objects, and code checks it: warning signs escalate, rang with a plain face is a visitor or a delivery, stayed without ringing while armed is suspicious, and the reason must name what was seen ("1 person, holding a box", "face covered") or code writes it from the facts |
 | `bench_photos.py` | `python3 -m brain.bench_photos <folder>` on the Mac: real photos named `<expected>-<doorbell|motion>-<n>.jpg` go through NV's detector, the vision model and the label. Writes `docs/bench/<date>-photos.md` with the accuracy |
-| `look.py` | "Who's at the door?" (Home or Night). Plain code spots the question, the pipeline says "Checking the camera." and takes a fresh photo (`take_photo`, source dashboard), then speaks the 9B vision description plus the threat label in words. If the camera fails and nothing describes the photo: "I can't see the door right now." A detector-only description (NV's `described_by: "detector"`) is spoken. If no photo comes back in 65 s, the same line, but only when nothing else happened since the question. A late photo is dropped quietly, and nobody is greeted |
+| `look.py` | "Who's at the door?" (Home or Night). Plain code spots the question, the pipeline says "Checking the camera." and takes a fresh photo (`take_photo`, source dashboard), then speaks facts only: the detector's people count and the threat label in words ("One person is at the front door. It looks like a delivery."), never the description, which stays on the dashboard. If the camera fails and nothing describes the photo: "I can't see the door right now." If no photo comes back in 65 s, the same line, but only when nothing else happened since the question. A late photo is dropped quietly, and nobody is greeted |
 | `summary.py` | `summarize_log`. The window is "since the house was last armed". Plain code collects the facts, `Brain.summarize()` turns them into speech, and `spoken_list()` is the fallback |
 | `bonsai.py` | Stdlib HTTP client for LM Studio. Sends `reasoning_effort: "none"`, because with thinking on Bonsai spends `max_tokens` reasoning and never calls a tool. The Mac's MLX 9B thinks anyway (PR #40), so a 16-token probe at startup checks each model: one that thinks gets **no-think prompts** (`/v1/completions` with the model's own chat template and an empty, closed `<think></think>`, so it cannot think; tool calls parsed from the template's `<tool_call>` XML). Any reply that still shows thinking switches the client and is asked again once. Optional `llm.no_think`: `auto` (default), `raw` or `chat` |
 | `pipeline.py` | `Pipeline.handle(event)`, the Dell-side entry point (PLAN.md Q21) |
 | `safety.py` | Spots disarm requests so they're answered in code. The passphrase check and mode state are in `modes/`, and the brain never gets them |
 | `settings.py` | Loads settings and picks the `llm.profile` |
-| `owner.py` | The owner's requests ("Hey Faraday, ...": `speech_heard.channel` "owner", or untagged speech at Home). Fixed intents: arm away/night, passphrase, summary, who's at the door, add rule, add instruction, light on/off. The 2B picks one through a forced-choice `route` tool, and code checks it against the words: clear keywords win, and an intent with nothing in the words is refused. Anything else gets "Sorry, I didn't catch that."; a cut-off request is asked to repeat. Never a visitor message. While armed, nothing changes except through the passphrase |
+| `owner.py` | The owner's requests ("Hey Faraday, ...": `speech_heard.channel` "owner", or untagged speech at Home). Fixed intents: arm away/night, passphrase, summary, who's at the door, add rule, add instruction, light on/off. The 2B picks one through a forced-choice `route` tool, and code checks it against the words: clear keywords win, and an intent with nothing in the words is refused. Anything else gets "Sorry, I can't help with that. You can ask who's at the door, what happened, or arm the house." (while armed: "The system is armed. I can't make changes right now."); a cut-off request is asked to repeat. Never a visitor message. While armed, nothing changes except through the passphrase |
 | `lines.py` | Every fixed spoken line in one tone. `python -m brain.lines [--json]` lists them for NV's pre-rendering |
 | `prompts.py` | Prompt profiles. `small` is for 2B/4B and tuned with the bench. `9b` is for the Mac mini. Picked from the model id, or `llm.prompt_profile` |
 | `vision.py` | `describe_photo(path, caused_by, describer)` gives a `photo_described` event (PLAN.md seam 4). It tries Bonsai vision, and if that fails it still returns a valid event saying "No description available" |
@@ -52,12 +52,12 @@ Code fix-ups on top of Bonsai's answer, all recorded in `Decision.fixups`, so th
 - A visitor mentions a package while the owner's delivery instruction is stored: the reply always includes the owner's words.
 - The spoken summary left out the visitor's message: code adds it (`summary.ensure_messages`).
 
-Free-text Bonsai calls (no tools): `Brain.summarize(facts)` and `Brain.confront(description)`. Each returns one clean line, or `None` when there's no model or the call fails.
+Free-text Bonsai call (no tools): `Brain.summarize(facts)`. It returns one clean line, or `None` when there's no model or the call fails.
 
 `photo_described` is traced back through `caused_by` (`photo_described` → `take_photo` → event, see `photo_cause()`):
 - **Every photo:** the threat label, then nothing spoken by the model. The Away doorbell greeting already went out at the ring (code), the warning line comes from the baseline when the 15 s grace period ends with no doorbell, and Night stays quiet.
 - **"Who's at the door?" photos** (`take_photo` with source dashboard): code speaks the description and the label (`look.py`).
-- **Alarm photos:** a background thread asks Bonsai for one line to the intruder about what it sees (`Brain.confront`), with a code fallback.
+- **Alarm photos:** nothing is said about them; the fixed alarm line was already spoken at the alarm.
 
 Tests (no LM Studio needed): `python -m unittest discover` from the repo root.
 
