@@ -18,6 +18,8 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from shared import ActionType, EventType, Mode
 
+from .lines import NOTHING_HAPPENED
+
 Entry = Dict[str, Any]
 _LIGHT_NAMES = {"porch_light": "porch light", "living_room_lamp": "living room lamp",
                 "spare": "spare outlet"}
@@ -134,7 +136,7 @@ def facts(h: Happened) -> List[str]:
 def spoken_list(h: Happened) -> str:
     """The plain-code fallback: a simple list, max 240 characters."""
     if h.empty:
-        return "Nothing happened while you were out."
+        return NOTHING_HAPPENED
     parts = []
     if h.doorbells:
         parts.append(f"the doorbell rang {_times(h.doorbells)}")

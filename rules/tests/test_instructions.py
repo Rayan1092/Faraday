@@ -138,7 +138,7 @@ class ThroughThePipeline(unittest.TestCase):
             client = FakeClient(tool_calls(("speak", {"text": "Sure!"})))
             p, _ = pipeline(tmp, client)
             r = p.handle(events.speech(SIDE_DOOR))
-            self.assertEqual(said(r), ["Okay. If a delivery comes, I'll ask them to leave it by the side door."])
+            self.assertEqual(said(r), ["Understood. If a delivery comes, I'll ask them to leave it by the side door."])
             self.assertEqual(client.calls, [])                    # plain code, no Bonsai
             self.assertEqual(p.instructions.get("delivery")["request"], "leave it by the side door")
 
@@ -160,7 +160,7 @@ class ThroughThePipeline(unittest.TestCase):
             p, _ = pipeline(tmp)
             p.handle(events.speech(SIDE_DOOR))
             r = p.handle(events.speech("Faraday, forget the delivery instruction."))
-            self.assertEqual(said(r), ["Okay. I've forgotten the delivery instruction."])
+            self.assertEqual(said(r), ["Understood. I've removed the delivery instruction."])
             self.assertEqual(p.instructions.all(), [])
 
     def test_delivery_hears_the_owners_spot_without_bonsai(self):

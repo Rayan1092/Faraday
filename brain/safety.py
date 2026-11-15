@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 
-# Someone asking to disarm. Answered with "say the passphrase", never via the AI.
+# Someone asking to disarm. Answered by plain code with the refusal line, never via the AI.
 DISARM_REQUEST = re.compile(
     r"\b(disarm\w*|unlock\w*|deactivate\w*|unarm\w*"
     r"|(turn|switch|shut) off (the )?(alarm|security|guard|system|faraday)"
