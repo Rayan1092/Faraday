@@ -77,8 +77,8 @@ Facts this is built on (owner, 2026-11-14):
 
   "audio": {
     "mic_device": null, "speaker_device": null, "sample_rate": 16000, "max_record_s": 8,
-    "listen": {"max_s": 6, "silence_s": 0.8, "no_speech_s": 3},
-    "wake": {"enabled": true, "phrase": "hey faraday", "window_s": 4}
+    "listen": {"max_s": 15, "silence_s": 1.8, "no_speech_s": 8, "after_speech_s": 0.3},
+    "wake": {"enabled": true, "phrase": "hey faraday", "silence_s": 0.7, "max_s": 10}
   },
 
   "camera": {"index": 0, "width": 1280, "height": 720},

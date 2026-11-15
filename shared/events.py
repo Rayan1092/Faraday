@@ -51,6 +51,14 @@ class SpeechHeardData:
     audio_path: Optional[str] = None    # "captures/audio/....wav", relative to repo root
     duration_s: Optional[float] = None
     voices: Optional[int] = None        # distinct voices (Argmax diarization), if it finished in time
+    channel: Optional[str] = None       # SpeechChannel.*: "owner" (after "Hey Faraday") or "visitor"
+
+
+class SpeechChannel:
+    """Who a spoken line was for (PLAN Q29). Typed text has no channel."""
+    OWNER = "owner"       # after the wake phrase, or answering Faraday's question to the owner
+    VISITOR = "visitor"   # a listening window: doorbell, Faraday's question to a visitor
+    ALL = frozenset({OWNER, VISITOR})
 
 
 @dataclass
@@ -242,4 +250,7 @@ def validate_event(d: Dict[str, Any]) -> List[str]:
         v = data["voices"]
         if isinstance(v, bool) or not isinstance(v, int) or v < 1:
             errors.append("data.voices must be a whole number >= 1")
+    if d["type"] == EventType.SPEECH_HEARD and data.get("channel") is not None:
+        if data["channel"] not in SpeechChannel.ALL:
+            errors.append(f"data.channel must be one of {sorted(SpeechChannel.ALL)} or null")
     return errors

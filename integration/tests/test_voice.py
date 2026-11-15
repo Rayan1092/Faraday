@@ -1,4 +1,4 @@
-"""Hands-free voice: wake phrase, listening windows, dashboard hooks. No mic.
+"""Hands-free voice: continuous wake listening, windows, owner/visitor channel. No mic.
 
     python -m unittest integration.tests.test_voice
 """
@@ -17,8 +17,7 @@ from shared import Mode, validate_event
 from hardware.audio import MicGate, Recorder
 from hardware.flipper.fake import FakeFlipper
 from hardware.settings import CONFIG_DIR
-from hardware.tests.test_listen import clip
-from hardware.tests.test_speech import FakeStream
+from hardware.tests.test_listen import LiveMic, clip
 from integration.app import App
 from integration.standins import StandInCamera
 from integration.tests.test_app import wait_until
@@ -36,18 +35,6 @@ class FakeSTT:
     def transcribe(self, wav):
         self.calls.append(Path(wav))
         return self.texts.pop(0) if self.texts else None
-
-
-class Clips:
-    """Stream factory: plays the given clips in order, then quiet ones."""
-
-    def __init__(self, *paths, quiet):
-        self.paths, self.quiet, self.opened = list(paths), quiet, 0
-
-    def __call__(self, **kw):
-        self.opened += 1
-        path = self.paths.pop(0) if self.paths else self.quiet
-        return FakeStream(path, **kw)
 
 
 class WakePhrase(unittest.TestCase):
@@ -69,105 +56,121 @@ class WakePhrase(unittest.TestCase):
 
 
 class Base(unittest.TestCase):
+    """A Voice on one fake live microphone (LiveMic, 4x real time)."""
+
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp(prefix="faraday-voice-"))
-        self.quiet = clip(("quiet", 2.5), path=self.dir / "quiet.wav")
-        self.speech = clip(("quiet", 0.3), ("speech", 1.2), ("quiet", 1.5), path=self.dir / "speech.wav")
+        self.speech = clip(("quiet", 0.3), ("speech", 1.2), ("quiet", 2.5), path=self.dir / "speech.wav")
         self.got = []
         self.said = []
+        self.chimes = []
         self.gate = MicGate()
+        self.mic = LiveMic()
+        self.busy = False
+        self.v = None
 
     def tearDown(self):
+        if self.v is not None:
+            self.v.stop()
         shutil.rmtree(self.dir, ignore_errors=True)
 
-    def voice(self, stt, *clips, wake=None):
-        self.clips = Clips(*clips, quiet=self.quiet)
-        rec = Recorder(self.gate, audio_dir=self.dir / "out", stream_factory=self.clips)
-        return Voice(rec, stt, self.got.append, out=self.said.append,
-                     listen={"max_s": 6, "silence_s": 0.8, "no_speech_s": 1.5},
-                     wake={"enabled": True, "window_s": 3, **(wake or {})})
+    def voice(self, stt, wake=None, **kw):
+        rec = Recorder(self.gate, audio_dir=self.dir / "out", stream_factory=self.mic)
+        self.v = Voice(rec, stt, self.got.append, out=self.said.append,
+                       listen={"max_s": 15, "silence_s": 1.8, "no_speech_s": 2.0, "after_speech_s": 0.3},
+                       wake={"enabled": True, "silence_s": 0.7, **(wake or {})},
+                       busy=lambda: self.busy, chime=lambda: self.chimes.append(time.monotonic()), **kw)
+        return self.v
+
+    def say(self, *parts):
+        self.mic.say(clip(*parts, path=self.dir / f"c{len(self.said)}{time.monotonic_ns()}.wav"))
+
+    def events(self, n=1, timeout=15):
+        self.assertTrue(wait_until(lambda: len(self.got) >= n, timeout=timeout), self.said)
+        return self.got
 
 
 class Windows(Base):
-    def test_listen_once_gives_speech_heard(self):
-        v = self.voice(FakeSTT("Package for Sam, I left it by the side door."), self.speech)
-        self.assertTrue(v.listen_once("button"))
-        self.assertTrue(wait_until(lambda: len(self.got) == 1, timeout=10))
-        ev = self.got[0]
+    def test_window_gives_speech_heard_with_visitor_channel(self):
+        v = self.voice(FakeSTT("Package for Sam, I left it by the side door."))
+        self.assertTrue(v.listen_once("doorbell"))
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        self.say(("speech", 1.2), ("quiet", 2.5))
+        ev = self.events()[0]
         self.assertEqual(validate_event(ev.to_dict()), [])
-        self.assertEqual((ev.type, ev.source, ev.data["text"]),
-                         ("speech_heard", "speech", "Package for Sam, I left it by the side door."))
-        self.assertAlmostEqual(ev.data["duration_s"], 2.3, delta=0.4)
+        self.assertEqual((ev.type, ev.source, ev.data["text"], ev.data["channel"]),
+                         ("speech_heard", "speech", "Package for Sam, I left it by the side door.", "visitor"))
         self.assertFalse(any("Package" in s for s in self.said))        # raw text never printed
 
+    def test_window_ends_silence_s_after_the_speaker_stops_not_before(self):
+        """Owner: 0.8 s cut people off mid-sentence. 1.8 s now."""
+        v = self.voice(FakeSTT("Hi, I ... have a package."))
+        v.listen_once("doorbell")
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        self.say(("speech", 0.8), ("quiet", 1.2), ("speech", 0.8), ("quiet", 3.0))   # a 1.2 s pause
+        ev = self.events()[0]
+        self.assertGreater(ev.data["duration_s"], 0.8 + 1.2 + 0.8)       # both halves, one line
+
     def test_question_opens_a_window_statement_does_not(self):
-        v = self.voice(FakeSTT("Yes please."), self.speech)
+        v = self.voice(FakeSTT("Yes please."))
         v.on_said("Night mode on. Sleep well.")
-        time.sleep(0.3)
+        time.sleep(0.5)
         self.assertEqual(v.windows_opened, 0)
         v.on_said("Would you like to leave a message?")
-        self.assertTrue(wait_until(lambda: len(self.got) == 1, timeout=10))
-        self.assertEqual(v.windows_opened, 1)
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        self.say(("speech", 1.0), ("quiet", 2.5))
+        self.events()
 
     def test_doorbell_opens_window_after_the_greeting(self):
-        v = self.voice(FakeSTT("Hello?"), self.speech)
+        v = self.voice(FakeSTT("Hello?"))
         v.on_doorbell()
-        time.sleep(0.2)
+        time.sleep(0.3)
         self.assertEqual(v.windows_opened, 0)              # waits for the greeting
         v.on_said("Hello, I'm Faraday.")                   # no "?" but a doorbell is pending
         self.assertTrue(wait_until(lambda: v.windows_opened == 1))
-        self.assertTrue(wait_until(lambda: len(self.got) == 1, timeout=10))
 
-    def test_window_waits_while_faraday_talks(self):
-        v = self.voice(FakeSTT("Hi"), self.speech)
+    def test_window_waits_until_faraday_has_finished_plus_a_moment(self):
+        """Owner: it opened while Faraday was still talking. Now: not while a line
+        is queued or being made (busy), and only after_speech_s after unmute."""
+        v = self.voice(FakeSTT("Hi"))
+        self.busy = True
         self.gate.mute()
-        self.assertTrue(v.listen_once("button"))
-        time.sleep(0.4)
-        self.assertEqual(v.windows_opened, 0)              # muted: not yet
+        self.assertTrue(v.listen_once("question"))
+        time.sleep(0.5)
+        self.assertEqual(v.windows_opened, 0)
+        self.gate.unmute()                                 # one line done, another coming
+        time.sleep(0.5)
+        self.assertEqual(v.windows_opened, 0)
+        self.gate.mute()                                   # the second line
+        self.busy = False
+        time.sleep(0.3)
+        self.assertEqual(v.windows_opened, 0)
+        t0 = time.monotonic()
         self.gate.unmute()
         self.assertTrue(wait_until(lambda: v.windows_opened == 1))
-        self.assertTrue(wait_until(lambda: len(self.got) == 1, timeout=10))
+        self.assertGreaterEqual(time.monotonic() - t0, 0.25)           # after_speech_s
 
     def test_nobody_spoke_sends_nothing(self):
-        v = self.voice(FakeSTT("should not be called"), self.quiet)
-        v.listen_once("button")
+        v = self.voice(FakeSTT("should not be called"))
+        v.listen_once("doorbell")
         self.assertTrue(wait_until(lambda: any("nobody spoke" in s for s in self.said), timeout=10))
         self.assertEqual(self.got, [])
 
-    def test_real_stt_client_over_http(self):
-        """Voice + the real SpeechToText client against a fake Argmax server."""
-        from hardware.speech import SpeechToText
-        from hardware.tests.test_speech import FakeArgmax
-        srv = FakeArgmax("Hi, I have a package for Sam.")
-        try:
-            v = self.voice(SpeechToText(srv.url, model="large-v3"), self.speech)
-            v.listen_once("button")
-            self.assertTrue(wait_until(lambda: len(self.got) == 1, timeout=10))
-        finally:
-            srv.close()
-        self.assertEqual(self.got[0].data["text"], "Hi, I have a package for Sam.")
-        self.assertIn(b'name="model"', srv.uploads[0]["body"])
+    def test_second_request_refused_while_one_is_pending_or_open(self):
+        v = self.voice(FakeSTT("a"))
+        self.assertTrue(v.listen_once("doorbell"))
+        self.assertFalse(v.listen_once("doorbell"))
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        self.assertFalse(v.listen_once("doorbell"))
 
-    def held_voice(self, wake=None):
-        """A Voice whose mic stream never ends by itself (until cancel)."""
-        class Held(FakeStream):
-            def start(self):
-                pass
-        quiet = self.quiet
-        rec = Recorder(self.gate, audio_dir=self.dir / "out",
-                       stream_factory=lambda **kw: Held(quiet, **kw))
-        return Voice(rec, FakeSTT(), self.got.append, out=self.said.append,
-                     listen={"max_s": 6, "silence_s": 0.8, "no_speech_s": 1.5},
-                     wake={"enabled": True, "window_s": 3, **(wake or {})})
-
-    def test_listening_is_true_only_while_the_window_records(self):
+    def test_listening_is_true_only_while_a_window_records(self):
         """board.listening_hook (Dell's mic indicator) reads Voice.listening."""
-        v = self.held_voice()
+        v = self.voice(FakeSTT())
         self.assertFalse(v.listening)
-        self.gate.mute()                                   # Faraday talking: window waits
-        self.assertTrue(v.listen_once("button"))
+        self.gate.mute()
+        self.assertTrue(v.listen_once("doorbell"))
         time.sleep(0.3)
-        self.assertFalse(v.listening)                      # asked for, but the mic isn't open
+        self.assertFalse(v.listening)                      # asked for, but Faraday is talking
         self.gate.unmute()
         self.assertTrue(wait_until(lambda: v.listening))
         self.gate.mute()
@@ -175,118 +178,131 @@ class Windows(Base):
         self.gate.unmute()
         v.recorder.cancel()
         self.assertTrue(wait_until(lambda: not v.listening))
-        self.assertTrue(wait_until(lambda: any("nobody spoke" in s for s in self.said)))
 
-    def test_wake_window_is_not_listening(self):
-        """The wake listener records all the time on the Mac: that isn't 'listening'."""
-        v = self.held_voice()
+    def test_wake_listening_is_not_listening(self):
+        v = self.voice(FakeSTT())
         v.start_wake()
-        try:
-            self.assertTrue(wait_until(lambda: v.recorder.recording))
-            self.assertFalse(v.listening)
-            self.assertTrue(v.listen_once("button"))       # the visitor window takes over
-            self.assertTrue(wait_until(lambda: v.listening))
-        finally:
-            v.recorder.cancel()
-            v.stop_wake()
+        self.assertTrue(wait_until(lambda: v.recorder.window_open))
+        self.assertFalse(v.listening)
 
-    def test_second_listen_refused_while_open(self):
-        v = self.voice(FakeSTT("a", "b"), self.speech, self.speech)
-        self.assertTrue(v.listen_once("button"))
-        self.assertFalse(v.listen_once("button"))
-        self.assertTrue(wait_until(lambda: len(self.got) == 1, timeout=10))
+    def test_real_stt_client_over_http(self):
+        """Voice + the real SpeechToText client against a fake Argmax server."""
+        from hardware.speech import SpeechToText
+        from hardware.tests.test_speech import FakeArgmax
+        srv = FakeArgmax("Hi, I have a package for Sam.")
+        try:
+            v = self.voice(SpeechToText(srv.url, model="large-v3"))
+            v.listen_once("doorbell")
+            self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+            self.say(("speech", 1.0), ("quiet", 2.5))
+            self.events()
+        finally:
+            srv.close()
+        self.assertEqual(self.got[0].data["text"], "Hi, I have a package for Sam.")
+        self.assertIn(b'name="model"', srv.uploads[0]["body"])
 
 
 class Wake(Base):
-    def test_hey_faraday_submits_the_request(self):
-        stt = FakeSTT("Hey Faraday, I'm heading out.")
-        v = self.voice(stt, self.speech)
-        self.assertTrue(v.start_wake())
-        try:
-            self.assertTrue(wait_until(lambda: len(self.got) == 1, timeout=10))
-        finally:
-            v.stop_wake()
-        ev = self.got[0]
-        self.assertEqual((ev.type, ev.source, ev.data["text"]), ("speech_heard", "speech", "I'm heading out."))
-        self.assertEqual(v.wake_heard, 1)
+    def test_continuous_one_stream_no_gaps(self):
+        """Owner: 4 s chunks with gaps missed "Hey Faraday". Now one stream, cut
+        at pauses: three phrases in a row all reach STT, on one stream."""
+        stt = FakeSTT("Faraday is great.", "nothing", "Hey Faraday, I'm heading out.")
+        v = self.voice(stt)
+        v.start_wake()
+        self.say(("speech", 0.8), ("quiet", 1.0), ("speech", 0.8), ("quiet", 1.0),
+                 ("speech", 1.2), ("quiet", 1.5))
+        ev = self.events()[0]
+        self.assertEqual((ev.data["text"], ev.data["channel"]), ("I'm heading out.", "owner"))
+        self.assertEqual(self.mic.streams, 1)
+        self.assertEqual(len(stt.calls), 3)
+        self.assertEqual((v.wake_heard, v.wake_ignored), (1, 2))
+        self.assertEqual(self.chimes, [])                             # request in one breath
 
     def test_plain_faraday_is_dropped_and_audio_deleted(self):
-        stt = FakeSTT("Faraday is a great name for a project.")
-        v = self.voice(stt, self.speech)
+        v = self.voice(FakeSTT("Faraday is great."))
         v.start_wake()
-        try:
-            self.assertTrue(wait_until(lambda: v.wake_ignored == 1, timeout=10))
-            time.sleep(0.3)
-        finally:
-            v.stop_wake()
+        self.say(("speech", 1.0), ("quiet", 1.5))
+        self.assertTrue(wait_until(lambda: v.wake_ignored == 1, timeout=10))
+        time.sleep(0.3)
         self.assertEqual(self.got, [])
-        self.assertFalse(stt.calls[0].exists())            # nothing kept
+        self.assertEqual(list((self.dir / "out").glob("*.wav")), [])
 
-    def test_phrase_alone_opens_a_window_for_the_request(self):
+    def test_phrase_alone_chimes_and_the_next_words_are_the_request(self):
         stt = FakeSTT("Hey Faraday.", "Turn on the porch light.")
-        v = self.voice(stt, self.speech, self.speech)
+        v = self.voice(stt)
         v.start_wake()
-        try:
-            self.assertTrue(wait_until(lambda: len(self.got) == 1, timeout=15))
-        finally:
-            v.stop_wake()
-        self.assertEqual(self.got[0].data["text"], "Turn on the porch light.")
-        self.assertTrue(any("yes?" in s for s in self.said))
+        self.say(("speech", 0.8), ("quiet", 1.5))                     # "Hey Faraday" ... pause
+        self.assertTrue(wait_until(lambda: self.chimes, timeout=10))
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))     # became the request window
+        self.say(("speech", 1.5), ("quiet", 2.5))                     # the request
+        ev = self.events()[0]
+        self.assertEqual((ev.data["text"], ev.data["channel"]), ("Turn on the porch light.", "owner"))
+        self.assertEqual(self.mic.streams, 1)
+        self.assertEqual(v.wake_ignored, 0)
+
+    def test_request_right_after_the_phrase_is_captured_whole(self):
+        """"Hey Faraday." <short pause> "turn on the light": the request starts
+        while the phrase is still at STT. It is kept, not cut and not re-chimed."""
+        stt = FakeSTT("Hey Faraday.", "Turn on the porch light.")
+
+        class SlowSTT(FakeSTT):
+            def transcribe(self, wav):
+                time.sleep(0.4)                                        # STT latency
+                return super().transcribe(wav)
+        stt = SlowSTT("Hey Faraday.", "Turn on the porch light.")
+        v = self.voice(stt)
+        v.start_wake()
+        self.say(("speech", 0.8), ("quiet", 0.9), ("speech", 1.5), ("quiet", 2.5))
+        ev = self.events()[0]
+        self.assertEqual((ev.data["text"], ev.data["channel"]), ("Turn on the porch light.", "owner"))
+        self.assertGreaterEqual(ev.data["duration_s"], 1.5)            # the whole sentence
+
+    def test_owner_answer_to_faradays_question_is_owner(self):
+        stt = FakeSTT("Hey Faraday, turn off the lamp.", "Yes, the living room one.")
+        v = self.voice(stt)
+        v.start_wake()
+        self.say(("speech", 1.2), ("quiet", 1.5))
+        self.events()
+        v.on_said("Which lamp do you mean?")                           # Faraday asks back
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        self.say(("speech", 1.0), ("quiet", 2.5))
+        ev = self.events(2)[1]
+        self.assertEqual((ev.data["text"], ev.data["channel"]), ("Yes, the living room one.", "owner"))
+
+    def test_visitor_window_takes_over_the_wake_segment_in_place(self):
+        """A doorbell during wake listening: the open segment becomes the visitor
+        window at once (no new stream), and no wake check runs on it."""
+        stt = FakeSTT("Package for Sam.")
+        v = self.voice(stt)
+        v.start_wake()
+        self.assertTrue(wait_until(lambda: v.recorder.window_open))
+        v.on_doorbell()
+        v.on_said("Hello, I'm Faraday.")
+        self.assertTrue(wait_until(lambda: v.windows_opened == 1))
+        self.say(("speech", 1.0), ("quiet", 2.5))
+        ev = self.events()[0]
+        self.assertEqual((ev.data["text"], ev.data["channel"]), ("Package for Sam.", "visitor"))
+        self.assertEqual(self.mic.streams, 1)
+        self.assertEqual((v.wake_heard, v.wake_ignored), (0, 0))
 
     def test_wake_off_without_stt(self):
-        stt = FakeSTT()
-        stt.available = False
-        v = self.voice(stt)
+        class NoSTT:
+            available = False
+        v = self.voice(NoSTT())
         self.assertFalse(v.start_wake())
-        self.assertEqual(self.clips.opened, 0)
+        self.assertTrue(any("no STT" in s for s in self.said))
 
-    def test_wake_yields_to_a_visitor_window(self):
-        """A visitor window asked for during a (silent) wake window cancels it at
-        once and gets the mic, instead of waiting for the wake window to time out."""
-        stt = FakeSTT("Package for Sam.")
-        speech = self.speech
-
-        class Waiting(FakeStream):                     # a wake window where nobody talks yet
-            def start(self):
-                pass
-
-        streams = iter([lambda **kw: Waiting(self.quiet, **kw), lambda **kw: FakeStream(speech, **kw)])
-        quiet = self.quiet
-
-        def factory(**kw):
-            return next(streams, lambda **k: FakeStream(quiet, **k))(**kw)
-
-        rec = Recorder(self.gate, audio_dir=self.dir / "out", stream_factory=factory)
-        v = Voice(rec, stt, self.got.append, out=self.said.append,
-                  listen={"max_s": 6, "silence_s": 0.8, "no_speech_s": 1.5},
-                  wake={"enabled": True, "window_s": 3})
+    def test_stop_closes_the_microphone(self):
+        v = self.voice(FakeSTT())
         v.start_wake()
-        try:
-            self.assertTrue(wait_until(lambda: rec.recording))           # wake window open
-            t0 = time.monotonic()
-            self.assertTrue(v.listen_once("button"))
-            self.assertTrue(wait_until(lambda: len(self.got) == 1, timeout=15))
-            self.assertLess(time.monotonic() - t0, 3.0)                  # didn't wait out 3 s + 2 s
-        finally:
-            v.stop_wake()
-        self.assertEqual(self.got[0].data["text"], "Package for Sam.")
-
-    def test_request_after_phrase_is_not_eaten_by_the_next_wake_window(self):
-        """Owner: "Hey Faraday." ... "Turn on the porch light." The second clip
-        must reach the request window, not a wake window that drops it."""
-        stt = FakeSTT("Hey Faraday.", "Turn on the porch light.")
-        v = self.voice(stt, self.speech, self.speech)
-        v.start_wake()
-        try:
-            self.assertTrue(wait_until(lambda: len(self.got) == 1, timeout=15))
-        finally:
-            v.stop_wake()
-        self.assertEqual(self.got[0].data["text"], "Turn on the porch light.")
-        self.assertEqual(v.wake_ignored, 0)
+        self.assertTrue(wait_until(lambda: self.mic.streams == 1))
+        v.stop()
+        self.assertTrue(self.mic._stop.is_set())
+        self.assertFalse(v.recorder.window_open)
 
 
 class Hooks(unittest.TestCase):
-    """control_hook / listen_hook wiring through the App, on the fake Flipper."""
+    """control_hook wiring through the App, on the fake Flipper."""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="faraday-hooks-"))
@@ -330,11 +346,27 @@ class Hooks(unittest.TestCase):
         self.assertTrue(wait_until(lambda: "outlet1_on" in self.fl.device.tx))
         self.assertFalse(self.app.control("porch_light", True))       # already on
 
+    def test_speech_busy_while_a_line_is_queued_or_spoken(self):
+        from shared import Action
+        done = threading.Event()
+
+        class SlowSpeaker:
+            def say(self, text):
+                done.wait(1.0)
+        self.app.speaker = SlowSpeaker()
+        self.assertFalse(self.app.speech_busy())
+        self.app._on_action(Action("speak", "rules", {"text": "Hello there."}))
+        self.assertTrue(self.app.speech_busy())
+        time.sleep(0.2)
+        self.assertTrue(self.app.speech_busy())                        # being spoken
+        done.set()
+        self.assertTrue(wait_until(lambda: not self.app.speech_busy()))
+
 
 class BuiltApp(unittest.TestCase):
     """integration/__main__.build_app wires Dell's dashboard hooks (PLAN Q26)."""
 
-    def test_listening_hook_drives_api_state(self):
+    def test_listening_hook_drives_api_state_and_listen_hook_is_gone(self):
         import argparse
         import urllib.request
         from integration.__main__ import build_app
@@ -344,18 +376,14 @@ class BuiltApp(unittest.TestCase):
         args = argparse.Namespace(fake=True, log=str(tmp / "events.jsonl"), standin_camera=True,
                                   print_speech=True, offline=True, mode=Mode.HOME,
                                   no_dashboard=False, port=0, no_mic=False, no_wake=True,
-                                  no_controls=True, controls_port=None)
+                                  no_controls=True, controls_port=None, fresh=False)
         app = build_app(args, s)
         board = app.board
         self.assertIsNotNone(board.listening_hook)
-        self.assertIsNotNone(board.listen_hook)
+        self.assertIsNone(board.listen_hook)                           # the Listen button is gone
         self.assertIs(board.control_hook.__func__, App.control)
-
-        class Held(FakeStream):
-            def start(self):
-                pass
-        quiet = clip(("quiet", 1.0), path=tmp / "quiet.wav")
-        app.voice.recorder.stream_factory = lambda **kw: Held(quiet, **kw)
+        mic = LiveMic()
+        app.voice.recorder.stream_factory = mic
         app.voice.recorder.audio_dir = tmp / "out"
 
         def listening():
@@ -364,8 +392,9 @@ class BuiltApp(unittest.TestCase):
 
         app.start()
         try:
+            self.assertTrue(wait_until(lambda: not app.speech_busy()))  # startup line said
             self.assertIs(listening(), False)              # not null: the hook is set
-            self.assertTrue(app.voice.listen_once("button"))
+            self.assertTrue(app.voice.listen_once("doorbell"))
             self.assertTrue(wait_until(lambda: listening() is True))
             app.voice.recorder.cancel()
             self.assertTrue(wait_until(lambda: listening() is False))

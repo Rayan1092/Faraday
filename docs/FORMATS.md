@@ -92,6 +92,7 @@ A transcript from Argmax STT on the Mac, or from the Windows stand-in. Before an
 | `audio_path` | string or null | `null` | `captures/audio/....wav` |
 | `duration_s` | number or null | `null` | length of the recording |
 | `voices` | int or null | `null` | distinct voices in the recording, from `argmax-cli diarize` run alongside STT on visitor recordings (PLAN Q28). Present only if diarization finished in time; it never delays the reply |
+| `channel` | string or null | `null` | `"owner"`: said after the wake phrase "Hey Faraday" (or answering Faraday's question back to the owner). `"visitor"`: from a listening window (doorbell, Faraday's question to a visitor). `null` for typed text (PLAN Q29) |
 
 ```json
 {

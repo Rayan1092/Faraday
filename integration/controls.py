@@ -1,4 +1,4 @@
-"""Controls server: live camera, intercom, outlets and Listen, on dashboard port + 1.
+"""Controls server: live camera, intercom and outlets, on dashboard port + 1.
 
 Dell's dashboard server is JSON-only (4 KB body cap) and lives in Dell's folder,
 so the binary media runs here, next to it (PLAN Q27):
@@ -6,11 +6,10 @@ so the binary media runs here, next to it (PLAN Q27):
     GET  /                  reference Controls page (works on its own, end to end)
     GET  /stream.mjpg       live camera, MJPEG (use as <img src=...>)
     GET  /frame.jpg         one current frame
-    GET  /api/status        {"camera": bool, "intercom": bool, "listen": bool, "outlets": {...}}
+    GET  /api/status        {"camera": bool, "intercom": bool, "outlets": {...}}
     POST /api/intercom      raw int16 mono PCM chunk, header X-Sample-Rate (default 16000)
     POST /api/intercom/end  the owner released the talk button
     POST /api/control       {"outlet": "porch_light", "on": true}
-    POST /api/listen        open one listening window
 
 POSTs need the header "X-Faraday: 1" (same rule as the dashboard). CORS is
 allowed only for pages served on the dashboard's port or this one, so Dell's
@@ -54,11 +53,10 @@ class _QuietServer(ThreadingHTTPServer):
 class ControlsServer:
     def __init__(self, host: str, port: int, *, feed: Any = None, intercom: Any = None,
                  control: Optional[Callable[[str, bool], bool]] = None,
-                 listen: Optional[Callable[[], bool]] = None,
                  outlet_state: Optional[Callable[[], Dict[str, str]]] = None,
                  dashboard_port: Optional[int] = None):
         self.feed, self.intercom = feed, intercom
-        self.control_fn, self.listen_fn, self.outlet_state = control, listen, outlet_state
+        self.control_fn, self.outlet_state = control, outlet_state
         self.dashboard_port = dashboard_port
         self.httpd = _QuietServer((host, port), _make_handler(self))
         self._thread: Optional[threading.Thread] = None
@@ -103,7 +101,6 @@ class ControlsServer:
         return {"camera": self.feed is not None and not getattr(self.feed, "failed", False),
                 "intercom": self.intercom is not None,
                 "intercom_active": bool(self.intercom is not None and self.intercom.active),
-                "listen": self.listen_fn is not None,
                 "outlets": self.outlet_state() if self.outlet_state else {}}
 
     def do_control(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
@@ -114,11 +111,6 @@ class ControlsServer:
             return 400, {"ok": False, "error": 'send {"outlet": "...", "on": true|false}'}
         changed = self.control_fn(outlet, on)
         return 200, {"ok": True, "changed": bool(changed)}
-
-    def do_listen(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
-        if self.listen_fn is None:
-            return 503, {"ok": False, "error": "the microphone is off"}
-        return 200, {"ok": True, "opened": bool(self.listen_fn())}
 
 
 def _make_handler(app: ControlsServer):
@@ -209,7 +201,7 @@ def _make_handler(app: ControlsServer):
                 if app.intercom is not None:
                     app.intercom.end()
                 return self._json(200, {"ok": True})
-            handlers = {"/api/control": app.do_control, "/api/listen": app.do_listen}
+            handlers = {"/api/control": app.do_control}
             handler = handlers.get(path)
             if handler is None:
                 return self._json(404, {"error": "not found"})
@@ -292,8 +284,7 @@ button.live { background: var(--warn); border-color: var(--warn); color: #fff; }
   <section><h2>Camera</h2><img id="cam" alt="Live camera"><p class="muted" id="camnote">Live view</p></section>
   <section><h2>Intercom</h2>
     <button id="talk" class="primary">Hold to talk to the door</button>
-    <p class="muted" id="talknote">The door mic is muted while you talk.</p>
-    <div class="row"><button id="listen">Listen for a reply</button></div>
+    <p class="muted" id="talknote">The door mic is muted while you talk. Faraday listens for the reply by itself.</p>
   </section>
   <section><h2>Lights</h2><div id="outlets"></div></section>
 </main>
@@ -327,15 +318,11 @@ function drawOutlets(state) {
 function refresh() {
   fetch("/api/status", { cache: "no-store" }).then((r) => r.json()).then((s) => {
     drawOutlets(s.outlets || {});
-    $("listen").disabled = !s.listen;
     $("talk").disabled = !s.intercom;
     if (!s.intercom) $("talknote").textContent = "No speaker connected.";
   }).catch(() => {});
 }
 refresh(); setInterval(refresh, 3000);
-$("listen").onclick = () => post("/api/listen").then((r) =>
-  { $("talknote").textContent = r.opened ? "Listening..." : "Already listening."; });
-
 // ---- intercom: browser mic -> 16 kHz int16 chunks -> POST /api/intercom ----
 const RATE = 16000;
 let ctx = null, src = null, node = null, stream = null, sending = false, queue = Promise.resolve();

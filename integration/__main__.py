@@ -72,20 +72,22 @@ def build_app(args: argparse.Namespace, settings) -> App:
         wake = dict(audio.get("wake", {}))
         if args.no_wake:
             wake["enabled"] = False
+        from hardware.audio import play_chime
         from hardware.diarize import Diarizer
+        speaker_device = audio.get("speaker_device")
         app.voice = Voice(Recorder.from_settings(settings, gate), SpeechToText.from_settings(settings),
                           app.submit, listen=audio.get("listen"), wake=wake,
                           diarizer=Diarizer.from_settings(settings),
-                          diarize_grace_s=Diarizer.grace_s(settings))
+                          diarize_grace_s=Diarizer.grace_s(settings),
+                          busy=app.speech_busy,
+                          chime=None if args.print_speech else (lambda: play_chime(gate, speaker_device)))
     if app.board is not None:
-        # Hooks for Dell's dashboard (PLAN Q26). listen_hook opens one window
-        # (Listen button); talk_hook is the old Talk button, same thing now.
-        # listening_hook drives the mic-open indicator exactly (True only while a
-        # visitor/Listen window is recording).
+        # Hooks for Dell's dashboard (PLAN Q26). listening_hook drives the mic-open
+        # indicator (True only while a visitor/owner window is recording). The
+        # Listen button and its listen_hook are gone (owner 2026-11-14: the mic's
+        # own mute button is the off switch; windows open by themselves).
         if app.voice is not None:
             voice = app.voice
-            app.board.listen_hook = voice.listen_once
-            app.board.talk_hook = voice.listen_once
             app.board.listening_hook = lambda: voice.listening
         app.board.control_hook = app.control
     if feed is not None:
@@ -105,7 +107,6 @@ def build_app(args: argparse.Namespace, settings) -> App:
         app.controls = ControlsServer(
             cfg.get("host", dash.get("host", "127.0.0.1")), port, feed=feed, intercom=intercom,
             control=app.control,
-            listen=(lambda: app.voice.listen_once("controls")) if app.voice is not None else None,
             outlet_state=app.outlet_states, dashboard_port=dash_port)
         app.extras.append(app.controls)
     return app
