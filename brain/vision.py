@@ -85,7 +85,10 @@ class Describer:
         settings = settings or load_settings()
         cfg = dict(llm_config(settings))
         cfg["model"] = settings.get("llm", {}).get("vision_model") or cfg["model"]
-        return cls(BonsaiClient.from_config(cfg), cfg["model"], log)
+        # Images cannot go through the raw no-think prompt: chat only, with room for a
+        # model that thinks first (NV #40 found the same on the Mac).
+        cfg.update(no_think="chat", max_tokens=max(int(cfg["max_tokens"]), 300))
+        return cls(BonsaiClient.from_config(cfg, log), cfg["model"], log)
 
     def describe(self, path: Union[str, Path]) -> Optional[str]:
         """One sentence about the photo, or None."""

@@ -178,7 +178,7 @@ class ThreatAssessor:
         from .settings import llm_config
         cfg = dict(llm_config(settings))
         cfg["model"] = cfg.get("fast_model") or cfg["model"]
-        return cls(BonsaiClient.from_config(cfg) if use_llm else None, cfg["model"], log)
+        return cls(BonsaiClient.from_config(cfg, log) if use_llm else None, cfg["model"], log)
 
     def assess(self, ctx: Context) -> Assessment:
         if self.client is None:

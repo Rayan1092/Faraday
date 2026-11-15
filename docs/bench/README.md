@@ -41,6 +41,18 @@ Both profiles ran on the 16 cases: the 9 demo phrases, 5 reworded variants, and 
 - **Summary safety net.** Bonsai's summary left out the visitor's message once per profile. Now plain code adds it if it's missing (`summary.ensure_messages`). The bench measures Bonsai alone, so that isn't counted here.
 - **Decision.** The `9b` prompts are safe to use on the Mac's 9B, and they even help the 4B a little. Defaults are unchanged for now: the 4B uses `small`, and a model id with "9b" picks `9b`. Five runs per case is a small sample. If we want the `9b` prompts on the 4B, set `"prompt_profile": "9b"` under `llm` in `config/settings.json`.
 
+## A model that thinks anyway (the Mac's MLX 9B), 2026-11-14
+
+On the Mac a Night alarm printed "Bonsai call took 7.14 s, unusable reply": the MLX 9B thinks even with `reasoning_effort: "none"` (NV #40), so its whole answer was reasoning and the content was empty. The same thing happens to the 4B here when no `reasoning_effort` is sent: 445 to 890 characters of thinking, `finish_reason: length`, empty content, 11 s. (`chat_template_kwargs: {"enable_thinking": false}` is accepted by LM Studio but ignored.)
+
+Fix (`brain/bonsai.py`): a 16-token probe at startup tells whether a model thinks. If it does, that client uses **no-think prompts**: `/v1/completions` with the model's own chat template, ending in the empty, closed `<think></think>` block the template writes when thinking is off. The model can't think, and tool calls are parsed from the template's `<tool_call>` XML. A reply that still shows thinking switches the client and is asked again once. `llm.no_think` can force `raw` or `chat`.
+
+| 4B q2_0, 2 runs per case | Model right | Final right | Fallback | Avg | Worst |
+|---|---|---|---|---|---|
+| Thinking left on (`--reasoning-effort off`), no-think prompts chosen by the probe | 46/46 | 46/46 | 0 | 4.1 s | 7.9 s |
+
+File: `2026-11-14-2252-ternary-bonsai-2-4b-q2-0-prompts-small-effort-off.md`. Before the fix, the same setting gave empty replies on every Bonsai call (each one fell back). On the Mac, the bench header's "Thinking:" line says which way each model went.
+
 ## Fast vs smart model (sustainability line)
 
 The small Bonsai (2B) handles quick owner commands and the threat label, and the 9B handles visitor conversation, the confrontation, the summary and vision (`fast_model` / `model` in settings). The table's **Model** column says which one answered each case. To measure the difference, run on the Mac mini:
