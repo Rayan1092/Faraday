@@ -35,9 +35,15 @@ from integration.app import App  # noqa: E402
 from integration.standins import StandInCamera  # noqa: E402
 
 
-def build_app(args: argparse.Namespace, settings, known_outlets=None) -> App:
+def build_app(args: argparse.Namespace, settings, known_outlets=None, parts=None) -> App:
+    """The whole app, wired as on the Mac. `parts` (tests, the demo rehearsal) swaps in
+    stand-ins without changing any wiring: "flipper", "capture_factory" (camera),
+    "speaker" (gate -> TTS), "stream_factory" (mic), "stt", "chime"."""
+    parts = parts or {}
     fake = args.fake or bool(settings.get("integration", {}).get("fake_flipper", False))
-    if fake:
+    if "flipper" in parts:
+        flipper = parts["flipper"]
+    elif fake:
         from hardware.flipper.fake import FakeFlipper
         flipper = FakeFlipper(settings)
     else:
@@ -58,11 +64,16 @@ def build_app(args: argparse.Namespace, settings, known_outlets=None) -> App:
         from hardware.vision import Vision
         detector = None if args.no_detect else Detector.from_settings(settings)
         feed = CameraFeed.from_settings(settings, detector)   # one owner: photos + live stream
+        if "capture_factory" in parts:
+            feed.capture_factory = parts["capture_factory"]
         camera = PhotoCamera(feed, Vision.from_settings(settings), detector)
     from hardware.audio import MicGate
     from hardware.speech import PrintTTS, TextToSpeech
     gate = MicGate()                     # the speaker mutes the mic while talking
-    speaker = PrintTTS(gate) if args.print_speech else TextToSpeech.from_settings(settings, gate)
+    if "speaker" in parts:
+        speaker = parts["speaker"](gate)
+    else:
+        speaker = PrintTTS(gate) if args.print_speech else TextToSpeech.from_settings(settings, gate)
     app = App(settings, flipper, camera=camera, speaker=speaker, use_llm=not args.offline,
               mode=args.mode, event_log=log, rules=rules, dashboard=not args.no_dashboard,
               port=args.port,
@@ -83,14 +94,18 @@ def build_app(args: argparse.Namespace, settings, known_outlets=None) -> App:
         speaker_device = audio.get("speaker_device")
         diarizer = Diarizer.from_settings(settings)
         owner_voice = OwnerVoice.from_settings(settings, diarizer)      # None until enrolled
-        app.voice = Voice(Recorder.from_settings(settings, gate), SpeechToText.from_settings(settings),
+        recorder = Recorder.from_settings(settings, gate)
+        if "stream_factory" in parts:
+            recorder.stream_factory = parts["stream_factory"]
+        chime = (parts["chime"] if "chime" in parts
+                 else None if args.print_speech else (lambda: play_chime(gate, speaker_device)))
+        app.voice = Voice(recorder, parts.get("stt") or SpeechToText.from_settings(settings),
                           app.submit, listen=audio.get("listen"), wake=wake,
                           diarizer=diarizer,
                           diarize_grace_s=Diarizer.grace_s(settings),
                           owner_voice=owner_voice, owner_voice_grace_s=OwnerVoice.grace_s(settings),
                           urgent=lambda: app.pipeline.modes.alert != "normal",
-                          busy=app.speech_busy,
-                          chime=None if args.print_speech else (lambda: play_chime(gate, speaker_device)))
+                          busy=app.speech_busy, chime=chime)
     if app.board is not None:
         # Hooks for Dell's dashboard (PLAN Q26). listening_hook drives the mic-open
         # indicator (True only while a visitor/owner window is recording). The
