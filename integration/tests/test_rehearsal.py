@@ -45,7 +45,7 @@ from hardware.audio import MicGate
 from hardware.flipper.fake import FakeFlipper
 from hardware.settings import CONFIG_DIR
 from hardware.speech import TextToSpeech
-from hardware.tests.test_camera import FakeLMStudio, make_scene
+from hardware.tests.test_camera import FakeLMStudio, isolate_vision_cache, make_scene
 from hardware.tests.test_listen import LiveMic
 
 RATE = 16000
@@ -135,6 +135,7 @@ def wait_until(cond, timeout=15.0, step=0.05):
 class Rehearsal(unittest.TestCase):
     def setUp(self):
         from integration.__main__ import build_app
+        isolate_vision_cache(self)
         self.tmp = Path(tempfile.mkdtemp(prefix="faraday-rehearsal-"))
         s = json.loads((CONFIG_DIR / "settings.example.json").read_text(encoding="utf-8"))
         self.passphrase = s["security"]["passphrase"]
@@ -294,6 +295,10 @@ class Rehearsal(unittest.TestCase):
 
         # 5. Someone rings during the alarm; the owner arrives and disarms with the passphrase
         #    while that visitor window is open (the wake phrase inside a visitor window)
+        # the alarm's buzz pauses the radio for 2-3 s, and the fake doorbell is one packet
+        # (a real ring holds ~1 s of them): ring once the radio listens again
+        self.step("radio back after the buzz", lambda: fl.device.rx and fl._cmds.empty()
+                  and fl._refresh_due is None)
         n_windows = sum("listening (doorbell)" in s for s in self.out)
         fl.device.press_doorbell()
         self.step("visitor window open", lambda: sum("listening (doorbell)" in s for s in self.out) > n_windows)
@@ -324,11 +329,16 @@ class Rehearsal(unittest.TestCase):
         self.assertGreater(len(self.said), n_said)
         self.quiet()
 
-        # 7. "Hey Faraday, who's at the door?" -> fresh photo, description spoken
+        # 7. "Hey Faraday, who's at the door?" -> fresh photo, the answer from facts only
+        #    (owner, Mac test: spoken lines never describe the person; the description
+        #    stays on the dashboard)
         n_photos, n_said = len(self.events("photo_described")), len(self.said)
         self.speak(780, 1.4)
         self.step("look photo taken", lambda: len(self.events("photo_described")) > n_photos)
-        self.step("description spoken", lambda: any("box" in line.lower() for line in self.said[n_said:]))
+        self.step("answer spoken", lambda: any("at the front door" in line.lower()
+                                               for line in self.said[n_said:]))
+        self.assertFalse(any("box" in line.lower() or "jacket" in line.lower()
+                             for line in self.said[n_said:]), "the description must not be spoken")
 
         # ---- the seams: valid log, no errors anywhere, dashboard answers -----------------
         for entry in self.log():

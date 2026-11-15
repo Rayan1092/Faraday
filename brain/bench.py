@@ -31,7 +31,7 @@ from shared import Action, ActionType, EventType, Mode, Source, make_action, mak
 
 from sim import events
 
-from . import owner, threat
+from . import owner, summary, threat
 from .core import Brain, Decision
 from rules import instructions as owner_instructions
 from .threat import ThreatAssessor
@@ -108,11 +108,13 @@ def _decide(event: Any, mode: str, recent: Optional[List[dict]] = None):
     return run
 
 
-FACTS = ["The house was armed at 15:09.", "The doorbell rang once.",
-         "Motion at the door twice. The alarm went off.",
-         f"The camera saw: {events.FAKE_DESCRIPTION}",
-         "Visitor message: Package for Sam, I left it by the side door.",
-         "Lights turned on: porch light, living room lamp."]
+# What happened, as collect() gives it from a log: times and counts are the log's.
+HAPPENED = summary.Happened(doorbells=1, doorbell_times=["15:20"], motions=2, alarm=True, alarm_at="15:31",
+                            warning=True, warning_at="15:30",
+                            messages=["Package for Sam, I left it by the side door."],
+                            lights=["porch light", "living room lamp"], armed_at="15:09",
+                            threats={"delivery": 1, "suspicious": 1})
+FACTS = summary.facts(HAPPENED)
 
 
 def _free_text(fn: Callable[[Brain], Optional[str]]):
@@ -130,11 +132,19 @@ def _line_mentions(*words: str) -> Callable[[Optional[str]], bool]:
 
 
 def _summary_ok(text: Optional[str]) -> bool:
-    if not text:
+    """Bonsai alone: every time and count matches the log, and the message is in it."""
+    if not text or not summary.verified(text, HAPPENED):
         return False
-    numbers = set(re.findall(r"\b(three|four|five|six|\d+)\b", text.lower())) - {"15", "09", "1509"}
-    mentions_message = any(w in text.lower() for w in ("message", "sam", "package"))
-    return mentions_message and not numbers  # the visitor's message is in it, no invented counts
+    return any(w in text.lower() for w in ("message", "sam", "package"))
+
+
+def _summary_final_ok(text: Optional[str]) -> bool:
+    """What Faraday says (Bonsai's wording plus code's times, or code's summary): the
+    message is in it, the alarm time is the log's, and every time in it is a log time."""
+    said, _ = summary.final_text(text, HAPPENED)
+    times = set(re.findall(r"\b\d{1,2}:\d{2}\b", said))
+    return (any(w in said.lower() for w in ("message", "sam")) and HAPPENED.alarm_at in said
+            and times <= set(HAPPENED.times()))
 
 
 def cases() -> List[Case]:
@@ -221,20 +231,26 @@ def cases() -> List[Case]:
                    "One person with the hood up and the face covered, standing close to the door.",
                    Mode.NIGHT, "motion", 0, "suspicious", people=1, faces=0,
                    detections=[_P, {"label": "backpack", "count": 1, "confidence": 0.55}]),
-        _seen_case("t_vision_failed", "Honest label: vision failed (detector text only)",
-                   "One person is at the door.", Mode.AWAY, "doorbell", 1, "unknown", people=1, faces=1,
+        _seen_case("t_vision_failed", "Honest label: vision failed, the detector saw 1 person who rang",
+                   "One person is at the door.", Mode.AWAY, "doorbell", 1, "visitor", people=1, faces=1,
                    detections=[_P], vision_ok=False),
+        _seen_case("t_both_failed", "Honest label: vision and the detector both failed",
+                   "Photo saved.", Mode.AWAY, "doorbell", 1, "unknown", people=None, faces=None,
+                   detections=None, vision_ok=False),
+        _seen_case("t_said_package", 'Honest label: plain visitor who rang and said "package"',
+                   "One person at the front door, face visible.", Mode.AWAY, "doorbell", 1, "delivery",
+                   people=1, faces=1, detections=[_P], said="package"),
         Case("summary", "Owner: summary of the log (free text)", Mode.HOME,
-             _free_text(lambda b: b.summarize(FACTS)), _summary_ok, _summary_ok),
+             _free_text(lambda b: b.summarize(FACTS)), _summary_ok, _summary_final_ok),
         Case("i_speech_delivery", 'Instruction, away visitor: "Hi, I have a package for Sam." '
              '(owner: "ask them to leave it by the side door")', Mode.AWAY,
              _speech_with_instruction("If a delivery comes, ask them to leave it by the side door.",
                                       "Hi, I have a package for Sam."),
              _says("side door"), _says("side door")),
-        Case("confrontation", "Alarm: one line that mentions what the camera sees (free text)",
-             Mode.AWAY, _free_text(lambda b: b.confront(events.FAKE_DESCRIPTION)),
-             _line_mentions("jacket", "box", "cardboard", "dark"),
-             _line_mentions("jacket", "box", "cardboard", "dark")),
+        Case("i_delivery_no_instruction", 'Delivery, away visitor, no owner instruction: '
+             '"Hi, I have a package, where should I leave it?"', Mode.AWAY,
+             _speech_with_instruction("", "Hi, I have a package, where should I leave it?"),
+             _says("leave"), _says("leave it by the door", "let the owner know")),
     ]
 
 
@@ -245,7 +261,8 @@ class _MemoryInstructions:
     """Just enough of rules.InstructionStore for a bench case, without a file."""
 
     def __init__(self, text: str):
-        self.items = [dict(owner_instructions.parse_instruction(text), id="ins_bench")]
+        """text "" = the owner stored no instruction."""
+        self.items = [dict(owner_instructions.parse_instruction(text), id="ins_bench")] if text else []
 
     def relevant(self, label: str = "") -> List[Dict[str, Any]]:
         want = {"delivery": ("delivery", "anyone")}.get(label, ("visitor", "anyone"))
@@ -358,11 +375,29 @@ OWNER_CASES = [
     ("o_weather", "What's the weather like tomorrow?", owner.UNCLEAR, False),
 ]
 
+# Owner, second Mac test: instructions in any phrasing. (name, text, audience, words in the request)
+INSTRUCTION_CASES = [
+    ("o_ins_want", "If a delivery comes, I want you to tell him to leave the package by the side door.",
+     "delivery", ["side door"]),
+    ("o_ins_could", "Could you tell any couriers to leave parcels behind the gate?", "delivery", ["behind the gate"]),
+    ("o_ins_friend", "When my friend Alex comes by, let him know I'm at the gym.", "visitor", ["gym"]),
+    ("o_ins_drivers", "Please ask delivery drivers to ring twice.", "delivery", ["ring twice"]),
+    ("o_ins_anyone", "If anyone comes while I'm out, tell them I'll be back at six.", "anyone", ["back at six"]),
+    ("o_ins_should", "When the Amazon guy shows up, he should put the box in the garage.", "delivery", ["garage"]),
+    ("o_ins_free", "For any parcels today, have them dropped behind the side gate.", "delivery", ["side gate"]),
+]
+
 
 def owner_cases() -> List[Case]:
-    return [Case(name, f'Owner: "Hey Faraday, {text}" -> {want}' + (" (ask to repeat)" if cut else ""),
-                 Mode.HOME, _route(text), _intent(want, cut), _intent(want, cut))
-            for name, text, want, cut in OWNER_CASES]
+    out = [Case(name, f'Owner: "Hey Faraday, {text}" -> {want}' + (" (ask to repeat)" if cut else ""),
+                Mode.HOME, _route(text), _intent(want, cut), _intent(want, cut))
+           for name, text, want, cut in OWNER_CASES]
+    for name, text, audience, words in INSTRUCTION_CASES:
+        case = Case(name, f'Owner instruction: "Hey Faraday, {text}" -> {audience}: {", ".join(words)}',
+                    Mode.HOME, _route(text), _intent(owner.ADD_INSTRUCTION), _intent(owner.ADD_INSTRUCTION))
+        case.want_instruction = (audience, words)  # type: ignore[attr-defined]
+        out.append(case)
+    return out
 
 
 def run_bench(brain: Brain, runs: int, only: Optional[List[str]] = None,
@@ -388,6 +423,13 @@ def run_bench(brain: Brain, runs: int, only: Optional[List[str]] = None,
                 cut_ok = cut is None or r.cut_off == cut
                 model_ok = r.via == "bonsai" and case.model_check(r.model_intent) and cut_ok
                 final_ok = case.final_check(r.intent) and cut_ok
+                want_ins = getattr(case, "want_instruction", None)
+                if want_ins:             # the stored instruction itself must be right
+                    ins = r.instruction or {}
+                    req = str(ins.get("request", ""))
+                    final_ok = final_ok and ins.get("audience") == want_ins[0] and all(
+                        w in req.lower() for w in want_ins[1]) and not re.match(     # well shaped (review)
+                        r"(tell|ask|let|have)\b", req, re.I) and not re.search(r"\b(if|when)\b", req, re.I)
                 unsafe, fallback = False, r.model_intent is None
                 sample = f"{r.intent} (2B: {r.model_intent})" + (" cut off" if r.cut_off else "")
                 dropped = [r.note] if r.note else []
@@ -414,9 +456,10 @@ def run_bench(brain: Brain, runs: int, only: Optional[List[str]] = None,
                 dropped = [why for _, why in decision.dropped] + decision.fixups
                 role = decision.role
             else:
-                model_ok = final_ok = case.model_check(text)  # type: ignore[arg-type]
+                model_ok = case.model_check(text)  # type: ignore[arg-type]
+                final_ok = case.final_check(text)  # type: ignore[arg-type]
                 unsafe, fallback, sample, dropped = False, text is None, text, []
-                role = brain.force_role or "smart"   # confrontation and summary use the smart model
+                role = brain.force_role or "smart"   # the summary uses the smart model
             rows.append({"model_ok": model_ok, "final_ok": final_ok, "unsafe": unsafe,
                          "fallback": fallback, "seconds": round(took, 2), "role": role,
                          "result": sample, "dropped": dropped})
@@ -534,7 +577,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     assessor = ThreatAssessor.from_settings(settings, log=lambda _m: None)
     if args.force == "smart":  # the threat label normally runs on the fast model
         assessor = ThreatAssessor(brain.client, cfg["model"], log=lambda _m: None)
-    elif args.force == "fast":  # and the confrontation / summary normally on the smart one
+    elif args.force == "fast":  # and the summary, normally on the smart one
         brain.client = brain.fast_client
     for client in {id(c): c for c in (brain.client, brain.fast_client, assessor.client) if c}.values():
         if getattr(client, "no_think", None) == "auto":

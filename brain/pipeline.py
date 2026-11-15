@@ -15,14 +15,14 @@ For each incoming event, in this order:
 8. The brain's actions are added on top, minus anything already done.
 9. Software actions run: set_mode goes back through modes/ (which refuses unsafe
    changes), add_rule is stored, summarize_log is spoken.
-10. At alarm (Away or Night), once the photo description arrives, Bonsai is asked for one
-    confrontation line in a background thread. Plain code has already spoken.
+10. At alarm (Away or Night) the fixed alarm line is all that's said: no line about the
+    person, ever (owner, Mac test: the alarm described a bag that wasn't there).
 
 Photos the owner asks for (owner_snapshot: the dashboard Snapshot button) get their
 threat label like any photo, but nobody at the door is greeted for them.
 "Who's at the door?" (Home or Night) is answered by plain code: "Checking the camera.", a
-fresh photo, then its description and threat label spoken (brain/look.py), or
-"I can't see the door right now." if the camera or vision fails or is too slow.
+fresh photo, then facts only: the people count and the threat label (brain/look.py), or
+"I can't see the door right now." if the camera fails or is too slow.
 
 Actions and events are passed to on_action / on_event as soon as they exist,
 so integration/ can run hardware without waiting for Bonsai. One lock keeps
@@ -40,7 +40,7 @@ from shared import (Action, ActionType, AlertLevel, ChangedBy, Event, EventType,
 from log import EventLog
 from modes import ModeState
 from rules import InstructionStore, RuleStore, baseline_actions, lights_off_on_disarm, merge
-from rules.baseline import DOORBELL_GREETING, warning_actions
+from rules.baseline import DOORBELL_GREETING, WARNING_LINE, warning_actions
 from modes import MotionOutcome
 from rules import instructions as owner_instructions
 
@@ -93,7 +93,6 @@ class Pipeline:
         # take_photo action id -> (event type, mode, alert level) when the photo was asked for
         self._photo_cause: Dict[str, Tuple[str, str, str]] = {}
         self._background: List[threading.Thread] = []
-        self._confronted: set = set()  # photo_described ids that already got a confrontation
         # take_photo ids the owner asked for -> "quiet" (Snapshot), "speak" (who's at the
         # door?), "late" (already answered "I can't see the door", drop it when it comes)
         self._owner_photos: Dict[str, str] = {}
@@ -118,9 +117,10 @@ class Pipeline:
         modes = ModeState(passphrase(settings), alerts.get("alarm_window_s", 60), mode,
                           min_gap_s=alerts.get("min_gap_s", 8),
                           motion_grace_s=alerts.get("motion_grace_s", 15),
-                          visitor_quiet_s=alerts.get("visitor_quiet_s", 120),
-                          # the doorbell radio reports a press after the burst ends
-                          doorbell_settle_s=float(settings.get("flipper", {}).get("burst_gap_s", 1.5)) + 1.0)
+                          visitor_quiet_s=alerts.get("visitor_quiet_s", 60),
+                          # Owner, Mac test: the warning comes 15 s after the wave. The grace
+                          # counts from the motion's first packet, with no margin by default.
+                          doorbell_settle_s=float(alerts.get("doorbell_settle_s", 0.0)))
         rules = callbacks.pop("rules", None) or RuleStore.from_settings(settings)
         for problem in rules.skipped:
             say(f"[rules] {problem}")
@@ -213,6 +213,9 @@ class Pipeline:
             motion_id = self.modes.grace_ended
             if motion_id is None:
                 return None
+            grace = self.modes.motion_grace_s + self.modes.doorbell_settle_s
+            self.say("[motion] warning now (forced)" if force
+                     else f"[motion] no doorbell within {grace:.0f} s: warning")
             result = Result()
             mode = self.modes.mode
             for e in events:          # [] when an old warning is given again: no level change
@@ -224,6 +227,11 @@ class Pipeline:
             return result
 
     def _start_grace_timer(self, delay: Optional[float] = None) -> None:
+        """The warning fires by itself when the grace period is over, with no other
+        event needed (owner, Mac test). The grace counts from the motion's first
+        packet, so the delay is what's left of it."""
+        if delay is None:
+            delay = self.modes.grace_remaining()
         if delay is None:
             delay = self.modes.motion_grace_s + self.modes.doorbell_settle_s
         timer = threading.Timer(max(0.0, delay) + 0.05, self._grace_timer_fired)
@@ -242,7 +250,8 @@ class Pipeline:
             self.say(f"[pipeline] grace timer failed: {e!r}")
 
     def wait_background(self, timeout: float = 30) -> None:
-        """Wait for background Bonsai calls (the alarm confrontation). For tests and shutdown."""
+        """Wait for background threads, if any (there are none since the confrontation
+        line went; kept for integration's shutdown and the tests)."""
         for t in list(self._background):
             t.join(timeout)
         self._background = [t for t in self._background if t.is_alive()]
@@ -270,13 +279,24 @@ class Pipeline:
         follow_ups += self.modes.on_event(event)
         for e in follow_ups:
             self._process(e, result, depth + 1)
+        if event.type == EventType.THREAT_ASSESSED and any(
+                e.type == EventType.ALERT_CHANGED and e.data.get("level") == AlertLevel.WARNING
+                for e in follow_ups):
+            # A suspicious label raised the warning (a mask, trying the handle): the fixed
+            # warning line, as when nobody rang. Nothing about the person (owner, Mac test).
+            self._emit(make_action(ActionType.SPEAK, {"text": WARNING_LINE}, Source.RULES,
+                                   caused_by=event.id), result, [])
 
         mode, alert = self.modes.mode, self.modes.alert
         done: List[Action] = []
         greet = event.type == EventType.DOORBELL and self._greet_visitor(event, alert)
         outcome = self.modes.last_outcome if event.type == EventType.MOTION else None
+        if event.type == EventType.MOTION:
+            self.say(f"[motion] {self.modes.last_reason}")     # what it did, or why it was ignored
+        elif event.type == EventType.DOORBELL and mode in Mode.ARMED:
+            self.say(f"[doorbell] {self.modes.last_reason}")
         if outcome == MotionOutcome.GRACE:
-            self._start_grace_timer()   # no doorbell in time: the warning (tick)
+            self._start_grace_timer(self.modes.grace_remaining())   # no doorbell in time: the warning
         for action in baseline_actions(event, mode, alert, outcome):
             if (action.type == ActionType.SPEAK and action.args.get("text") == DOORBELL_GREETING
                     and not greet):
@@ -294,12 +314,6 @@ class Pipeline:
                 extra = [a for a in extra if a.type != ActionType.TAKE_PHOTO]
             for action in extra:
                 self._emit(action, result, done)
-        if event.type == EventType.PHOTO_DESCRIBED:
-            cause = self._photo_cause.get(event.caused_by or "")
-            if (cause and cause[0] == EventType.MOTION and cause[1] in Mode.ARMED
-                    and cause[2] == AlertLevel.ALARM):
-                self._confront_later(event)  # the threat label below won't repeat it
-
         if (event.type == EventType.DOORBELL and mode == Mode.AWAY and greet
                 and self.instructions is not None):
             # Right after the fixed greeting: the owner's words for visitors ("tell them
@@ -317,12 +331,8 @@ class Pipeline:
             # The threat label comes first, so it can shape what Faraday says next.
             threat = self._assess(event, mode)
             self._process(threat, result, depth + 1)
-            mode = self.modes.mode
-            if (threat.data["category"] == ThreatCategory.SUSPICIOUS and mode in Mode.ARMED
-                    and threat_rules.STRONG.search(str(event.data.get("description", "")))):
-                # Warning signs in the photo (a mask, forcing the door): confront now. Just
-                # staying without ringing gets the warning; the alarm brings the confrontation.
-                self._confront_later(event)
+            # No spoken line about the photo, ever (owner, Mac test: the alarm described a
+            # bag that wasn't there). The fixed alarm line is the only thing said.
             if event.caused_by in self._owner_photos:
                 how = self._owner_photos.pop(event.caused_by)
                 timer = self._look_timers.pop(event.caused_by or "", None)
@@ -335,6 +345,17 @@ class Pipeline:
                                            Source.BRAIN, caused_by=event.id), result, done)
                 return  # the owner asked for this photo: there's no visitor to answer
 
+        if event.type == EventType.SPEECH_HEARD and not owner.is_owner_speech(event, mode):
+            # Owner, Mac test: the detector can't see boxes. A visitor who says package,
+            # parcel, delivery or courier is a delivery: this visit's label updates.
+            try:
+                relabel = threat_rules.relabel_for_speech(event, mode, self.log.recent(TRACE_WINDOW))
+            except Exception as e:     # the label is a nicety: never stop the visitor's reply
+                self.say(f"[threat] relabel failed: {e!r}")
+                relabel = None
+            if relabel is not None:
+                self.say(f"[threat] the visitor talked about a delivery: {relabel.data['reason']}")
+                self._process(relabel, result, depth + 1)
         if owner.is_owner_speech(event, mode):
             # "Hey Faraday, ...": the owner's own router, never the visitor conversation.
             self._owner_request(event, result, done, mode)
@@ -417,7 +438,7 @@ class Pipeline:
         text = str(event.data.get("text", ""))
         if REDACTED in text:
             return   # the passphrase: modes/ has already disarmed (or refused); nothing to add
-        route = self.router.route(text)
+        route = self.router.route(text, extract=mode not in Mode.ARMED)
 
         def say(text: str) -> None:
             self._emit(make_action(ActionType.SPEAK, {"text": text}, Source.BRAIN,
@@ -436,7 +457,8 @@ class Pipeline:
                 # exists to whoever is at the door. The owner just says it.
                 say(lines.CANT_DISARM)
             elif intent == owner.UNCLEAR:
-                say(lines.REPEAT if route.cut_off else lines.SORRY)
+                # Neutral, and never about a passphrase: a wrong guess sounds like this too.
+                say(lines.REPEAT if route.cut_off else lines.ARMED_NO_CHANGE)
             else:
                 say(lines.ARMED_NO_CHANGE)
             return
@@ -455,7 +477,8 @@ class Pipeline:
                 act(ActionType.OUTLET_ON if on else ActionType.OUTLET_OFF, {"outlet": outlet})
             say(" ".join(lines.light_line(outlet, on) for outlet, on in route.lights))
         elif intent == owner.ADD_INSTRUCTION:
-            if self.instructions is None or not self._owner_instruction(event, result, done):
+            if self.instructions is None or not self._owner_instruction(event, result, done,
+                                                                        route.instruction):
                 say(lines.REPEAT)
         elif intent == owner.ADD_RULE:
             rule = route.rule or self._rule_from_model(event)
@@ -488,11 +511,13 @@ class Pipeline:
         rule = next((a for a in decision.actions if a.type == ActionType.ADD_RULE), None)
         return dict(rule.args) if rule else None
 
-    def _owner_instruction(self, event: Event, result: Result, done: List[Action]) -> bool:
+    def _owner_instruction(self, event: Event, result: Result, done: List[Action],
+                           parsed: Optional[Dict[str, str]] = None) -> bool:
         """'If a delivery comes, ask them to leave it by the side door.' At Home only (the
-        owner is talking). Stores it and confirms; refuses anything beyond words."""
+        owner is talking). Stores it and confirms; refuses anything beyond words. `parsed`:
+        what the router read (keywords, or the 2B checked by code)."""
         text = str(event.data.get("text", ""))
-        parsed = owner_instructions.parse_instruction(text)
+        parsed = parsed or owner_instructions.parse_instruction(text)
         if parsed is not None:
             ins = self.instructions.add(parsed, said=text, caused_by=event.id)
             line = owner_instructions.confirmation(ins) if ins else INSTRUCTION_REFUSED
@@ -517,9 +542,10 @@ class Pipeline:
             self._emit(make_action(ActionType.SPEAK, {"text": CHECKING}, Source.BRAIN,
                                    caused_by=action.id), result, done)
             text = self.brain.summarize(summary.facts(happened))
-            if text:
-                text = summary.ensure_messages(text, happened)
-        text = text or summary.spoken_list(happened)
+        bonsai = text
+        text, via = summary.final_text(text, happened)
+        if bonsai and via == "code":
+            self.say(f"  [summary] Bonsai's summary didn't match the log, code's instead: {bonsai}")
         self._emit(make_action(ActionType.SPEAK, {"text": text}, Source.BRAIN,
                                caused_by=action.id), result, done)
 
@@ -545,36 +571,6 @@ class Pipeline:
                 voices = (e.get("data") or {}).get("voices")
                 return voices if isinstance(voices, int) else None
         return None
-
-    def _confront_later(self, event: Event) -> None:
-        """Ask Bonsai for one confrontation line without blocking the pipeline."""
-        if event.id in self._confronted:
-            return  # one line per photo, whether the alarm or the threat label asked first
-        self._confronted.add(event.id)
-        description = str(event.data.get("description", ""))
-
-        def run() -> None:
-            line = self.brain.confront(description)
-            if not line and not look.photo_failed(event):
-                line = lines.confront_line(description)   # Bonsai's line unusable: code's
-            if not line:
-                return
-            try:
-                action = make_action(ActionType.SPEAK, {"text": line}, Source.BRAIN,
-                                     caused_by=event.id)
-            except ValueError:
-                return
-            with self.lock:
-                # Bonsai can take a while. If the owner disarmed (or the alert was
-                # cleared) meanwhile, the line is stale: never confront after that.
-                if not self.modes.armed:  # disarmed meanwhile: never confront after that
-                    self.say(f"  [brain] confrontation dropped, the house was disarmed: {line}")
-                    return
-                self._emit(action, Result(), [])
-
-        thread = threading.Thread(target=run, name="faraday-confront", daemon=True)
-        self._background.append(thread)
-        thread.start()
 
 
 def snapshot_action(reason: str = SNAPSHOT_REASON, caused_by: Optional[str] = None) -> Action:

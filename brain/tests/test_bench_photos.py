@@ -39,10 +39,10 @@ class PhotoBench(unittest.TestCase):
         got = {r["photo"]: r["label"] for r in rows}
         self.assertEqual(got, {"delivery-doorbell-1.jpg": C.DELIVERY, "nobody-motion-1.jpg": C.NOBODY,
                                "suspicious-motion-1.jpg": C.SUSPICIOUS, "visitor-doorbell-1.jpg": C.VISITOR,
-                               "visitor-doorbell-2.jpg": C.UNKNOWN})          # vision failed: honest
+                               "visitor-doorbell-2.jpg": C.VISITOR})          # vision failed: the detector's facts
         md = bench_photos.to_markdown(rows, {"model": "fake"})
-        self.assertIn("right: **4/5** (80%)", md)
-        self.assertIn("Couldn't analyse the photo", md)
+        self.assertIn("right: **5/5** (100%)", md)
+        self.assertIn("face visible, rang the doorbell", md)
 
     def test_needs_named_photos(self):
         with tempfile.TemporaryDirectory() as tmp:

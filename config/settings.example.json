@@ -40,7 +40,7 @@
     "alarm_window_s": 60,
     "min_gap_s": 8,
     "motion_grace_s": 15,
-    "visitor_quiet_s": 120
+    "visitor_quiet_s": 60
   },
 
   "outlets": {
@@ -72,7 +72,8 @@
     "recent_log_lines": 8,
     "reasoning_effort": "none",
     "vision_timeout_s": 20,
-    "vision_max_tokens": 768
+    "vision_max_tokens": 120,
+    "vision_no_think": "auto"
   },
 
   "stt": {

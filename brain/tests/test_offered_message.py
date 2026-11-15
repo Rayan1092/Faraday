@@ -10,7 +10,7 @@ from brain import fallback as fb
 from brain.tests.helpers import make_brain, tool_calls
 
 OFFER = "Would you like to leave a message?"
-VISITOR = "Package for Sam, I left it by the side door."
+VISITOR = "Tell Sam the plumber came by at noon."     # not a delivery: that has its own reply
 GREETING = tool_calls(("speak", {"text": "Hello, I'm Faraday. What can I do for you?"}))
 
 
@@ -50,7 +50,7 @@ class OfferedMessage(unittest.TestCase):
                 self.assertNotIn(ActionType.SAVE_MESSAGE, [a.type for a in d.actions])
 
     def test_message_starting_with_no_is_still_saved(self):
-        text = "No, tell Sam the package is by the side door."
+        text = "No, tell Sam the plumber will call back."
         d = make_brain(GREETING).decide(heard(text), Mode.AWAY, [said(OFFER)])
         self.assertEqual(d.actions[0].type, ActionType.SAVE_MESSAGE)
 

@@ -49,7 +49,8 @@ Facts this is built on (owner, 2026-11-14):
     "recent_log_lines": 8,
     "reasoning_effort": "none",
     "vision_timeout_s": 20,
-    "vision_max_tokens": 768
+    "vision_max_tokens": 120,
+    "vision_no_think": "auto"
   },
 
   "stt": {

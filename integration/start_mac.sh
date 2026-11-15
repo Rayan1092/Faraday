@@ -90,6 +90,7 @@ vals = {
     "LLM_URL": str(prof.get("base_url", "")).rstrip("/"),
     "LLM_MODEL": prof.get("model", ""),
     "FAST_MODEL": prof.get("fast_model") or "",
+    "VISION_MODEL": llm.get("vision_model") or "",
     "STT_URL": stt_url,
     "SERVE_CMD": " ".join(shlex.quote(str(p)) for p in (serve or [])),
     "TTS_BIN": argmax_bin,
@@ -168,7 +169,7 @@ if [ "${FARADAY_SKIP_CHECKS:-0}" != "1" ]; then
   MODELS="$(curl -s -m 5 "$LLM_URL/v1/models" 2>/dev/null)"
   V0="$(curl -s -f -m 5 "$LLM_URL/api/v0/models" 2>/dev/null)"
   if [ -n "$MODELS" ] && [ -n "$LMS" ] && [ -n "$V0" ]; then
-    for m in "$LLM_MODEL" "$FAST_MODEL"; do
+    for m in "$LLM_MODEL" "$FAST_MODEL" "$VISION_MODEL"; do
       [ -z "$m" ] && continue
       # only a downloaded model (lms load never downloads), and only if it isn't loaded
       if printf '%s' "$MODELS" | "$PY" -c 'import json,sys; m=sys.argv[1]; d=json.load(sys.stdin).get("data",[]); sys.exit(0 if any(x.get("id")==m for x in d) else 1)' "$m" 2>/dev/null \
@@ -180,12 +181,12 @@ if [ "${FARADAY_SKIP_CHECKS:-0}" != "1" ]; then
     V0="$(curl -s -f -m 5 "$LLM_URL/api/v0/models" 2>/dev/null)"
   fi
   if [ -z "$MODELS" ]; then
-    fail "LM Studio not answering at $LLM_URL. Start its server (Developer tab, or: lms server start) and load $LLM_MODEL${FAST_MODEL:+ and $FAST_MODEL}."
+    fail "LM Studio not answering at $LLM_URL. Start its server (Developer tab, or: lms server start) and load $LLM_MODEL${FAST_MODEL:+ and $FAST_MODEL}${VISION_MODEL:+ and $VISION_MODEL}."
   else
-    REPORT="$(MODELS="$MODELS" V0="$V0" "$PY" - "$LLM_MODEL" "$FAST_MODEL" "$LLM_URL" <<'EOF'
+    REPORT="$(MODELS="$MODELS" V0="$V0" "$PY" - "$LLM_MODEL" "$FAST_MODEL" "$VISION_MODEL" "$LLM_URL" <<'EOF'
 import json, os, sys
-need = [m for m in dict.fromkeys(sys.argv[1:3]) if m]
-url = sys.argv[3]
+need = [m for m in dict.fromkeys(sys.argv[1:4]) if m]     # 9B, 2B, and llm.vision_model if set
+url = sys.argv[4]
 
 def ids(raw, loaded_only=False):
     try:

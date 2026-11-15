@@ -25,7 +25,7 @@ from shared import Action, Mode
 
 from hardware.flipper.fake import FakeFlipper
 from hardware.settings import CONFIG_DIR
-from hardware.tests.test_camera import make_scene
+from hardware.tests.test_camera import isolate_vision_cache, make_scene
 from hardware.tests.test_listen import LiveMic
 from integration.tests.test_rehearsal import RecordingTTS, SampleCapture, ToneSTT, tone, wait_until
 
@@ -109,6 +109,7 @@ class Base(unittest.TestCase):
 
     def setUp(self):
         from integration.__main__ import build_app
+        isolate_vision_cache(self)
         self.tmp = Path(tempfile.mkdtemp(prefix="faraday-crash-"))
         s = json.loads((CONFIG_DIR / "settings.example.json").read_text(encoding="utf-8"))
         self.lm = ToggleServer(

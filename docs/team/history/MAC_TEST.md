@@ -4,7 +4,7 @@ Everything since the last Mac session (vision, object detection, hands-free wind
 
 `argmax-cli` below means `/Users/captain/clueless/vendor/argmax-oss-swift/.build/release/argmax-cli`.
 
-## Two edits in `config/settings.json`
+## Three edits in `config/settings.json`
 
 1. Under `"audio"`, replace the `listen` and `wake` lines. The old values override the new defaults:
 
@@ -21,12 +21,20 @@ Everything since the last Mac session (vision, object detection, hands-free wind
    "prerender": true
    ```
 
+3. Under `"llm"`, change the vision token cap from 768 to 120. One sentence needs about 30 tokens, and 768 only let the 9B think for 20 s:
+
+   ```json
+   "vision_max_tokens": 120,
+   ```
+
+   If you raised `"vision_timeout_s"` for the diagnosis, set it back to `20`.
+
 Every other new setting already has the right default in the code. The full file is in `2026-11-14-1900-nv-mac-settings.md`.
 
 ## With Wi-Fi ON (downloads)
 
 1. `cd ~/Faraday && git pull`. This also brings the two detection model files (about 20 MB, in `hardware/models/`).
-2. Make the two settings edits above.
+2. Make the three settings edits above.
 3. Pick the voice:
    - `python3 -m hardware.tts_audition`. Take 10, the first 1.7B take, downloads that model.
    - Listen to the numbered takes. The 1.7B latency is **take 11's** time (take 10's includes the download); the 0.6B takes are 1-9.
@@ -36,10 +44,11 @@ Every other new setting already has the right default in the code. The full file
 
 ## With Wi-Fi OFF
 
-6. Open LM Studio, then bring everything up without starting Faraday: **`FARADAY_DRY_RUN=1 integration/start_mac.sh`**. It starts `argmax-cli serve` (it keeps running), loads the 9B and the 2B if the `lms` command is installed, and checks everything. If `lms` isn't installed, load only the 9B and the 2B by hand. Eject anything else.
-7. `python3 -m hardware.check camera`, then `python3 -m hardware.check vision`.
-   - **Expect:** the warm-up time, the detector's line, and a factual description. With nobody in view, it says "Nobody is there."
-   - **If it says FAILED:** send me the output.
+6. Open LM Studio, then bring everything up without starting Faraday: **`FARADAY_DRY_RUN=1 integration/start_mac.sh`**. It starts `argmax-cli serve` (it keeps running), loads the 9B and the 2B (and `llm.vision_model` if you set one) if the `lms` command is installed, and checks everything. If `lms` isn't installed, load only the 9B and the 2B by hand (plus `llm.vision_model` if you set one). Eject anything else.
+7. `python3 -m hardware.check camera`, then **`python3 -m hardware.check vision`** (under a minute; it also loads and times `ternary-bonsai-2-4b-mlx` if that is downloaded).
+   - **Expect:** a table, one row per model and no-think method. On the 9B, `plain` says THINKS (it ignores reasoning_effort). The row that matters is **`prefill`**: `ok`, a factual sentence ("Nobody is there." with nobody in view), under 5 s. Then a `USE: …` line (the app picks it up from its next start) and two `brain …: OK` lines (Dell's 9B and 2B calls).
+   - **If `USE` names the 4B:** add the line it prints under `"llm"` in `config/settings.json`. `start_mac.sh` then loads the 4B as well.
+   - **If it says `NO strategy stops the thinking`, or a `brain` line says PROBLEM:** in LM Studio go to My Models → the model → gear → Prompt Template. Add `{%- set enable_thinking = false -%}` as the first line, save, reload the model, and run the check again. Send me the output either way.
 8. Look at the lamps first, then run **`integration/start_mac.sh`** (one command; it starts with `--fresh` by default, `--no-fresh` keeps the old log).
    - **Startup output:** big `[ OK ]` / `[WARN]` / `[FAIL]` lines, then **READY** (it starts Faraday) or **NOT READY** (nothing started, with the list to fix). Expect OK for LM Studio and both models, Argmax STT ("started and answering" the first time), the object detection model, OpenCV, mic, speaker and camera.
    - The launcher starts plain `argmax-cli serve`. If it needs different flags on this Mac, put the exact command in `config/settings.json` under `"stt"` → `"mac"` as `"serve_command": [...]`, stop the old one (`pkill -f "argmax-cli serve"`), and run the launcher again. Its log is `cache/argmax-serve.log`.

@@ -279,7 +279,7 @@ body[data-alert="warning"] .alert-row, body[data-alert="alarm"] .alert-row { col
   overflow: hidden;
   background: rgba(0, 0, 0, 0.35);
 }
-.photo-frame img { width: 100%; height: 100%; object-fit: cover; display: block;
+.photo-frame img { width: 100%; height: 100%; object-fit: contain; display: block;
                    animation: fadein 400ms var(--ease); }
 .photo-frame img[hidden] { display: none; }
 .photo-empty {
@@ -381,7 +381,7 @@ body.toast-on .timeline-card .card-head { display: none; }
 }
 .timeline li.has-thumb { grid-template-columns: 2rem 1fr auto auto; }
 .timeline .thumb {             /* photos and alarm recordings, small */
-  grid-column: 3; width: 3.4rem; height: 2.4rem; object-fit: cover; border-radius: 0.45rem;
+  grid-column: 3; width: 3.4rem; height: 2.4rem; object-fit: contain; background: #000; border-radius: 0.45rem;
   border: 1px solid var(--stroke); margin-top: 0.15rem;
 }
 .timeline li::before {             /* the thin line joining the nodes */

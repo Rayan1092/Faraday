@@ -40,8 +40,13 @@ class FakeLMStudio:
 
     def __init__(self, content="A brown package sits by the door. Nobody is there.", status=200,
                  reasoning=None, finish_reason="stop", delay_s=0.0, models=None, error_body=None,
-                 refuse_extras=False):
+                 refuse_extras=False, thinks_unless=None, delay_for=None, reply_for=None):
         self.content, self.status, self.requests = content, status, []
+        self.delay_for = delay_for          # delay_for(body) -> seconds, instead of delay_s
+        self.reply_for = reply_for          # reply_for(body) -> (status, content, finish) or None
+        # thinks_unless(body) -> bool: like the Mac's MLX 9B, the reply is all thinking
+        # (finish "length", empty answer) unless the request turns thinking off this way
+        self.thinks_unless = thinks_unless
         self.refuse_extras = refuse_extras          # 400 when chat_template_kwargs is sent
         self.reasoning, self.finish_reason, self.delay_s = reasoning, finish_reason, delay_s
         self.models = models or []          # /api/v0/models "data"
@@ -70,17 +75,28 @@ class FakeLMStudio:
                     self.end_headers()
                     self.wfile.write(raw)
                     return
-                time.sleep(outer.delay_s)
+                time.sleep(outer.delay_for(body) if outer.delay_for else outer.delay_s)
                 msg = {"content": outer.content}
+                finish = outer.finish_reason
+                status = outer.status
+                special = outer.reply_for(body) if outer.reply_for else None
+                if special is not None:
+                    status, msg["content"], finish = special
                 if outer.reasoning is not None:
                     msg["reasoning_content"] = outer.reasoning
+                if outer.thinks_unless is not None and not outer.thinks_unless(body):
+                    msg = {"content": "", "reasoning_content": "The user wants a description. " * 100}
+                    finish = "length"
                 raw = json.dumps(outer.error_body if outer.error_body is not None else
-                                 {"choices": [{"message": msg, "finish_reason": outer.finish_reason}]}).encode()
-                self.send_response(outer.status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(raw)))
-                self.end_headers()
-                self.wfile.write(raw)
+                                 {"choices": [{"message": msg, "finish_reason": finish}]}).encode()
+                try:
+                    self.send_response(status)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                except ConnectionError:
+                    pass                    # the client timed out and left (the timeout test)
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
@@ -115,8 +131,21 @@ class SavedFileCamera:
         return self.path
 
 
+def isolate_vision_cache(test: unittest.TestCase) -> None:
+    """The no-think strategy cache goes to a temp file for this test, never to the
+    repo's cache/vision_mode.json (which the Mac's app reads)."""
+    from unittest import mock
+    import hardware.vision as vision_module
+    cache_dir = Path(tempfile.mkdtemp(prefix="faraday-vcache-"))
+    patcher = mock.patch.object(vision_module, "CACHE_FILE", cache_dir / "vision_mode.json")
+    patcher.start()
+    test.addCleanup(patcher.stop)
+    test.addCleanup(shutil.rmtree, cache_dir, ignore_errors=True)
+
+
 class Base(unittest.TestCase):
     def setUp(self):
+        isolate_vision_cache(self)
         # inside the repo's captures/ (gitignored) so relative() gives captures/...
         self.dir = Path(tempfile.mkdtemp(prefix="test-", dir=REPO_ROOT / "captures")) \
             if (REPO_ROOT / "captures").exists() else Path(tempfile.mkdtemp())
@@ -166,97 +195,353 @@ class Helpers(Base):
         self.assertTrue(rel.startswith("captures/") and "\\" not in rel, rel)
 
 
+def prefill(body):
+    return body["messages"][-1]["role"] == "assistant" and "</think>" in body["messages"][-1]["content"]
+
+
+def no_think_switch(body):
+    return "/no_think" in json.dumps(body["messages"])
+
+
 class VisionClient(Base):
-    def test_describe_sends_image_and_returns_one_sentence(self):
+    def test_one_request_with_every_no_think_switch(self):
         lm = FakeLMStudio()
         try:
-            text = Vision(lm.url, "bonsai-test").describe(self.photo)
+            v = Vision(lm.url, "bonsai-test")
+            text = v.describe(self.photo)
         finally:
             lm.close()
         self.assertEqual(text, "A brown package sits by the door. Nobody is there.")
-        content = lm.requests[0]["messages"][0]["content"]
+        body = lm.requests[0]
+        content = body["messages"][0]["content"]
         self.assertEqual(content[1]["type"], "image_url")
         self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
-        self.assertEqual(lm.requests[0]["reasoning_effort"], "none")
-        self.assertEqual(lm.requests[0]["chat_template_kwargs"], {"enable_thinking": False})
-        for words in ("how many people", "Nobody is there.", "face is visible or covered", "holds"):
+        self.assertEqual((body["max_tokens"], body["reasoning_effort"]), (120, "none"))
+        self.assertEqual(body["chat_template_kwargs"], {"enable_thinking": False})
+        self.assertEqual(body["messages"][-1], {"role": "assistant", "content": "<think>\n\n</think>\n\n"})
+        for words in ("one short factual sentence", "Nobody is there.", "face is visible or covered"):
             self.assertIn(words, content[0]["text"])
+        self.assertEqual((len(lm.requests), v.strategy), (1, "prefill"))
+
+    def test_mac_9b_thinking_turned_off_by_the_prefill(self):
+        """Mac 2026-11-15: the MLX 9B ignores reasoning_effort for images and thinks
+        until max_tokens. The empty think block, prefilled, turns it off."""
+        lm = FakeLMStudio(content="One person holds a box at the door.", thinks_unless=prefill)
+        try:
+            v = Vision(lm.url, "ternary-bonsai-2-9b-mlx")
+            self.assertEqual(v.describe(self.photo), "One person holds a box at the door.")
+            self.assertEqual(v.strategy, "prefill")
+            self.assertEqual(len(lm.requests), 1)                  # the prefill is tried first
+            n = len(lm.requests)
+            self.assertEqual(v.describe(self.photo), "One person holds a box at the door.")
+            self.assertEqual(len(lm.requests), n + 1)             # straight to prefill now
+            self.assertEqual(lm.requests[-1]["messages"][-1]["content"], "<think>\n\n</think>\n\n")
+        finally:
+            lm.close()
+
+    def test_plain_when_the_server_ignores_the_prefill(self):
+        lm = FakeLMStudio(thinks_unless=lambda body: body["messages"][-1]["role"] == "user")
+        try:
+            v = Vision(lm.url, "bonsai-test")
+            self.assertIsNotNone(v.describe(self.photo))
+        finally:
+            lm.close()
+        self.assertEqual((v.strategy, len(lm.requests)), ("plain", 2))
+
+    def test_no_think_switch_only_when_set(self):
+        """Measured 2026-11-15: /no_think alone doesn't stop Bonsai 2 thinking, so the
+        probe skips it; llm.vision_no_think "no_think" still forces it."""
+        lm = FakeLMStudio(thinks_unless=no_think_switch)
+        try:
+            with self.assertLogs("hardware.vision", "WARNING"):
+                self.assertIsNone(Vision(lm.url, "bonsai-test").describe(self.photo))
+            v = Vision(lm.url, "bonsai-test", strategy="no_think")
+            self.assertIsNotNone(v.describe(self.photo))
+        finally:
+            lm.close()
+        self.assertIn("/no_think", lm.requests[-1]["messages"][-1]["content"][0]["text"])
+
+    def test_strategy_remembered_for_the_next_start(self):
+        lm = FakeLMStudio(thinks_unless=prefill)
+        try:
+            Vision(lm.url, "m9b").describe(self.photo)
+            again = Vision(lm.url, "m9b")
+            self.assertEqual(again.strategy, "prefill")              # no probe needed
+            n = len(lm.requests)
+            again.describe(self.photo)
+            self.assertEqual(len(lm.requests), n + 1)
+        finally:
+            lm.close()
+
+    def test_strategy_that_stops_working_is_probed_again(self):
+        lm = FakeLMStudio(thinks_unless=prefill)
+        try:
+            v = Vision(lm.url, "m9b", strategy="auto")
+            v.strategy = "no_think"                                   # e.g. an old cache entry
+            with self.assertLogs("hardware.vision", "WARNING"):
+                self.assertIsNotNone(v.describe(self.photo))
+            self.assertEqual(v.strategy, "prefill")
+        finally:
+            lm.close()
+
+    def test_forced_strategy_never_probes(self):
+        lm = FakeLMStudio()
+        try:
+            v = Vision(lm.url, "m", strategy="system")
+            v.describe(self.photo)
+        finally:
+            lm.close()
+        self.assertEqual(len(lm.requests), 1)
+        self.assertEqual(lm.requests[0]["messages"][0]["role"], "system")
+
+    def test_nothing_works_is_fast_and_says_how_to_fix(self):
+        lm = FakeLMStudio(thinks_unless=lambda body: False)
+        try:
+            v = Vision(lm.url, "m9b")
+            with self.assertLogs("hardware.vision", "WARNING") as logs:
+                self.assertIsNone(v.describe(self.photo))
+            self.assertIn("enable_thinking = false", " ".join(logs.output))
+            n = len(lm.requests)
+            t0 = time.monotonic()
+            self.assertIsNone(v.describe(self.photo))                # skipped: no request, no wait
+            self.assertLess(time.monotonic() - t0, 0.5)
+            self.assertEqual(len(lm.requests), n)
+            self.assertIn("thinks before every answer", v.last["error"])
+        finally:
+            lm.close()
+
+    def test_disabled_vision_tries_again_in_the_background(self):
+        """Fixed in LM Studio meanwhile (template edited, model reloaded): it comes
+        back within 5 minutes, and no photo waits for that probe."""
+        lm = FakeLMStudio(thinks_unless=lambda body: False)
+        try:
+            v = Vision(lm.url, "m9b")
+            with self.assertLogs("hardware.vision", "WARNING"):
+                v.describe(self.photo)
+            lm.thinks_unless = prefill                               # fixed
+            v.disabled_until = time.monotonic() - 1                  # 5 minutes later
+            t0 = time.monotonic()
+            self.assertIsNone(v.describe(self.photo))                # this photo: detector
+            self.assertLess(time.monotonic() - t0, 0.5)
+            deadline = time.monotonic() + 10
+            while v.strategy is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            with v._lock:
+                pass                                                  # the background probe is done
+            self.assertEqual((v.strategy, v.disabled_until), ("prefill", 0.0))
+            self.assertIsNotNone(v.describe(self.photo))             # the next photo: Bonsai
+        finally:
+            lm.close()
+
+    def test_warm_up_picks_the_strategy_before_the_first_photo(self):
+        lm = FakeLMStudio(content="Nobody is there.", thinks_unless=prefill)
+        try:
+            v = Vision(lm.url, "m9b")
+            self.assertIsNotNone(v.warm_up())
+            self.assertEqual(v.strategy, "prefill")
+            self.assertIsNotNone(v.answer_s)
+            stale = Vision(lm.url, "m9b")
+            stale.strategy = "plain"                                 # saved, but it thinks now
+            self.assertIsNotNone(stale.warm_up())
+            self.assertEqual(stale.strategy, "prefill")
+        finally:
+            lm.close()
 
     def test_server_error_gives_none(self):
         lm = FakeLMStudio(status=500)
         try:
-            self.assertIsNone(Vision(lm.url, "m").describe(self.photo))
+            with self.assertLogs("hardware.vision", "WARNING"):
+                self.assertIsNone(Vision(lm.url, "m").describe(self.photo))
         finally:
             lm.close()
 
-    def test_unreachable_gives_none(self):
-        self.assertIsNone(Vision("http://127.0.0.1:9", "m", timeout_s=2).describe(self.photo))
+    def test_unreachable_gives_none_without_trying_every_strategy(self):
+        t0 = time.monotonic()
+        v = Vision("http://127.0.0.1:9", "m", timeout_s=4)
+        with self.assertLogs("hardware.vision", "WARNING"):
+            self.assertIsNone(v.describe(self.photo))
+        self.assertLess(time.monotonic() - t0, 6.0)
+        self.assertEqual(len(v.probe_results), 1)                     # stopped at the first
+        self.assertEqual(v.disabled_until, 0.0)                       # no rest: back with the server
 
-    # ---- Mac 2026-11-14: the 9B gave "Photo saved." with no error shown ------------
-    def describe_with(self, expect_warning=True, **kw):
-        lm = FakeLMStudio(**kw)
+    def test_a_timeout_is_no_verdict_about_thinking(self):
+        """Review of #64: a slow first image (prefill timed out) must not lead to
+        "thinks before every answer" because plain then thought."""
+        lm = FakeLMStudio(delay_for=lambda body: 1.2 if prefill(body) else 0.0,
+                          thinks_unless=lambda body: False)               # plain would think
         try:
-            v = Vision(lm.url, "bonsai-9b")
-            with self.assertLogs("hardware.vision", "WARNING") if expect_warning else _nothing():
-                text = v.describe(self.photo)
+            v = Vision(lm.url, "m9b", timeout_s=3)
+            self.assertIsNone(v.probe(per_request=0.5))
         finally:
             lm.close()
-        return text, v.last, lm
+        self.assertEqual((len(v.probe_results), v.strategy, v.disabled_until), (1, None, 0.0))
+        self.assertIn("timed out", v.probe_results[0]["error"])
 
-    def test_default_token_cap_leaves_room_for_thinking(self):
-        text, last, lm = self.describe_with(expect_warning=False)
-        self.assertEqual(lm.requests[0]["max_tokens"], 768)
-        self.assertEqual(last["finish_reason"], "stop")
-        self.assertNotIn("error", last)
-
-    def test_cut_off_while_thinking_retries_once_with_more_tokens(self):
-        text, last, lm = self.describe_with(content="", reasoning="Let me look. " * 50,
-                                            finish_reason="length")
-        self.assertIsNone(text)
-        self.assertEqual([r["max_tokens"] for r in lm.requests], [768, 2048])
-        self.assertEqual(last["attempts"], 2)
-
-    def test_thinking_cut_off_without_tags_is_not_a_description(self):
-        """Review of #43 (HIGH): plain-text thinking that hit max_tokens before any
-        </think> was taken as the description."""
-        text, last, lm = self.describe_with(
-            content="Thinking Process: 1. Analyze the Request: The user wants a description of the photo.",
-            finish_reason="length")
-        self.assertIsNone(text)
-        self.assertEqual(last["attempts"], 2)                   # retried with 2048 first
-        text, last, lm = self.describe_with(content="Thinking Process: the photo shows", finish_reason="stop")
-        self.assertIsNone(text)
-
-    def test_retry_only_if_there_is_time_for_it(self):
-        lm = FakeLMStudio(content="", reasoning="hmm " * 50, finish_reason="length", delay_s=0.6)
+    def test_cut_off_reasoning_without_an_opener_is_not_a_description(self):
+        """Review of #64: a monologue that runs out of tokens never becomes the
+        description, and its strategy is not saved."""
+        monologue = ("The image shows a plain door. There are no people visible. I should describe "
+                     "this in one sentence as the prompt asks. So the answer is Nobody is there. But "
+                     "wait, so I")
+        lm = FakeLMStudio(content=monologue, finish_reason="length")
         try:
-            v = Vision(lm.url, "bonsai-9b", timeout_s=1.5)
+            v = Vision(lm.url, "m9b")
             with self.assertLogs("hardware.vision", "WARNING"):
                 self.assertIsNone(v.describe(self.photo))
         finally:
             lm.close()
-        self.assertEqual(len(lm.requests), 1)                   # 0.9 s left < 2 x 0.6 + 1
+        self.assertIsNone(v.strategy)
+        self.assertGreater(v.disabled_until, 0.0)                         # rests: photos don't wait
+        self.assertNotIn("Prompt Template", v.disabled_why)               # but no "thinks" verdict
+        t0 = time.monotonic()
+        self.assertIsNone(v.describe(self.photo))
+        self.assertLess(time.monotonic() - t0, 0.5)
 
-    def test_a_400_for_another_reason_keeps_the_thinking_switch(self):
-        lm = FakeLMStudio(status=400, error_body={"error": "No models loaded"})
+    def test_real_descriptions_are_not_taken_for_reasoning(self):
+        from hardware.vision import REASONING_WORDS, looks_like_thinking
+        for text in ("Looking at the camera, one man in a black hoodie holds a brown box.",
+                     "So, in the doorway, one woman holds an umbrella.",
+                     "I see one man at the front door holding a brown box.",
+                     "One delivery driver with an I.D. badge holds a box.",
+                     "One woman stands at the door, appearing to wait for an answer."):
+            self.assertFalse(looks_like_thinking(text), text)
+            self.assertIsNone(REASONING_WORDS.search(text), text)
+        for text in ("I should describe this in one sentence.", "But wait, the prompt says",
+                     "Let me look again.", "So the answer is Nobody is there."):
+            self.assertIsNotNone(REASONING_WORDS.search(text), text)
+
+    def test_empty_cut_off_reply_is_hidden_thinking(self):
+        lm = FakeLMStudio(content="", finish_reason="length")
         try:
-            v = Vision(lm.url, "bonsai-9b")
+            v = Vision(lm.url, "m9b")
+            with self.assertLogs("hardware.vision", "WARNING") as logs:
+                self.assertIsNone(v.describe(self.photo))
+        finally:
+            lm.close()
+        self.assertIn("enable_thinking = false", " ".join(logs.output))   # the real verdict
+
+    def test_whole_sentences_never_invents_one(self):
+        from hardware.vision import whole_sentences
+        run_on = ("A man in a dark hooded jacket stands at the front door holding a large brown "
+                  "cardboard box with both hands " * 4).strip()             # ~400 chars, no stop
+        for text, want in (("1. One person holds a box and his face is", None),
+                           ('"Nobody is there." The porch light is on and the', "Nobody is there."),
+                           ("One man in a Dr. Pepper shirt holds a can and", None),
+                           ("One man waits at the door of Apt B. He holds a", None),
+                           (run_on, None),
+                           ("A man in a U.S. Postal Service uniform holds a package and looks at the", None),
+                           ("One person holds a box. It is about 2.", "One person holds a box."),
+                           ("A person waits... and then the", None),
+                           ("One person stands at the door. They hold a", "One person stands at the door."),
+                           ("", None)):
+            self.assertEqual(whole_sentences(text), want, text)
+
+    def test_an_answer_cut_after_the_empty_think_block_keeps_whole_sentences(self):
+        lm = FakeLMStudio(content="<think>\n\n</think>\n\nNobody is there. The porch light is on and the",
+                          finish_reason="length")
+        try:
+            self.assertEqual(Vision(lm.url, "m", strategy="plain").describe(self.photo), "Nobody is there.")
+        finally:
+            lm.close()
+
+    def test_a_long_answer_is_not_thinking(self):
+        """Review of #64: one wordy answer (120 tokens, no reasoning) must not turn
+        vision off or drop the saved strategy."""
+        long = ("One person in a dark hooded jacket stands at the door. They hold a brown box "
+                "with both hands and look at the camera while the porch light shines on")
+        lm = FakeLMStudio(content=long, finish_reason="length")
+        try:
+            v = Vision(lm.url, "m9b", strategy="auto")
+            v.strategy = "prefill"
+            self.assertEqual(v.describe(self.photo),
+                             "One person in a dark hooded jacket stands at the door.")
+            lm.content = "One person in a dark hooded jacket stands at the door holding"
             with self.assertLogs("hardware.vision", "WARNING"):
-                self.assertIsNone(v.warm_up())
+                self.assertIsNone(v.describe(self.photo))                 # no whole sentence
+            self.assertEqual((v.strategy, v.disabled_until), ("prefill", 0.0))
+            self.assertEqual(len(lm.requests), 2)                         # no re-probe
         finally:
             lm.close()
-        self.assertTrue(v._extras_ok)                           # still sent next time
-        self.assertEqual(["chat_template_kwargs" in r for r in lm.requests], [True, False])
 
-    def test_server_refusing_the_thinking_switch_is_retried_without_it(self):
-        lm = FakeLMStudio(refuse_extras=True)
+    def test_a_server_error_is_no_verdict_but_the_next_is_tried(self):
+        lm = FakeLMStudio(thinks_unless=lambda body: False,
+                          reply_for=lambda body: (500, "template error", "stop") if prefill(body) else None)
         try:
-            v = Vision(lm.url, "bonsai-9b")
-            self.assertEqual(v.describe(self.photo), "A brown package sits by the door. Nobody is there.")
-            v.describe(self.photo)
+            v = Vision(lm.url, "m9b")
+            with self.assertLogs("hardware.vision", "WARNING"):
+                self.assertIsNone(v.describe(self.photo))
         finally:
             lm.close()
-        self.assertEqual(["chat_template_kwargs" in r for r in lm.requests], [True, False, False])
+        self.assertEqual([r["strategy"] for r in v.probe_results], ["prefill", "plain"])
+        self.assertNotIn("Prompt Template", v.disabled_why)               # 500 + thinking: no verdict
+        self.assertLess(v.disabled_until - time.monotonic(), 61)          # just a minute's rest
+
+    def test_inside_the_lock_it_rechecks(self):
+        """Another probe finished between the check and the lock: use its pick, or
+        its verdict (review of #64)."""
+        class Lock:
+            def __init__(self, v, on_acquire):
+                self.real, self.v, self.on_acquire = threading.Lock(), v, on_acquire
+
+            def acquire(self, blocking=True, timeout=-1):
+                got = self.real.acquire(blocking, timeout)
+                if got:
+                    self.on_acquire(self.v)
+                return got
+
+            def release(self):
+                self.real.release()
+
+            def locked(self):
+                return self.real.locked()
+
+            def __enter__(self):
+                self.acquire()
+                return self
+
+            def __exit__(self, *exc):
+                self.release()
+        lm = FakeLMStudio(thinks_unless=prefill)
+        try:
+            v = Vision(lm.url, "m9b")
+            v._lock = Lock(v, lambda v: setattr(v, "strategy", "prefill"))
+            self.assertIsNotNone(v.describe(self.photo))
+            self.assertEqual(len(lm.requests), 1)
+            self.assertFalse(v._lock.locked())
+            w = Vision(lm.url, "m9b-other")
+            w._lock = Lock(w, lambda w: setattr(w, "disabled_until", time.monotonic() + 300))
+            self.assertIsNone(w.describe(self.photo))
+            self.assertEqual(len(lm.requests), 1)                         # no request at all
+            self.assertFalse(w._lock.locked())
+        finally:
+            lm.close()
+
+    def test_a_photo_never_waits_behind_the_warm_up(self):
+        lm = FakeLMStudio()
+        try:
+            v = Vision(lm.url, "m9b")
+            with v._lock:                                             # the warm-up is probing
+                t0 = time.monotonic()
+                with self.assertLogs("hardware.vision", "WARNING"):
+                    self.assertIsNone(v.describe(self.photo))
+                self.assertLess(time.monotonic() - t0, 0.5)
+            self.assertEqual(lm.requests, [])
+            self.assertIn("busy", v.last["error"])
+            v.strategy = "prefill"                                    # it picked one meanwhile
+            self.assertIsNotNone(v.describe(self.photo))
+        finally:
+            lm.close()
+
+    def test_server_refusing_the_extra_fields_still_gets_the_prefill(self):
+        lm = FakeLMStudio(refuse_extras=True, thinks_unless=prefill)
+        try:
+            v = Vision(lm.url, "m9b")
+            self.assertIsNotNone(v.describe(self.photo))
+        finally:
+            lm.close()
+        self.assertEqual(v.strategy, "prefill")
+        self.assertNotIn("chat_template_kwargs", lm.requests[-1])
+        self.assertEqual(lm.requests[-1]["messages"][-1]["role"], "assistant")
 
     def test_detector_hint_goes_into_the_prompt(self):
         lm = FakeLMStudio()
@@ -267,55 +552,46 @@ class VisionClient(Base):
         self.assertTrue(lm.requests[0]["messages"][0]["content"][0]["text"]
                         .endswith("Hint: The object detector found: 1 person."))
 
-    def test_warm_up_sends_a_tiny_image(self):
-        lm = FakeLMStudio(content="Gray.")
-        try:
-            secs = Vision(lm.url, "bonsai-9b").warm_up()
-        finally:
-            lm.close()
-        self.assertIsNotNone(secs)
-        self.assertEqual(lm.requests[0]["max_tokens"], 16)
-        self.assertEqual(lm.requests[0]["messages"][0]["content"][1]["type"], "image_url")
-
-    def test_thinking_only_answer_says_why(self):
-        text, last, _ = self.describe_with(content="", reasoning="The user wants a description. " * 20,
-                                           finish_reason="length")
-        self.assertIsNone(text)
-        self.assertIn("vision_max_tokens", last["error"])
-        self.assertIn("finish_reason=length", last["error"])
-        self.assertGreater(last["reasoning_chars"], 100)
-
-    def test_unclosed_think_in_content_is_not_a_description(self):
-        text, last, _ = self.describe_with(content="<think>The image shows a door and", finish_reason="length")
-        self.assertIsNone(text)
-        self.assertIn("vision_max_tokens", last["error"])
+    def test_reasoning_in_the_content_is_not_a_description(self):
+        for content, finish in (("<think>The image shows a door and", "length"),
+                                ("Thinking Process: 1. look at the photo", "stop"),
+                                ("**Thinking Process:**\n\n1. **Analyze the Request:** The user wants", "length"),
+                                ("Okay, so I need to describe this photo.", "stop"),
+                                ("Here's a thinking process to describe the image.", "stop"),
+                                ("One person stands at the door holding a box and looking at the "
+                                 "camera while the light is on and the door is closed and", "length")):
+            with self.subTest(content=content):
+                lm = FakeLMStudio(content=content, finish_reason=finish)
+                try:
+                    v = Vision(lm.url, "m", strategy="plain")
+                    self.assertIsNone(v.describe(self.photo))
+                finally:
+                    lm.close()
 
     def test_closed_think_then_answer_is_used(self):
-        text, _, _ = self.describe_with(content="<think>hmm</think>A man holds a box.", expect_warning=False)
-        self.assertEqual(text, "A man holds a box.")
-
-    def test_http_error_body_is_kept(self):
-        text, last, _ = self.describe_with(status=400, error_body={"error": "Model does not support images"})
-        self.assertIsNone(text)
-        self.assertIn("HTTP 400", last["error"])
-        self.assertIn("does not support images", last["error"])
+        lm = FakeLMStudio(content="<think>hmm</think>A man holds a box.")
+        try:
+            self.assertEqual(Vision(lm.url, "m", strategy="plain").describe(self.photo), "A man holds a box.")
+        finally:
+            lm.close()
 
     def test_timeout_is_named(self):
         lm = FakeLMStudio(delay_s=1.5)
         try:
-            v = Vision(lm.url, "bonsai-9b", timeout_s=0.5)
+            v = Vision(lm.url, "bonsai-9b", timeout_s=0.8, strategy="plain")
             with self.assertLogs("hardware.vision", "WARNING"):
                 self.assertIsNone(v.describe(self.photo))
         finally:
             lm.close()
         self.assertIn("timed out after", v.last["error"])
-        self.assertIn("vision_timeout_s", v.last["error"])
 
     def test_settings_keys(self):
         s = {"llm": {"profile": "mac", "profiles": {"mac": {"base_url": "http://x:1", "model": "nine"}},
-                     "timeout_s": 30, "vision_timeout_s": 90, "vision_max_tokens": 500}}
+                     "timeout_s": 30, "vision_timeout_s": 15, "vision_model": "ternary-bonsai-2-4b-mlx",
+                     "vision_no_think": "prefill"}}
         v = Vision.from_settings(s)
-        self.assertEqual((v.model, v.timeout_s, v.max_tokens), ("nine", 90.0, 500))
+        self.assertEqual((v.model, v.timeout_s, v.max_tokens, v.strategy),
+                         ("ternary-bonsai-2-4b-mlx", 15.0, 120, "prefill"))
 
 
 class _nothing:
@@ -327,14 +603,24 @@ class _nothing:
 
 
 class CheckVision(Base):
-    """python -m hardware.check vision: prints why vision fails."""
+    """python -m hardware.check vision: every strategy, timed, and the pick."""
+
+    def test_the_9b_stays_unless_only_the_4b_makes_5_s(self):
+        from hardware.check import pick_model
+        nine, four = "ternary-bonsai-2-9b-mlx", "ternary-bonsai-2-4b-mlx"
+        for picks, want in (({nine: ("prefill", 2.0), four: ("prefill", 1.0)}, nine),
+                            ({nine: ("prefill", 6.0), four: ("prefill", 1.5)}, four),
+                            ({nine: ("prefill", 6.0), four: ("prefill", 5.5)}, nine),
+                            ({four: ("plain", 7.0)}, four),
+                            ({}, None)):
+            self.assertEqual(pick_model(picks, nine), want, picks)
 
     def run_check(self, lm, model="ternary-bonsai-2-9b-mlx"):
         import contextlib
         import io
         from hardware import check
         s = {"llm": {"profile": "mac", "profiles": {"mac": {"base_url": lm.url, "model": model}},
-                     "timeout_s": 30, "reasoning_effort": "none"}}
+                     "timeout_s": 5, "reasoning_effort": "none"}}
         out = io.StringIO()
         orig = check.load_settings
         check.load_settings = lambda: s
@@ -345,30 +631,29 @@ class CheckVision(Base):
             check.load_settings = orig
         return code, out.getvalue()
 
-    def test_ok_prints_model_state_and_description(self):
-        lm = FakeLMStudio(models=[{"id": "ternary-bonsai-2-9b-mlx", "state": "loaded", "type": "vlm",
-                                   "arch": "qwen3_vl", "quantization": "2bit"}])
+    def test_table_and_the_pick(self):
+        lm = FakeLMStudio(content="One person holds a box.", thinks_unless=prefill,
+                          models=[{"id": "ternary-bonsai-2-9b-mlx", "state": "loaded", "type": "vlm"}])
         try:
             code, out = self.run_check(lm)
         finally:
             lm.close()
         self.assertEqual(code, 0, out)
-        self.assertIn("model=ternary-bonsai-2-9b-mlx", out)
-        self.assertIn("state=loaded type=vlm", out)
-        self.assertIn("max_tokens=768", out)
-        self.assertIn("description: A brown package sits by the door.", out)
+        for strategy, result in (("prefill", "ok"), ("plain", "THINKS"), ("no_think", "THINKS"),
+                                 ("system", "THINKS")):
+            self.assertRegex(out, rf"ternary-bonsai-2-9b-mlx\s+{strategy}\s+[\d.]+s\s+{result}")
+        self.assertIn("USE: ternary-bonsai-2-9b-mlx with 'prefill'", out)
+        self.assertIn("brain ternary-bonsai-2-9b-mlx: ", out)      # Dell's client checked too
 
-    def test_failure_prints_the_reason(self):
-        lm = FakeLMStudio(content="", reasoning="thinking " * 50, finish_reason="length",
-                          models=[{"id": "ternary-bonsai-2-2b-mlx", "state": "loaded", "type": "llm"}])
+    def test_nothing_works_prints_the_fix(self):
+        lm = FakeLMStudio(thinks_unless=lambda b: False)
         try:
             code, out = self.run_check(lm)
         finally:
             lm.close()
         self.assertEqual(code, 1, out)
-        self.assertIn("is NOT in LM Studio's model list. Loaded: ternary-bonsai-2-2b-mlx", out)
-        self.assertIn("finish_reason=length", out)
-        self.assertIn("FAILED: empty answer", out)
+        self.assertIn("NO strategy stops the thinking", out)
+        self.assertIn("enable_thinking = false", out)
 
 
 class PhotoEvents(Base):
