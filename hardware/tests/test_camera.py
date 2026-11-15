@@ -11,6 +11,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -37,18 +38,35 @@ def make_scene(path: Path) -> Path:
 class FakeLMStudio:
     """Answers /v1/chat/completions with a canned reply (or an error code)."""
 
-    def __init__(self, content="A brown package sits by the door. Nobody is there.", status=200):
+    def __init__(self, content="A brown package sits by the door. Nobody is there.", status=200,
+                 reasoning=None, finish_reason="stop", delay_s=0.0, models=None, error_body=None):
         self.content, self.status, self.requests = content, status, []
+        self.reasoning, self.finish_reason, self.delay_s = reasoning, finish_reason, delay_s
+        self.models = models or []          # /api/v0/models "data"
+        self.error_body = error_body
         outer = self
 
         class H(BaseHTTPRequestHandler):
             def log_message(self, *a):
                 pass
 
+            def do_GET(self):
+                raw = json.dumps({"data": outer.models}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 outer.requests.append(body)
-                raw = json.dumps({"choices": [{"message": {"content": outer.content}}]}).encode()
+                time.sleep(outer.delay_s)
+                msg = {"content": outer.content}
+                if outer.reasoning is not None:
+                    msg["reasoning_content"] = outer.reasoning
+                raw = json.dumps(outer.error_body if outer.error_body is not None else
+                                 {"choices": [{"message": msg, "finish_reason": outer.finish_reason}]}).encode()
                 self.send_response(outer.status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(raw)))
@@ -125,6 +143,116 @@ class VisionClient(Base):
 
     def test_unreachable_gives_none(self):
         self.assertIsNone(Vision("http://127.0.0.1:9", "m", timeout_s=2).describe(self.photo))
+
+    # ---- Mac 2026-11-14: the 9B gave "Photo saved." with no error shown ------------
+    def describe_with(self, expect_warning=True, **kw):
+        lm = FakeLMStudio(**kw)
+        try:
+            v = Vision(lm.url, "bonsai-9b")
+            with self.assertLogs("hardware.vision", "WARNING") if expect_warning else _nothing():
+                text = v.describe(self.photo)
+        finally:
+            lm.close()
+        return text, v.last, lm
+
+    def test_default_token_cap_leaves_room_for_thinking(self):
+        text, last, lm = self.describe_with(expect_warning=False)
+        self.assertEqual(lm.requests[0]["max_tokens"], 300)
+        self.assertEqual(last["finish_reason"], "stop")
+        self.assertNotIn("error", last)
+
+    def test_thinking_only_answer_says_why(self):
+        text, last, _ = self.describe_with(content="", reasoning="The user wants a description. " * 20,
+                                           finish_reason="length")
+        self.assertIsNone(text)
+        self.assertIn("vision_max_tokens", last["error"])
+        self.assertIn("finish_reason=length", last["error"])
+        self.assertGreater(last["reasoning_chars"], 100)
+
+    def test_unclosed_think_in_content_is_not_a_description(self):
+        text, last, _ = self.describe_with(content="<think>The image shows a door and", finish_reason="length")
+        self.assertIsNone(text)
+        self.assertIn("vision_max_tokens", last["error"])
+
+    def test_closed_think_then_answer_is_used(self):
+        text, _, _ = self.describe_with(content="<think>hmm</think>A man holds a box.", expect_warning=False)
+        self.assertEqual(text, "A man holds a box.")
+
+    def test_http_error_body_is_kept(self):
+        text, last, _ = self.describe_with(status=400, error_body={"error": "Model does not support images"})
+        self.assertIsNone(text)
+        self.assertIn("HTTP 400", last["error"])
+        self.assertIn("does not support images", last["error"])
+
+    def test_timeout_is_named(self):
+        lm = FakeLMStudio(delay_s=1.5)
+        try:
+            v = Vision(lm.url, "bonsai-9b", timeout_s=0.5)
+            with self.assertLogs("hardware.vision", "WARNING"):
+                self.assertIsNone(v.describe(self.photo))
+        finally:
+            lm.close()
+        self.assertIn("timed out after", v.last["error"])
+        self.assertIn("vision_timeout_s", v.last["error"])
+
+    def test_settings_keys(self):
+        s = {"llm": {"profile": "mac", "profiles": {"mac": {"base_url": "http://x:1", "model": "nine"}},
+                     "timeout_s": 30, "vision_timeout_s": 90, "vision_max_tokens": 500}}
+        v = Vision.from_settings(s)
+        self.assertEqual((v.model, v.timeout_s, v.max_tokens), ("nine", 90.0, 500))
+
+
+class _nothing:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class CheckVision(Base):
+    """python -m hardware.check vision: prints why vision fails."""
+
+    def run_check(self, lm, model="ternary-bonsai-2-9b-mlx"):
+        import contextlib
+        import io
+        from hardware import check
+        s = {"llm": {"profile": "mac", "profiles": {"mac": {"base_url": lm.url, "model": model}},
+                     "timeout_s": 30, "reasoning_effort": "none"}}
+        out = io.StringIO()
+        orig = check.load_settings
+        check.load_settings = lambda: s
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                code = check.main(["vision", str(self.photo)])
+        finally:
+            check.load_settings = orig
+        return code, out.getvalue()
+
+    def test_ok_prints_model_state_and_description(self):
+        lm = FakeLMStudio(models=[{"id": "ternary-bonsai-2-9b-mlx", "state": "loaded", "type": "vlm",
+                                   "arch": "qwen3_vl", "quantization": "2bit"}])
+        try:
+            code, out = self.run_check(lm)
+        finally:
+            lm.close()
+        self.assertEqual(code, 0, out)
+        self.assertIn("model=ternary-bonsai-2-9b-mlx", out)
+        self.assertIn("state=loaded type=vlm", out)
+        self.assertIn("max_tokens=300", out)
+        self.assertIn("description: A brown package sits by the door.", out)
+
+    def test_failure_prints_the_reason(self):
+        lm = FakeLMStudio(content="", reasoning="thinking " * 50, finish_reason="length",
+                          models=[{"id": "ternary-bonsai-2-2b-mlx", "state": "loaded", "type": "llm"}])
+        try:
+            code, out = self.run_check(lm)
+        finally:
+            lm.close()
+        self.assertEqual(code, 1, out)
+        self.assertIn("is NOT in LM Studio's model list. Loaded: ternary-bonsai-2-2b-mlx", out)
+        self.assertIn("finish_reason=length", out)
+        self.assertIn("FAILED: empty answer", out)
 
 
 class PhotoEvents(Base):

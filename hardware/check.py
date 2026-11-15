@@ -1,6 +1,7 @@
 """One-at-a-time hardware checks (real devices!). Run when you're at the hardware.
 
     python -m hardware.check camera            # snapshot -> captures/photos + Bonsai description
+    python -m hardware.check vision [photo]    # Bonsai vision only, on the newest photo; says why it fails
     python -m hardware.check say "Hello"       # speaker: TTS for this OS
     python -m hardware.check record 4          # mic: 4 s -> captures/audio/*.wav -> STT (if any)
     python -m hardware.check mute              # mic stays deaf while Faraday talks
@@ -20,10 +21,58 @@ from hardware.settings import load_settings
 def camera(settings) -> int:
     from hardware.camera import PhotoCamera
     t0 = time.monotonic()
-    ev = PhotoCamera.from_settings(settings).take()
+    cam = PhotoCamera.from_settings(settings)
+    ev = cam.take()
     print(f"{time.monotonic() - t0:.1f}s  source={ev.source}  photo={ev.data['photo_path'] or '(none)'}")
     print(f"description: {ev.data['description']}")
+    if ev.data["photo_path"] and cam.vision is not None and cam.vision.last.get("error"):
+        print(f"vision ({cam.vision.model}) failed: {cam.vision.last['error']}")
+        print("details: python -m hardware.check vision")
     return 0 if ev.data["photo_path"] else 1
+
+
+def _model_info(base_url: str, model: str) -> str:
+    """LM Studio's own view of the model: loaded or not, vlm (images) or llm."""
+    import requests
+    try:
+        data = requests.get(base_url + "/api/v0/models", timeout=5).json().get("data", [])
+    except Exception as e:
+        return f"can't read {base_url}/api/v0/models ({e!r})"
+    loaded = [m.get("id") for m in data if m.get("state") == "loaded"]
+    me = next((m for m in data if m.get("id") == model), None)
+    if me is None:
+        return f"'{model}' is NOT in LM Studio's model list. Loaded: {', '.join(loaded) or 'nothing'}"
+    return (f"state={me.get('state')} type={me.get('type')} (vlm = takes images) "
+            f"arch={me.get('arch')} quant={me.get('quantization')}. Loaded: {', '.join(loaded) or 'nothing'}")
+
+
+def vision(settings, photo=None) -> int:
+    from pathlib import Path
+    from hardware.settings import REPO_ROOT
+    from hardware.vision import Vision
+    v = Vision.from_settings(settings)
+    print(f"profile={settings['llm'].get('profile')} model={v.model}")
+    print(f"POST {v.url}  timeout={v.timeout_s:.0f}s  max_tokens={v.max_tokens}  "
+          f"reasoning_effort={v.reasoning_effort}")
+    print(f"LM Studio: {_model_info(v.base_url, v.model)}")
+    if photo:
+        path = Path(photo)
+    else:
+        photos = sorted((REPO_ROOT / settings.get("paths", {}).get("captures", "captures") / "photos")
+                        .glob("*.jpg"), key=lambda p: p.stat().st_mtime)
+        if not photos:
+            print("no photo in captures/photos: run  python -m hardware.check camera  first")
+            return 1
+        path = photos[-1]
+    print(f"photo: {path} (sent as JPEG, long side shrunk to 512 px, base64 data URL)")
+    text = v.describe(path)
+    last = v.last
+    print(f"{last.get('elapsed_s')}s  HTTP {last.get('status', '-')}  image {last.get('image_kb', '?')} KB  "
+          f"finish_reason={last.get('finish_reason')}  reasoning={last.get('reasoning_chars', 0)} chars")
+    if "content" in last:
+        print(f"raw answer: {last['content']!r}")
+    print(f"description: {text}" if text else f"FAILED: {last.get('error')}")
+    return 0 if text else 1
 
 
 def say(settings, text: str) -> int:
@@ -88,12 +137,14 @@ def devices(_settings) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m hardware.check")
-    ap.add_argument("what", choices=["camera", "say", "record", "mute", "devices"])
+    ap.add_argument("what", choices=["camera", "vision", "say", "record", "mute", "devices"])
     ap.add_argument("arg", nargs="?", default=None)
     a = ap.parse_args(argv)
     s = load_settings()
     if a.what == "camera":
         return camera(s)
+    if a.what == "vision":
+        return vision(s, a.arg)
     if a.what == "say":
         return say(s, a.arg or "Hello, I'm Faraday. Away mode on.")
     if a.what == "record":
