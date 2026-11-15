@@ -32,7 +32,7 @@ Nothing slow runs inside the pipeline callbacks: `on_action` can come from dashb
 ## On the Mac mini
 
 ```
-integration/start_mac.sh            # checks LM Studio + Argmax answer, then python3 -m integration
+integration/start_mac.sh            # one command: brings LM Studio + argmax-cli serve up, checks everything, starts with --fresh
 integration/start_mac.sh --offline  # extra args go to the app
 ```
 
