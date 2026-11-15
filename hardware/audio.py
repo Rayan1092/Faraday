@@ -497,6 +497,9 @@ def _fourcc(code: str) -> int:
     return int.from_bytes(code.encode("ascii"), "big")
 
 
+_ca_run_loop_set = False
+
+
 def _coreaudio_default_output() -> Optional[str]:
     """The default output device's name, straight from CoreAudio (no PortAudio:
     it only knows the default from when this process started)."""
@@ -514,6 +517,19 @@ def _coreaudio_default_output() -> Optional[str]:
                     ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p]
     get.restype = ctypes.c_int32
     scope = _fourcc("glob")                          # kAudioObjectPropertyScopeGlobal
+    global _ca_run_loop_set
+    if not _ca_run_loop_set:
+        # The HAL delivers "default device changed" on the main run loop, which this
+        # app never runs (its main thread waits in input()), so the default would stay
+        # the one from startup. A NULL run loop makes the HAL use its own thread.
+        put = ca.AudioObjectSetPropertyData
+        put.argtypes = [ctypes.c_uint32, ctypes.POINTER(Address), ctypes.c_uint32, ctypes.c_void_p,
+                        ctypes.c_uint32, ctypes.c_void_p]
+        put.restype = ctypes.c_int32
+        loop = ctypes.c_void_p(None)
+        addr = Address(_fourcc("rnlp"), scope, 0)    # kAudioHardwarePropertyRunLoop
+        put(1, ctypes.byref(addr), 0, None, ctypes.sizeof(loop), ctypes.byref(loop))
+        _ca_run_loop_set = True
     device = ctypes.c_uint32(0)
     size = ctypes.c_uint32(ctypes.sizeof(device))
     addr = Address(_fourcc("dOut"), scope, 0)        # kAudioHardwarePropertyDefaultOutputDevice
@@ -552,13 +568,14 @@ def _profiler_default_output() -> Optional[str]:
     return default_output_from_profiler(json.loads(out or "{}"))
 
 
-def system_output() -> Optional[str]:
+def system_output(profiler: bool = True) -> Optional[str]:
     """Mac: the name of the system's default output (System Settings > Sound >
     Output), where argmax-cli --play and afplay play. None elsewhere or if
-    unreadable."""
+    unreadable. profiler=False skips the slow system_profiler fallback."""
     if not _is_mac():
         return None
-    for read in (_coreaudio_default_output, _profiler_default_output):
+    reads = (_coreaudio_default_output, _profiler_default_output) if profiler else (_coreaudio_default_output,)
+    for read in reads:
         try:
             name = read()
         except Exception as e:
@@ -571,8 +588,9 @@ def system_output() -> Optional[str]:
 
 def system_output_index() -> Optional[int]:
     """PortAudio's index for the system's current default output (Mac), when
-    PortAudio lists that device (only devices present at startup); else None."""
-    name = system_output()
+    PortAudio lists that device (only devices present at startup); else None.
+    CoreAudio only (quick): it runs when the intercom opens."""
+    name = system_output(profiler=False)
     if not name:
         return None
     want = name.strip().lower()
@@ -642,6 +660,9 @@ def _afplay(path: Path) -> bool:
         r = subprocess.run([exe, str(path)], capture_output=True, timeout=secs + 10)
     except subprocess.TimeoutExpired:
         log.warning("afplay timed out on %s", path)
+        return True                     # it was playing: never say the line twice
+    except OSError as e:
+        log.warning("afplay could not start (%r)", e)
         return False
     if r.returncode != 0:
         log.warning("afplay failed (%s): %s", r.returncode, (r.stderr or b"")[-200:])

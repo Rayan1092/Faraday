@@ -70,13 +70,24 @@ class Intercom:
                 self._queue.clear()
                 self._queued = 0
         self._finish(old)
+        # the speaker is looked up outside the lock (CoreAudio on the Mac): the audio
+        # callback and end()/stop() never wait for it
+        device = self._device() if self._stream is None else None
         with self._lock:
             if self._stream is None:
                 try:
-                    self._open_locked(rate)
+                    self._open_locked(rate, device)
                 except Exception as e:          # no speaker / wrong speaker_device
-                    log.error("intercom: speaker didn't open (%r); chunk dropped", e)
-                    return
+                    if device is None:
+                        log.error("intercom: speaker didn't open (%r); chunk dropped", e)
+                        return
+                    # a speaker that went away (Bluetooth asleep): the system default
+                    log.warning("intercom: speaker %r didn't open (%r); using the default", device, e)
+                    try:
+                        self._open_locked(rate, None)
+                    except Exception as e2:
+                        log.error("intercom: speaker didn't open (%r); chunk dropped", e2)
+                        return
             self._queue.append(samples)
             self._queued += samples.size
             limit = int(MAX_QUEUE_S * rate)
@@ -114,9 +125,9 @@ class Intercom:
             log.warning("intercom: can't read the system output (%r); PortAudio's default", e)
             return None
 
-    def _open_locked(self, rate: int) -> None:
+    def _open_locked(self, rate: int, device: Any = None) -> None:
         stream = self.stream_factory(samplerate=rate, channels=1, dtype="int16",
-                                     device=self._device(), callback=self._callback)
+                                     device=device, callback=self._callback)
         try:
             stream.start()
         except Exception:

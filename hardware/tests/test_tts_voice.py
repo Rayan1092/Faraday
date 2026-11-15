@@ -307,6 +307,44 @@ class WarmUp(Base):
         with self.assertLogs("hardware.speech", "WARNING"):
             self.assertIsNone(tts.warm_up())
 
+    def test_a_live_line_stops_it_and_it_runs_again_after(self):
+        """Review: a line spoken during the warm-up killed it for good, so the first
+        Bonsai line still paid for loading the voice."""
+        from hardware.tests.test_media import wait_until
+        os.environ["FAKE_ARGMAX_SLOW"] = "1.5"
+        try:
+            tts = self.tts()
+            result = []
+            t = threading.Thread(target=lambda: result.append(tts.warm_up()))
+            t.start()
+            self.assertTrue(wait_until(lambda: tts._render_proc is not None, 5))
+            os.environ["FAKE_ARGMAX_SLOW"] = "0"
+            t0 = time.monotonic()
+            self.assertTrue(tts.say("Someone is at the door."))     # live: the warm-up is stopped
+            self.assertLess(time.monotonic() - t0, 1.5)
+            t.join(20)
+            self.assertEqual(tts.renders_stopped, 1)
+            self.assertIsNotNone(result[0])                          # and it ran again after
+        finally:
+            os.environ.pop("FAKE_ARGMAX_SLOW", None)
+
+    def test_a_cached_line_does_not_stop_it(self):
+        from hardware.tests.test_media import wait_until
+        tts = self.tts()
+        tts.say("Away mode on.")                                    # cached now
+        os.environ["FAKE_ARGMAX_SLOW"] = "1.0"
+        try:
+            result = []
+            t = threading.Thread(target=lambda: result.append(tts.warm_up()))
+            t.start()
+            self.assertTrue(wait_until(lambda: tts._render_proc is not None, 5))
+            self.assertTrue(tts.say("Away mode on."))               # from the cache
+            t.join(20)
+        finally:
+            os.environ.pop("FAKE_ARGMAX_SLOW", None)
+        self.assertEqual(tts.renders_stopped, 0)
+        self.assertIsNotNone(result[0])
+
 
 class Audition(Base):
     def test_takes_are_found_although_the_cli_drops_dotted_names(self):

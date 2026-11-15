@@ -63,6 +63,8 @@ class OutputDevices(unittest.TestCase):
         self.assertEqual(resolve_speaker("onn Rugged Speaker"), 3)
         self.assertEqual(resolve_speaker("onn rugged speaker"), 3)            # any case
         self.assertEqual(resolve_speaker("Rugged"), 3)                        # part of the name
+        with self.assertLogs("hardware.audio", "WARNING"):                    # it can't play:
+            self.assertIsNone(resolve_speaker("onn Rugged Speaker S"))        # never chosen
 
     def test_numbers(self):
         self.assertEqual(resolve_speaker(3), 3)
@@ -203,6 +205,16 @@ class Playback(unittest.TestCase):
                 mock.patch.object(audio.subprocess, "run", return_value=bad), \
                 self.assertLogs("hardware.audio", "WARNING"):
             self.assertFalse(audio._afplay(self.wav))
+        # a timeout means it was playing: never played a second time; a refused start falls back
+        with mock.patch.object(audio.shutil, "which", return_value="/usr/bin/afplay"), \
+                mock.patch.object(audio.subprocess, "run",
+                                  side_effect=subprocess.TimeoutExpired("afplay", 10)), \
+                self.assertLogs("hardware.audio", "WARNING"):
+            self.assertTrue(audio._afplay(self.wav))
+        with mock.patch.object(audio.shutil, "which", return_value="/usr/bin/afplay"), \
+                mock.patch.object(audio.subprocess, "run", side_effect=OSError("no")), \
+                self.assertLogs("hardware.audio", "WARNING"):
+            self.assertFalse(audio._afplay(self.wav))
 
     def test_chime_on_the_mac_default_uses_afplay_with_the_mic_muted(self):
         gate = MicGate()
@@ -215,7 +227,7 @@ class Playback(unittest.TestCase):
 
 
 class IntercomSpeaker(unittest.TestCase):
-    def opened_with(self, device, mac, system_index=5):
+    def opened_with(self, device, mac, system_index=5, broken=()):
         got = []
 
         class Stream:
@@ -230,6 +242,8 @@ class IntercomSpeaker(unittest.TestCase):
 
         def factory(**kw):
             got.append(kw["device"])
+            if kw["device"] in broken:
+                raise RuntimeError("PortAudio: invalid device")
             return Stream()
         ic = Intercom(MicGate(), device, stream_factory=factory)
         with mock.patch.object(audio, "_is_mac", return_value=mac), \
@@ -246,6 +260,11 @@ class IntercomSpeaker(unittest.TestCase):
 
     def test_elsewhere_the_default_is_portaudio_s(self):
         self.assertEqual(self.opened_with(None, mac=False), [None])
+
+    def test_a_speaker_that_went_away_falls_back_to_the_default(self):
+        """Review: a Bluetooth speaker that slept gets a new id; the old one won't open."""
+        with self.assertLogs("hardware.intercom", "WARNING"):
+            self.assertEqual(self.opened_with(3, mac=True, broken=(3,)), [3, None])
 
 
 if __name__ == "__main__":
