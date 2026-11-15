@@ -85,7 +85,11 @@ class Voice:
     # ---- windows ------------------------------------------------------------------
     @property
     def listening(self) -> bool:
-        return self._state == "visitor"
+        """The dashboard's mic indicator (board.listening_hook, PLAN Q26): True only
+        while a visitor/Listen window is recording. Not during a wake window, not
+        while a requested window waits for Faraday to stop talking, not while muted."""
+        return (self._state == "visitor" and self.recorder.recording
+                and not self.recorder.gate.muted)
 
     def listen_once(self, reason: str = "button") -> bool:
         """Open one visitor window (dashboard Listen button, console `r`, question,
