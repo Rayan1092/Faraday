@@ -124,20 +124,32 @@ class Pipe(unittest.TestCase):
         time.sleep(0.6)
         self.assertNotIn(CANT_SEE, said(self.emitted))
 
-    def test_timeout_outlasts_vision(self):
+    def test_timeout_covers_a_photo_waiting_in_line(self):
+        """NV's vision gives up after 20 s, but the look photo can queue behind others."""
         self.make()
-        self.assertGreater(self.p.look_timeout_s, 60)     # NV's vision timeout is 60 s
+        self.assertGreaterEqual(self.p.look_timeout_s, 60)
+
+    def test_quiet_even_after_a_busy_log(self):
+        """Review: the old check scanned the last 50 log entries; with more than that since
+        the question it lost the photo and spoke. The activity count can't scroll away."""
+        self.make(Mode.NIGHT)
+        self.p.look_timeout_s = 0.3
+        self.ask()
+        for _ in range(30):
+            self.p.handle(events.motion())
+        time.sleep(0.6)
+        self.assertNotIn(CANT_SEE, said(self.emitted))
 
     def test_detector_description_is_spoken(self):
         """NV #43: when vision fails the object detector writes the description
         (described_by "detector"): say that, not "I can't see"."""
         self.make()
         _, [take] = self.ask()
-        seen = make_event(EventType.PHOTO_DESCRIBED,
+        seen = make_event(EventType.PHOTO_DESCRIBED,       # source camera: the case that changed
                           PhotoDescribedData(photo_path="captures/photos/x.jpg",
                                              description="One person is at the door.",
                                              described_by="detector", people=1),
-                          Source.VISION, caused_by=take.id)
+                          Source.CAMERA, caused_by=take.id)
         line = said(self.p.handle(seen).actions)[0]
         self.assertTrue(line.startswith("One person is at the door."), line)
         failed = make_event(EventType.PHOTO_DESCRIBED,

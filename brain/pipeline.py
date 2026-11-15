@@ -100,10 +100,13 @@ class Pipeline:
         self._owner_photos: Dict[str, str] = {}
         self._look_timers: Dict[str, threading.Timer] = {}
         self._rules_stored: set = set()  # add_rule action ids the owner router already stored
-        # Only a safety net for a photo that never arrives: longer than NV's vision timeout
-        # (60 s), so the answer normally comes from the photo itself (described, described
-        # by the detector, or failed). Mac test: at 25 s it fired after a slow description.
+        # Only a safety net for a photo that never arrives. NV's vision gives up after 20 s,
+        # but one camera worker takes photos in turn, so the look photo can wait behind the
+        # doorbell or alarm photos. 65 s lets the answer come from the photo itself
+        # (described, described by the detector, or failed).
         self.look_timeout_s = 65.0
+        self._activity = 0               # sensor events and speech handled so far
+        self._look_activity: Dict[str, int] = {}   # look photo id -> _activity when asked
 
     @classmethod
     def from_settings(cls, settings: Optional[Dict[str, Any]] = None, use_llm: bool = True,
@@ -177,6 +180,7 @@ class Pipeline:
                                caused_by=question.id), result, done)
         photo = snapshot_action(look.LOOK_REASON, caused_by=question.id)
         self._owner_photos[photo.id] = "speak"
+        self._look_activity[photo.id] = self._activity
         self._emit(photo, result, done)
         timer = threading.Timer(self.look_timeout_s, self._look_timed_out, args=(photo,))
         timer.daemon = True
@@ -190,7 +194,7 @@ class Pipeline:
                 return
             self._owner_photos[photo.id] = "late"
             self.say(f"  [look] no photo after {self.look_timeout_s:.0f}s")
-            if self._anything_since(photo):
+            if self._activity != self._look_activity.pop(photo.id, self._activity):
                 # "I can't see the door" may only answer the question (Mac test: it was
                 # heard after a motion at Home). Something else happened since: stay quiet.
                 self.say("  [look] something else happened since the question: not answering late")
@@ -198,16 +202,7 @@ class Pipeline:
             self._emit(make_action(ActionType.SPEAK, {"text": look.CANT_SEE}, Source.BRAIN,
                                    caused_by=photo.id), Result(), [])
 
-    def _anything_since(self, photo: Action) -> bool:
-        """Did a sensor event or speech come in after this look photo was asked for?"""
-        seen = False
-        for entry in self.log.recent(TRACE_WINDOW):
-            if entry.get("id") == photo.id:
-                seen = True
-            elif seen and entry.get("kind") == "event" and entry.get("type") in (
-                    EventType.MOTION, EventType.DOORBELL, EventType.SPEECH_HEARD):
-                return True
-        return False
+
 
     def tick(self, force: bool = False) -> Optional[Result]:
         """End a motion grace period that's due (the timer calls this): no doorbell came,
@@ -267,6 +262,8 @@ class Pipeline:
         if depth > MAX_DEPTH:
             return
         event, follow_ups = self.modes.screen_speech(event)
+        if event.type in (EventType.MOTION, EventType.DOORBELL, EventType.SPEECH_HEARD):
+            self._activity += 1          # "who's at the door?" answers late only if nothing came in
         self.log.write(event)
         result.events.append(event)
         if self.on_event:
@@ -330,6 +327,7 @@ class Pipeline:
             if event.caused_by in self._owner_photos:
                 how = self._owner_photos.pop(event.caused_by)
                 timer = self._look_timers.pop(event.caused_by or "", None)
+                self._look_activity.pop(event.caused_by or "", None)
                 if timer is not None:
                     timer.cancel()
                 if how == "speak":  # "who's at the door?": the answer, from plain code
