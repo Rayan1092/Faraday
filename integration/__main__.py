@@ -105,6 +105,28 @@ def build_app(args: argparse.Namespace, settings, known_outlets=None,
                           owner_voice=owner_voice, owner_voice_grace_s=OwnerVoice.grace_s(settings),
                           urgent=lambda: app.pipeline.modes.alert != "normal",
                           busy=app.speech_busy, chime=chime)
+    # Part health (owner 2026-11-15): a part failing mid-demo is said once, clearly,
+    # and again when it's back; nothing stops (integration/health.py).
+    from integration.health import Health, http_check
+    integ = settings.get("integration", {})
+    health = Health(out=lambda line: app.out(line), interval_s=float(integ.get("health_interval_s", 5)),
+                    grace_s=float(integ.get("health_grace_s", 10)))
+    health.add("flipper", lambda: (flipper.connected.is_set(),
+                                   "no USB connection (unplugged, or an app is open on the Flipper)"))
+    if feed is not None:
+        health.add("camera", lambda: (not feed.failed,
+                                      "the camera doesn't open (unplugged, or no camera permission)"))
+    stt_url = (getattr(app.voice, "stt", None) and getattr(app.voice.stt, "url", None)) if app.voice else None
+    if stt_url:
+        from urllib.parse import urlparse
+        u = urlparse(stt_url)
+        health.add("stt", http_check(f"{u.scheme}://{u.netloc}/", "  (start it: argmax-cli serve)"))
+    if not getattr(args, "offline", False):
+        llm = settings.get("llm", {})
+        base = str(llm.get("profiles", {}).get(llm.get("profile"), {}).get("base_url", "")).rstrip("/")
+        if base:
+            health.add("bonsai", http_check(base + "/v1/models", "  (start LM Studio's server)", ok_status=200))
+    app.health = health
     if app.board is not None:
         # Hooks for Dell's dashboard (PLAN Q26). listening_hook drives the mic-open
         # indicator (True only while a visitor/owner window is recording). The
@@ -131,7 +153,7 @@ def build_app(args: argparse.Namespace, settings, known_outlets=None,
         app.controls = ControlsServer(
             cfg.get("host", dash.get("host", "127.0.0.1")), port, feed=feed, intercom=intercom,
             control=app.control,
-            outlet_state=app.outlet_states, dashboard_port=dash_port)
+            outlet_state=app.outlet_states, dashboard_port=dash_port, health=health.status)
         app.extras.append(app.controls)
     return app
 

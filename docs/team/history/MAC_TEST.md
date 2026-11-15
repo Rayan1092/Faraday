@@ -67,3 +67,9 @@ Every other new setting already has the right default in the code. The full file
 17. `python3 -m hardware.owner_voice enroll`: read anything aloud for 10 s.
 18. Restart with `integration/start_mac.sh` (it prints "owner voice enrolled"). Say a few "Hey Faraday, …" requests: the console prints `[voice] the owner's voice` (or "unknown voice").
 19. Score it: `python3 -m hardware.owner_voice trial` (you, 10 tries), then `python3 -m hardware.owner_voice trial --other` with someone else speaking. Enforce it for disarm only if both are 9/10 or better.
+
+## Crash safety (optional, takes 2 minutes)
+
+20. While Faraday runs, unplug the Flipper: the console says `[health] Flipper DOWN: …`. Plug it back in: `[health] Flipper back`, and the lights work again.
+21. Quit `argmax-cli serve` (`pkill -f "argmax-cli serve"`): `[health] Argmax STT DOWN`. Run `integration/start_mac.sh` in a second Terminal tab with `FARADAY_DRY_RUN=1` to start it again: `[health] Argmax STT back`.
+22. Stop LM Studio's server: `[health] Bonsai (LM Studio) DOWN`. Faraday still answers from plain code (photos are described by the detector). Start it again: `… back`.

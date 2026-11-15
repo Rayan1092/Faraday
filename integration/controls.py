@@ -6,7 +6,7 @@ so the binary media runs here, next to it (PLAN Q27):
     GET  /                  reference Controls page (works on its own, end to end)
     GET  /stream.mjpg       live camera, MJPEG (use as <img src=...>)
     GET  /frame.jpg         one current frame
-    GET  /api/status        {"camera": bool, "intercom": bool, "outlets": {...}}
+    GET  /api/status        {"camera": bool, "intercom": bool, "outlets": {...}, "health": {...}}
     POST /api/intercom      raw int16 mono PCM chunk, header X-Sample-Rate (default 16000)
     POST /api/intercom/end  the owner released the talk button
     POST /api/control       {"outlet": "porch_light", "on": true}
@@ -54,9 +54,11 @@ class ControlsServer:
     def __init__(self, host: str, port: int, *, feed: Any = None, intercom: Any = None,
                  control: Optional[Callable[[str, bool], bool]] = None,
                  outlet_state: Optional[Callable[[], Dict[str, str]]] = None,
-                 dashboard_port: Optional[int] = None):
+                 dashboard_port: Optional[int] = None,
+                 health: Optional[Callable[[], Dict[str, Any]]] = None):
         self.feed, self.intercom = feed, intercom
         self.control_fn, self.outlet_state = control, outlet_state
+        self.health_fn = health
         self.dashboard_port = dashboard_port
         self.httpd = _QuietServer((host, port), _make_handler(self))
         self._thread: Optional[threading.Thread] = None
@@ -103,7 +105,9 @@ class ControlsServer:
         return {"camera": self.feed is not None and not getattr(self.feed, "failed", False),
                 "intercom": self.intercom is not None,
                 "intercom_active": bool(self.intercom is not None and self.intercom.active),
-                "outlets": self.outlet_state() if self.outlet_state else {}}
+                "outlets": self.outlet_state() if self.outlet_state else {},
+                # part health: {"stt": {"ok": false, "detail": "...", "since": 1731650000.0}, ...}
+                "health": self.health_fn() if self.health_fn else {}}
 
     def do_control(self, body: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
         if self.control_fn is None:
