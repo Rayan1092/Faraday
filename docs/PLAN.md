@@ -41,6 +41,7 @@ Notes:
 - **Reply after `photo_described`:** traced through `caused_by` (`photo_described` → `take_photo` → event). Only a doorbell photo in Away gets a greeting. If Bonsai's reply never mentions a message, code adds "Would you like to leave a message?". Motion photos and anything at Night get no reply.
 - **Never waits for Bonsai:** motion and the doorbell are handled entirely in plain code.
 - **"One moment, please.":** said by plain code while Bonsai thinks about a visitor (speech while armed, or the photo after a doorbell).
+- **Lights off on disarm:** the passphrase disarm switches off every light Faraday turned on (an `outlet_off` with `source: rules` through the normal pipeline, `rules/baseline.py`). Lights the owner switched on from the dashboard stay on.
 - **Threat label:** after each photo description, the fast Bonsai classifies the scene as delivery, visitor, suspicious or nobody (`brain/threat.py`). Code validates the answer, and rules decide if Bonsai can't. The label shapes speech:
   - a delivery gets drop-off instructions,
   - a visitor is offered to leave a message,
